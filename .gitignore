@@ -1,0 +1,44 @@
+### --- .NET / C# Specific --- ###
+# התעלמות כללית מתיקיות הבינאריים
+[Bb]in/
+[Oo]bj/
+
+# --- החרגה (Whitelist) של ה-DLL הספציפי למנוע ---
+# אנחנו מאפשרים ל-Git לעקוב אחרי הקובץ הזה למרות שהוא בתוך תיקיית bin
+!TauSync/windows/TauSync.Lib/bin/Debug/net8.0/TauSync.Lib.dll
+
+# קבצי הגדרות אישיים של Visual Studio / Cursor
+.vs/
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+
+### --- Python Specific --- ###
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+# קבצי הגדרות של ספריות וסביבה
+.env
+.pytest_cache/
+
+### --- Android Specific --- ###
+# תוצרי בנייה של Gradle
+.gradle/
+build/
+captures/
+# קובץ קריטי: מכיל נתיבים מקומיים למחשב שלך - חובה להתעלם
+local.properties
+# קבצי APK ו-Keys חתומים
+*.apk
+*.jks
+*.aar
+
+### --- IDEs & OS Specific --- ###
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
