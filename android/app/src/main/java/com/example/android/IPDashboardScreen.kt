@@ -1,52 +1,28 @@
 package com.example.android
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.net.wifi.WifiManager
-import android.os.Bundle
 import android.text.format.Formatter
 import android.widget.Toast
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.android.ui.theme.AndroidTheme
-
-class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent {
-            AndroidTheme {
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    containerColor = MaterialTheme.colorScheme.background
-                ) { innerPadding ->
-                    IPDashboard(modifier = Modifier.padding(innerPadding))
-                }
-            }
-        }
-    }
-}
 
 @Composable
 fun IPDashboard(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    // Use state so we can refresh the IP manually
     var ipAddress by remember { mutableStateOf(getLocalIpAddress(context)) }
 
     Column(
@@ -73,7 +49,6 @@ fun IPDashboard(modifier: Modifier = Modifier) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // The Stylish Card
         ElevatedCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(24.dp),
@@ -103,7 +78,6 @@ fun IPDashboard(modifier: Modifier = Modifier) {
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Copy Button
                     Button(
                         onClick = {
                             copyToClipboard(context, ipAddress)
@@ -113,7 +87,6 @@ fun IPDashboard(modifier: Modifier = Modifier) {
                         Text("Copy IP")
                     }
 
-                    // Refresh Button
                     OutlinedButton(
                         onClick = { ipAddress = getLocalIpAddress(context) },
                         shape = RoundedCornerShape(12.dp)
