@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">Galaxy Connect</string>
     <string name="connect_to_pc">Connect to PC</string>
-    <string name="disconnected_to_pc">Disconnected to PC</string>
+    <string name="disconnected_to_pc">Disconnected</string>
 </resources>

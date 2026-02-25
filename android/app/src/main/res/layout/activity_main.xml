@@ -83,6 +83,7 @@
         <androidx.appcompat.widget.AppCompatButton
             android:id="@+id/btnConnect"
             android:layout_width="match_parent"
+            android:paddingHorizontal="20dp"
             android:layout_height="65dp"
             android:gravity="start|center_vertical"
             android:background="@drawable/button_shape"
@@ -90,7 +91,8 @@
             android:textAllCaps="false"
             android:textColor="#FFFFFF"
             android:textSize="18sp"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            android:drawableEnd="@drawable/ic_chevron_right" />
     </LinearLayout>
 
     <LinearLayout
@@ -159,7 +161,7 @@
             android:textSize="18sp"
             android:textStyle="bold"
             android:drawableStart="@drawable/ic_settings"
-            android:drawableEnd="@drawable/ic_chevron_right"
+            android:drawablePadding="12dp" android:drawableEnd="@drawable/ic_chevron_right_black"
             android:paddingHorizontal="20dp" />
 
         <Space
