@@ -25,6 +25,9 @@ public class TransferRequest {
     @SerializedName("CryptoIV")
     private byte[] cryptoIV = new byte[0];
 
+    @SerializedName("RequestId")
+    private String requestId;
+
     public TransferRequest() {
     }
 
@@ -74,6 +77,14 @@ public class TransferRequest {
 
     public void setCryptoIV(byte[] cryptoIV) {
         this.cryptoIV = cryptoIV != null ? cryptoIV : new byte[0];
+    }
+
+    public String getRequestId() {
+        return requestId;
+    }
+
+    public void setRequestId(String requestId) {
+        this.requestId = requestId;
     }
 
     public boolean isValid() {

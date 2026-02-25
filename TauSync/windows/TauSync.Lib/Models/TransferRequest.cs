@@ -47,6 +47,13 @@ namespace TauSync.Models
         public byte[] CryptoIV { get; set; } = Array.Empty<byte>();
 
         /// <summary>
+        /// Request ID for request-response correlation. 
+        /// Used as correlationId in the transport layer.
+        /// </summary>
+        [JsonPropertyName("RequestId")]
+        public string? RequestId { get; set; }
+
+        /// <summary>
         /// Validates the TransferRequest structure.
         /// </summary>
         /// <returns>True if valid, false otherwise.</returns>
