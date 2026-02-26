@@ -18,7 +18,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
-
+import android.util.Log;
 /**
  * Connection manager implementation with handshake protocol and streaming support.
  */
@@ -39,6 +39,9 @@ public class ConnectionManager implements IConnectionManager {
     public ConnectionManager() {
         this.gson = new Gson();
         this.callbackExecutor = Executors.newCachedThreadPool();
+        String TAG = "ConnectionManager"; // A custom tag to filter your messages
+        Log.d(TAG, "ConnectionManager initialized");
+        this.initialize(new SocketTransport());
     }
 
     /**
@@ -54,6 +57,7 @@ public class ConnectionManager implements IConnectionManager {
         }
 
         this.transport = (SocketTransport) transport;
+        this.transport.connect("192.168.1.76");
 
         // Register message handler for incoming TransferRequests (handshake)
         // Use correlation-aware listener to get correlationId for responses

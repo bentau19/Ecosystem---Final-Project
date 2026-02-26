@@ -26,6 +26,9 @@ import androidx.compose.ui.unit.sp
 import com.example.android.ui.theme.AndroidTheme
 // --- השורה החדשה: ייבוא המנוע מהספרייה החיצונית ---
 import com.example.tausync_lib.TauSyncJavaEngine
+import com.example.tausync_lib.implementations.management.ConnectionManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,6 +53,24 @@ fun IPDashboard(modifier: Modifier = Modifier) {
 
     // --- יצירת ה-Engine וקריאה לסטטוס ---
     val javaEngine = remember { TauSyncJavaEngine() }
+    var connection by remember { mutableStateOf<ConnectionManager?>(null) }
+
+    // מריצים את היצירה של האובייקט בשרשור רקע
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            // כאן ה-new ConnectionManager() רץ ברקע ולא תוקע את ה-UI
+            val manager = ConnectionManager()
+            connection = manager // מעדכנים את ה-State
+        }
+    }
+
+    // ב-UI בודקים אם ה-connection כבר מוכן
+    if (connection == null) {
+        Text("מתחבר לשרת...")
+    } else {
+        // כאן מציגים את ה-Dashboard האמיתי
+        Text("השרת למעלה!")
+    }
     val engineStatus = remember { javaEngine.statusMessage } // Java getters הופכים ל-properties ב-Kotlin
 
     var ipAddress by remember { mutableStateOf(getLocalIpAddress(context)) }

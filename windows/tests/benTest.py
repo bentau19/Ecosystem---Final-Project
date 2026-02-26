@@ -91,7 +91,7 @@ def startTest():
     connectionManager = ConnectionManager(action)
     print("✅ ConnectionManager (SERVER) created with Python callback!")
     print("   When an interrupt arrives, 'handle_interrupt' will be called automatically")
-    
+    input()
     # Create SocketTransport for the server
     
     # Wait a bit for server to be ready

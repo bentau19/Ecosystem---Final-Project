@@ -62,8 +62,8 @@ namespace TauSync.Implementations.Transport
                 _tcpListener = new TcpListener(System.Net.IPAddress.Any, Port);
                 _tcpListener.Start();
                 _receiveCancellation = new CancellationTokenSource();
-                System.Console.WriteLine("Server started on port " + Port + " and address " + System.Net.IPAddress.Any);
                 _acceptTask = Task.Run(() => AcceptLoop(_receiveCancellation.Token));
+                
             }
             catch (Exception ex)
             {
@@ -198,6 +198,7 @@ namespace TauSync.Implementations.Transport
                     _tcpClient = await _tcpListener.AcceptTcpClientAsync();
                     _stream = _tcpClient.GetStream();
                     _isConnected = true;
+                    System.Console.WriteLine("Someone connected!!!!");
                     _receiveCancellation = new CancellationTokenSource();
                     _receiveTask = Task.Run(() => ReceiveLoop(_receiveCancellation.Token));
                     break;
