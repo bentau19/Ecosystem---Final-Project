@@ -45,7 +45,10 @@ namespace TauSync.Implementations.Transport
         // Dependency injection: Action-based handlers
         private Action<byte[]>? _messageHandler;
         private Action<byte[], int, bool>? _streamChunkHandler;
-
+        public SocketTransport()
+        {
+            Initialize();
+        }
         public void Initialize()
         {
             if (_disposed)
@@ -56,10 +59,10 @@ namespace TauSync.Implementations.Transport
 
             try
             {
-                System.Console.WriteLine("Server started on port " + Port + " and address " + System.Net.IPAddress.Any);
                 _tcpListener = new TcpListener(System.Net.IPAddress.Any, Port);
                 _tcpListener.Start();
                 _receiveCancellation = new CancellationTokenSource();
+                System.Console.WriteLine("Server started on port " + Port + " and address " + System.Net.IPAddress.Any);
                 _acceptTask = Task.Run(() => AcceptLoop(_receiveCancellation.Token));
             }
             catch (Exception ex)

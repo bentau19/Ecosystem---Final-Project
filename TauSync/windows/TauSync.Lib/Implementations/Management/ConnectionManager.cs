@@ -24,6 +24,34 @@ namespace TauSync.Implementations.Management
         public event EventHandler<Exception>? ErrorOccurred;
         public event EventHandler<DataChunkEventArgs>? DataChunkReceived;
 
+        // Optional Python callback for interrupt handling
+        private Action<byte[]>? _pythonMessageHandler;
+
+        /// <summary>
+        /// Default constructor - uses internal message handler
+        /// </summary>
+        public ConnectionManager()
+        {
+            _transport = new SocketTransport();
+            Initialize(_transport);
+        }
+
+        /// <summary>
+        /// Constructor that accepts a Python callback for interrupt handling.
+        /// The callback will be called when an interrupt (unsolicited small message) is received.
+        /// </summary>
+        /// <param name="pythonMessageHandler">Python function that receives byte[] data when interrupt occurs</param>
+        public ConnectionManager(Action<byte[]> pythonMessageHandler)
+        {
+            if (pythonMessageHandler == null)
+                throw new ArgumentNullException(nameof(pythonMessageHandler), "Python message handler cannot be null.");
+
+            _pythonMessageHandler = pythonMessageHandler;
+            _transport = new SocketTransport();
+            Initialize(_transport, pythonMessageHandler);
+        }
+
+
         public string GetStatus()
         {
             return "regular";
@@ -31,7 +59,16 @@ namespace TauSync.Implementations.Management
 
         public void SwitchStatus(ConnectionStatus status) { }
 
+
         public void Initialize(ITransport transport)
+        {
+            Initialize(transport, null);
+        }
+
+        /// <summary>
+        /// Initialize with optional Python callback for interrupt handling
+        /// </summary>
+        public void Initialize(ITransport transport, Action<byte[]>? pythonMessageHandler)
         {
             if (transport == null)
                 throw new ArgumentNullException(nameof(transport), "Transport cannot be null.");
@@ -40,13 +77,23 @@ namespace TauSync.Implementations.Management
                 throw new ArgumentException("Transport must be a SocketTransport instance.", nameof(transport));
 
             _transport = socketTransport;
+            _pythonMessageHandler = pythonMessageHandler;
 
-            // Register message handler for incoming TransferRequests
-            _transport.RegisterMessageHandler(OnTransportMessageReceived);
+            // Register message handler: use Python callback if provided, otherwise use internal handler
+            if (_pythonMessageHandler != null)
+            {
+                // Use Python callback directly for interrupts
+                _transport.RegisterMessageHandler(OnTransportMessageReceivedWithPython);
+            }
+            else
+            {
+                // Use internal handler
+                _transport.RegisterMessageHandler(OnTransportMessageReceived);
+            }
 
             // Register stream chunk handler for incoming large files
             _transport.RegisterStreamChunkHandler(OnTransportStreamChunkReceived);
-            }
+        }
 
         /// <summary>
         /// Sends a TransferRequest with streaming data support.
@@ -230,6 +277,58 @@ namespace TauSync.Implementations.Management
             catch (Exception ex)
             {
                 OnErrorOccurred(ex);
+            }
+        }
+
+        /// <summary>
+        /// Handles incoming messages with Python callback support.
+        /// First tries to parse as TransferRequest (handshake), if fails - calls Python callback (interrupt).
+        /// </summary>
+        private void OnTransportMessageReceivedWithPython(byte[] message)
+        {
+            try
+            {
+                // Try to parse as TransferRequest (handshake message)
+                string json = Encoding.UTF8.GetString(message);
+                TransferRequest? req = JsonSerializer.Deserialize<TransferRequest>(json);
+
+                if (req != null && req.IsValid())
+                {
+                    // This is a valid TransferRequest (handshake) - handle normally
+                    // Decompress if needed
+                    if (req.IsCompressed && req.Payload.Length > 0)
+                    {
+                        req.Payload = Decompress(req.Payload);
+                        req.IsCompressed = false;
+                    }
+
+                    // Trigger RequestReceived event
+                    OnRequestReceived(req);
+                    return; // Handled as handshake, don't call Python callback
+                }
+            }
+            catch (JsonException)
+            {
+                // Not JSON - likely an interrupt, continue to Python callback
+            }
+            catch (Exception ex)
+            {
+                // Other error - log and continue to Python callback
+                OnErrorOccurred(ex);
+            }
+
+            // Not a valid TransferRequest - this is likely an interrupt
+            // Call Python callback if provided
+            if (_pythonMessageHandler != null)
+            {
+                try
+                {
+                    _pythonMessageHandler.Invoke(message);
+                }
+                catch (Exception ex)
+                {
+                    OnErrorOccurred(new InvalidOperationException("Python message handler threw an exception.", ex));
+                }
             }
         }
 

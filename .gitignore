@@ -35,7 +35,7 @@ local.properties
 *.apk
 *.jks
 *.aar
-
+*bat
 ### --- IDEs & OS Specific --- ###
 .idea/
 .vscode/
