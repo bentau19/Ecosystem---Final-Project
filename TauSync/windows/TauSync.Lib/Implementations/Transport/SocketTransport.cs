@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using TauSync.Core;
 using TauSync.Interfaces;
 using TauSync.Models;
 
@@ -28,10 +29,10 @@ namespace TauSync.Implementations.Transport
         private readonly ConcurrentDictionary<string, TaskCompletionSource<byte[]>> _pendingRequests = new();
 
         // Protocol constants
-        public const int DefaultPort = 8888;
-        private const int StreamingThreshold = 1024 * 1024; // 1MB - switch to streaming mode
-        private const int ChunkBufferSize = 64 * 1024; // 64KB chunks for streaming
-        private const int CorrelationIdLength = 16; // 16 bytes for correlation ID (GUID-like)
+        public static readonly int DefaultPort = CoreConfig.DefaultPort;
+        public static readonly int StreamingThreshold = CoreConfig.StreamingThreshold;
+        public static readonly int ChunkBufferSize = CoreConfig.ChunkBufferSize;
+        public static readonly int CorrelationIdLength = CoreConfig.CorrelationIdLength;
 
         public int Port { get; set; } = DefaultPort;
 

@@ -1,56 +1,80 @@
-# 🛰️ TauSync Protocol Specification (v1.0)
+# 🛰️ TauSync Protocol Specification (v3.0)
 
-**Project Name:** TauSync  
-**Description:** Cross-Platform Smart Connectivity Protocol (Windows <-> Android)  
-**Status:** Design Phase (Contractual)
-
----
-
-## 1. המטרה (Objective)
-הגדרה של "חוזה" משותף המאפשר תקשורת מאובטחת וחכמה בין אפליקציית Windows (ב-C#) לאפליקציית Android (ב-Java), תוך הפרדה מוחלטת בין הלוגיקה למימוש החומרה.
+**Project Name:** TauSync (Cross-Platform Smart Connectivity)
+**Architecture:** 4-Layer Decoupled Communication Stack
+**Patterns:** Singleton Transports, Dispatcher/Routing Map, AEAD Security
+**Target Platforms:** Windows (C# .NET) & Android (Java/Kotlin)
 
 ---
 
-## 2. מודל הנתונים: `TransferRequest`
-כל מידע שעובר בפרוטוקול TauSync ייארז בתוך אובייקט (בפורמט JSON) עם המבנה הבא:
+## 1. Logic Layer: `TransferRequest` (Metadata)
+The `TransferRequest` object is used **only during the Handshake phase**. It MUST NOT contain the data payload itself to ensure memory-efficient streaming.
 
-| שדה (Field) | סוג (Type) | תיאור |
+| Field | Type | Description |
 | :--- | :--- | :--- |
-| `MagicBytes` | `uint32` | תמיד `0x54415553` ("TAUS" ב-ASCII). |
-| `Version` | `int` | גרסת הפרוטוקול הנוכחית (תמיד 1). |
-| `Payload` | `byte[]` | המידע הגולמי (הקובץ/הודעה) **אחרי הצפנה**. |
-| `Priority` | `int` | רמת דחיפות: `0` (Low/BT), `1` (High/WiFi). |
-| `IsCompressed` | `bool` | האם ה-Payload עבר דחיסת GZip. |
-| `CryptoIV` | `byte[]` | ה-Initialization Vector ששימש להצפנת ה-Payload. |
+| `MagicBytes` | `uint32` | `0x54415553` ("TAUS") - Protocol identity verification. |
+| `RequestId` | `string` | Unique 16-character UTF-8 string used as the Correlation ID. |
+| `Type` | `int` | Content type: `0: File`, `1: Clipboard`, `2: Command`. |
+| `FileName` | `string?` | Original name of the file (if applicable). |
+| `FileSize` | `long` | Total size of the transmission in bytes (for stream allocation). |
 
 ---
 
-## 3. ממשקים (Interfaces) - "החוזה"
+## 2. Framing Layer: Binary Packet Structure
+Every packet sent over a transport MUST follow this binary structure to prevent frame-shift errors:
 
-### 📡 ITransport (שכבת הקישוריות)
-הצינור דרכו עוברים הבתים. כל צד (Win/Droid) חייב לממש אותו עבור WiFi ו-Bluetooth.
-- `void Connect(String targetId)`: יצירת חיבור ראשוני.
-- `void SendRaw(byte[] data)`: שליחת חבילה בינארית.
-- `bool IsConnected()`: בדיקת סטטוס חיבור.
-
-### 🔐 ISecureChannel (שכבת האבטחה)
-אחראי על הטיפול ב-Crypto לפני שהחבילה נשלחת.
-- `byte[] Encrypt(byte[] plaintext)`: הצפנה ב-AES-GCM.
-- `byte[] Decrypt(byte[] ciphertext)`: פענוח ואימות.
-
-### 🧠 IConnectionManager (שכבת הניהול)
-המוח שמחליט באיזה `ITransport` להשתמש.
-- `void SmartSend(TransferRequest req)`: לוגיקת בחירת מדיום ושליחה.
-- `void HandleIncoming(byte[] rawData)`: קבלה ועיבוד של חבילה נכנסת.
+$$Packet = \underbrace{[Length]}_{4B, \text{ Little Endian}} + \underbrace{[CorrelationID]}_{16B, \text{ UTF-8}} + \underbrace{[EncryptedPayload]}_{NB}$$
 
 ---
 
-## 4. לוגיקת מעבר מדיום (Smart Handover)
-1. **Bluetooth Mode (Low Power):** ברירת מחדל לחיפוש (Discovery) והודעות קטנות (< 1MB).
-2. **WiFi Direct Mode (High Speed):** יופעל אוטומטית אם `Priority == 1` או שגודל ה-Payload חורג מ-1MB.
+## 3. Interface Contracts (The Architecture)
+
+### 📡 ITransport (Singleton per Medium)
+Manages the physical connection. Implement as a Singleton for each medium (Bluetooth, WiFi).
+- `void Connect(string targetId)`: Initializes the connection.
+- `void SendRaw(byte[] data)`: Sends raw binary data.
+- `bool IsConnected()`: Returns the current connection status.
+- **Event:** `OnDataReceived(byte[] data)`: Triggered when raw bytes arrive.
+
+### 🔐 ISecureChannel (AEAD Security)
+Handles AES-GCM encryption. Encrypts/Decrypts **only the Payload**.
+- `byte[] Encrypt(byte[] plaintext)`: Returns `[IV (12B)] + [Ciphertext + Tag]`.
+- `byte[] Decrypt(byte[] ciphertextWithIv)`: Extracts IV and decrypts the content.
+
+### 📜 IProtocolHandler (Framing & Parsing)
+Bridges raw bytes and logical entities.
+- `byte[] BuildFrame(string correlationId, byte[] payload)`: Constructs the 20-byte header + payload.
+- `(string id, byte[] payload) ParseFrame(byte[] rawPacket)`: Deconstructs an incoming packet.
+- **Handshake Logic:** Manages sending JSON requests and receiving ACK responses ("OK"/"REJECT").
+
+### 🧠 IConnectionManager (Dispatcher & Routing Map)
+The central engine orchestrating all layers.
+- **Routing Map:** `Dictionary<string, Action<byte[]>>`: Maps Correlation IDs to specific data handlers.
+- `void SmartSend(TransferRequest req, Stream source)`: Selects Transport, performs Handshake, and streams encrypted data.
+- `void RegisterHandler(string requestId, Action<byte[]> callback)`: Allows external components (UI/Python) to subscribe to specific streams.
 
 ---
 
-## 5. הערות פיתוח
-- **סנכרון:** כל שינוי ב-Interface ב-C# מחייב עדכון מקביל ב-Java.
-- **אבטחה:** ה-`CryptoIV` חייב להיות ייחודי (Random) לכל שליחה.
+## 4. Data Flow (The Pipeline)
+
+### Outbound (Sending Data)
+1. **Initiation**: `SmartSend` creates a `TransferRequest` (JSON) and sends it as a Handshake via `ProtocolHandler`.
+2. **Waiting**: After receiving "OK", the Manager reads from the `Stream` in 64KB chunks.
+3. **Encryption**: Each chunk passes through `ISecureChannel.Encrypt`.
+4. **Framing**: `ProtocolHandler` wraps the encrypted chunk with a 20-byte header (Length + original RequestId).
+5. **Transport**: The relevant `ITransport` (WiFi/BT) transmits the bytes.
+
+### Inbound (Receiving & Dispatching)
+1. **Detection**: `ITransport` receives bytes and passes them to `ProtocolHandler`.
+2. **De-framing**: `ProtocolHandler` extracts the Correlation ID.
+3. **Dispatching**: The Manager checks the **Routing Map**:
+    - **Match Found**: Payload is sent to `ISecureChannel.Decrypt` and then to the registered Handler (e.g., Clipboard handler).
+    - **No Match**: Attempt to parse as a new `TransferRequest` JSON (New Handshake).
+
+---
+
+## 5. Cursor Implementation Guidelines
+- **Thread Safety**: Use `ConcurrentDictionary` for the Routing Map in C#.
+- **Asynchronous**: All methods in Manager and Transport MUST be `async/await` (C#) or `suspend` (Kotlin).
+- **Byte Order**: Use `Little Endian` for the Length prefix to ensure cross-platform compatibility.
+- **Modular Deployment**: Ensure `IProtocolHandler` and `ISecureChannel` can be swapped for testing purposes (Dependency Injection).

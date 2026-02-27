@@ -13,9 +13,9 @@ namespace TauSync.Implementations.Management
 {
     public class ConnectionManager : IConnectionManager
     {
-        private const long LargeFileThreshold = 1024 * 1024; // 1MB
-        private const int StreamChunkSize = 64 * 1024; // 64KB chunks for streaming
-        private const int HandshakeTimeoutSeconds = 30;
+        // private static readonly long LargeFileThreshold = CoreConfig.LargeFileThreshold;
+        private static readonly int StreamChunkSize = CoreConfig.StreamChunkSize;
+        private static readonly int HandshakeTimeoutSeconds = CoreConfig.HandshakeTimeoutSeconds;
         
         private SocketTransport? _transport;
         private bool _disposed = false;
@@ -93,7 +93,7 @@ namespace TauSync.Implementations.Management
 
             // Register stream chunk handler for incoming large files
             _transport.RegisterStreamChunkHandler(OnTransportStreamChunkReceived);
-        }
+            }
 
         /// <summary>
         /// Sends a TransferRequest with streaming data support.
@@ -201,17 +201,17 @@ namespace TauSync.Implementations.Management
                 long totalBytesSent = 0;
                 int chunkCount = 0;
                 int bytesRead;
-                
+                int headerSize = CoreConfig.CorrelationIdLength;
                 while ((bytesRead = await dataStream.ReadAsync(buffer, 0, StreamChunkSize)) > 0)
                 {
                     // Create packet with exact size: 16 (header) + bytesRead (data)
-                    byte[] packet = new byte[16 + bytesRead];
+                    byte[] packet = new byte[headerSize + bytesRead];
                     
                     // Prepend 16-byte zero header (unsolicited message indicator)
-                    Buffer.BlockCopy(zeroHeader, 0, packet, 0, 16);
+                    Buffer.BlockCopy(zeroHeader, 0, packet, 0, headerSize);
                     
                     // Copy actual data chunk after the header
-                    Buffer.BlockCopy(buffer, 0, packet, 16, bytesRead);
+                    Buffer.BlockCopy(buffer, 0, packet, headerSize, bytesRead);
                     
                     // Send packet (SocketTransport will add 4-byte length prefix automatically)
                     // Final format: [4-byte Length][16-byte CorrelationID (zeros)][Payload]
