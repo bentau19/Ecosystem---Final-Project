@@ -1,0 +1,22 @@
+/*QWidget#card {*/
+/*    background-color: yellow;*/
+/*    border-radius: 8px;*/
+/*    border: "1px solid #E0E0E0";*/
+/*    padding: 12px;*/
+/*}*/
+
+
+PhoneCardItemWidget:hover {
+
+    background-color: rgb(243, 244, 246);
+    border: 10px solid rgb(243, 244, 246);
+    border-radius: 10px;
+}
+
+#device_name_label, #device_type_label {
+    font-weight: 600;
+    font-family: Noto Sans;
+    font-size: 18px;
+
+}
+
