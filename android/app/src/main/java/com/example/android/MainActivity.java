@@ -6,6 +6,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.zxing.integration.android.IntentIntegrator;
@@ -35,6 +36,22 @@ public class MainActivity extends AppCompatActivity {
                 handleConnection();
             }
         });
+
+        if (savedInstanceState != null) {
+            boolean isConnected = savedInstanceState.getBoolean("isConnected");
+            if (isConnected) {
+                String name = savedInstanceState.getString("deviceName");
+                processScannedData(name); // הפונקציה שלך כבר יודעת לעדכן את ה-UI
+            }
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        // נשמור משתנה בוליאני שאומר אם אנחנו מחוברים
+        outState.putBoolean("isConnected", findViewById(R.id.actionButtonsContainer).getVisibility() == View.VISIBLE);
+        outState.putString("deviceName", ((TextView)findViewById(R.id.deviceNameText)).getText().toString());
     }
 
     private void handleConnection() {
