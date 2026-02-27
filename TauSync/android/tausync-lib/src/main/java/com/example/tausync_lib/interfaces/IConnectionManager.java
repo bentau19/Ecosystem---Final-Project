@@ -1,6 +1,6 @@
 package com.tausync.interfaces;
 
-import com.tausync.models.TransferRequest;
+import com.example.tausync_lib.models.TransferRequest;
 import com.tausync.core.ConnectionStatus;
 
 import java.io.InputStream;

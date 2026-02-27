@@ -1,4 +1,4 @@
-package com.tausync.models;
+package com.example.tausync_lib.models;
 
 import com.google.gson.annotations.SerializedName;
 

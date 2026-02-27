@@ -2,7 +2,7 @@ package com.example.tausync_lib;
 
 import com.example.tausync_lib.implementations.management.ConnectionManager;
 import com.tausync.implementations.transport.SocketTransport;
-import com.tausync.models.TransferRequest;
+import com.example.tausync_lib.models.TransferRequest;
 import com.tausync.interfaces.IConnectionManager;
 
 import java.io.ByteArrayInputStream;

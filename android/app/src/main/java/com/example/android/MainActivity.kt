@@ -26,8 +26,12 @@ import androidx.compose.ui.unit.sp
 import com.example.android.ui.theme.AndroidTheme
 // --- השורה החדשה: ייבוא המנוע מהספרייה החיצונית ---
 import com.example.tausync_lib.TauSyncJavaEngine
+import com.example.tausync_lib.models.TransferRequest
 import com.example.tausync_lib.implementations.management.ConnectionManager
+
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.time.delay
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -51,25 +55,57 @@ class MainActivity : ComponentActivity() {
 fun IPDashboard(modifier: Modifier = Modifier) {
     val context = LocalContext.current
 
-    // --- יצירת ה-Engine וקריאה לסטטוס ---
+// --- יצירת ה-Engine וניהול הסטטוס ---
     val javaEngine = remember { TauSyncJavaEngine() }
     var connection by remember { mutableStateOf<ConnectionManager?>(null) }
 
-    // מריצים את היצירה של האובייקט בשרשור רקע
+// משתנה State כדי לוודא שאנחנו שולחים רק פעם אחת
+    var hasSentHello by remember { mutableStateOf(false) }
+
+// 1. אתחול ה-Connection (רץ פעם אחת כשהמסך עולה)
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
-            // כאן ה-new ConnectionManager() רץ ברקע ולא תוקע את ה-UI
-            val manager = ConnectionManager()
-            connection = manager // מעדכנים את ה-State
+            val manager = ConnectionManager() // וודא שזה מבצע Initialize ו-Connect בפועל
+            connection = manager
         }
     }
 
-    // ב-UI בודקים אם ה-connection כבר מוכן
-    if (connection == null) {
-        Text("מתחבר לשרת...")
-    } else {
-        // כאן מציגים את ה-Dashboard האמיתי
-        Text("השרת למעלה!")
+// 2. לוגיקת שליחת ההודעה - תלויה בשינוי של ה-connection
+    LaunchedEffect(connection) {
+        val currentConnection = connection
+
+        // אם יש חיבור ועדיין לא שלחנו את הודעת הברכה
+        if (currentConnection != null && !hasSentHello) {
+            hasSentHello = true // מסמנים מיד כדי שלא יישלח פעמיים
+
+            withContext(Dispatchers.IO) {
+                try {
+                    val message = "hello from the other side"
+                    val inputStream = message.toByteArray(Charsets.UTF_8).inputStream()
+                    val request = TransferRequest() // ייצור UUID אוטומטי ל-Handshake
+                    delay(2000)
+                    // הקריאה למתודה שבנינו - עושה Handshake מול ה-C# ואז מרימה את הסטרים
+                    currentConnection.smartSend(inputStream, request)
+
+                    println("הודעה נשלחה בהצלחה ל-Windows! 🦾")
+                } catch (e: Exception) {
+                    println("שגיאה בשליחה: ${e.message}")
+                    hasSentHello = false // מאפשר ניסיון חוזר במקרה של תקלה
+                }
+            }
+        }
+    }
+
+// --- הממשק (UI) ---
+    Column {
+        if (connection == null) {
+            Text("מתחבר לשרת Windows...")
+        } else {
+            Text("השרת למעלה! ✅")
+            if (hasSentHello) {
+                Text("הודעת 'Hello' נשלחה בהצלחה.")
+            }
+        }
     }
     val engineStatus = remember { javaEngine.statusMessage } // Java getters הופכים ל-properties ב-Kotlin
 

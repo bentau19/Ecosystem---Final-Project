@@ -5,7 +5,7 @@ import com.tausync.core.ConnectionStatus;
 import com.tausync.implementations.transport.SocketTransport;
 import com.tausync.interfaces.IConnectionManager;
 import com.tausync.interfaces.ITransport;
-import com.tausync.models.TransferRequest;
+import com.example.tausync_lib.models.TransferRequest;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -36,18 +36,28 @@ public class ConnectionManager implements IConnectionManager {
     // Executor for UI callbacks and file I/O
     private ExecutorService callbackExecutor;
 
+    /**
+     * Default constructor with default IP address.
+     */
     public ConnectionManager() {
+        this("192.168.1.76");
+    }
+
+    /**
+     * Constructor with custom IP address.
+     */
+    public ConnectionManager(String ip) {
         this.gson = new Gson();
         this.callbackExecutor = Executors.newCachedThreadPool();
         String TAG = "ConnectionManager"; // A custom tag to filter your messages
         Log.d(TAG, "ConnectionManager initialized");
-        this.initialize(new SocketTransport());
+        this.initialize(new SocketTransport(), ip);
     }
 
     /**
      * Initializes the connection manager with transport.
      */
-    public void initialize(ITransport transport) {
+    public void initialize(ITransport transport, String ip) {
         if (transport == null) {
             throw new IllegalArgumentException("Transport cannot be null.");
         }
@@ -57,7 +67,7 @@ public class ConnectionManager implements IConnectionManager {
         }
 
         this.transport = (SocketTransport) transport;
-        this.transport.connect("192.168.1.76");
+        this.transport.connect(ip);
 
         // Register message handler for incoming TransferRequests (handshake)
         // Use correlation-aware listener to get correlationId for responses
