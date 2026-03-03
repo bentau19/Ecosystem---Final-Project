@@ -6,5 +6,5 @@
 #icon {
     border: 2px solid transparent;
     background-clip: border;
-    border-radius: 6px;
+    border-radius: 5px;
 }

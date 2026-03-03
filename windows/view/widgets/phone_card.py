@@ -2,6 +2,7 @@ import qtawesome as qta
 from PySide6.QtGui import QColor, QIcon, Qt
 from PySide6.QtWidgets import QVBoxLayout, QLabel, QFrame
 
+from resources.strings import Strings
 from view.widgets.progress_bar import BatteryLevelWidget
 from windows.view.widgets.phone_card_item import PhoneCardItemWidget
 
@@ -40,26 +41,26 @@ class PhoneCardWidget(QFrame):
         self._create_battery_info_item()
 
     def _create_device_name_item(self) -> None:
-        desc: str = "Device Name"
-        device_name_label: QLabel = QLabel(self.device_name)
+        device_name_label: QLabel = QLabel(self.tr(self.device_name))
         device_name_label.setObjectName("device_name_label")
 
         img_icon: QIcon = qta.icon("msc.device-mobile", color="#578CFD")
         background_color: QColor = QColor()
         background_color.setRgb(219, 234, 254)
 
-        device_name_item: PhoneCardItemWidget = PhoneCardItemWidget(desc, device_name_label, img_icon, background_color)
+        device_name_item: PhoneCardItemWidget = PhoneCardItemWidget(Strings.DEVICE_NAME, device_name_label, img_icon,
+                                                                    background_color)
         self.layout().addWidget(device_name_item)
 
     def _create_device_type_item(self) -> None:
-        desc: str = "Device Type"
-        device_type_label: QLabel = QLabel(self.device_type)
+        device_type_label: QLabel = QLabel(self.tr(self.device_type))
         device_type_label.setObjectName("device_type_label")
         img_icon: QIcon = qta.icon("msc.device-mobile", color="#9810FA")
         background_color: QColor = QColor()
         background_color.setRgb(243, 232, 255)
 
-        device_name_item: PhoneCardItemWidget = PhoneCardItemWidget(desc, device_type_label, img_icon, background_color)
+        device_name_item: PhoneCardItemWidget = PhoneCardItemWidget(Strings.DEVICE_TYPE, device_type_label, img_icon,
+                                                                    background_color)
         self.layout().addWidget(device_name_item)
 
     def _get_battery_icon(self) -> QIcon:
@@ -76,7 +77,8 @@ class PhoneCardWidget(QFrame):
         icon_background_color.setRgb(254, 249, 194)
 
         battery_progress: BatteryLevelWidget = BatteryLevelWidget(self.battery_percentage, self.charging)
-        battery_info_item: PhoneCardItemWidget = PhoneCardItemWidget("Battery Level", battery_progress, battery_icon,
+        battery_info_item: PhoneCardItemWidget = PhoneCardItemWidget(Strings.BATTERY_LEVEL, battery_progress,
+                                                                     battery_icon,
                                                                      icon_background_color)
 
         self.layout().addWidget(battery_info_item)

@@ -1,0 +1,16 @@
+#icon {
+    background-color: rgb(245, 246, 248);
+    background-clip: border;
+    border-radius: 5px;
+    background-clip: 10px;
+}
+#title {
+    font-family: Roboto;
+    font-weight: 600;
+}
+#description {
+    border: 2px solid transparent;
+    color: grey;
+    font-family: Roboto;
+    border-radius: 15px;
+}

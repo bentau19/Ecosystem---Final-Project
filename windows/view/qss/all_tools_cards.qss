@@ -1,5 +1,5 @@
-PhoneCardWidget {
+ToolCard {
    background-color: white;
-   border: '2px solid white';
+   border: 2px solid rgb(136, 242, 171);
    border-radius: 10px;
 }
