@@ -1,443 +1,371 @@
 package com.example.tausync_lib.implementations.management;
 
-import com.google.gson.Gson;
-import com.tausync.core.ConnectionStatus;
-import com.tausync.implementations.transport.SocketTransport;
+import com.tausync.core.CoreConfig;
 import com.tausync.interfaces.IConnectionManager;
+import com.tausync.interfaces.IProtocolHandler;
 import com.tausync.interfaces.ITransport;
+import com.tausync.implementations.transport.SocketTransport;
+import com.example.tausync_lib.implementations.protocol.ProtocolHandler;
 import com.example.tausync_lib.models.TransferRequest;
+import com.google.gson.Gson;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.zip.GZIPInputStream;
-import java.util.zip.GZIPOutputStream;
-import android.util.Log;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.concurrent.ConcurrentLinkedQueue;
+
 /**
- * Connection manager implementation with handshake protocol and streaming support.
+ * Connection manager per TauSync Protocol Spec: which connection and when; dispatcher and routing map.
+ * Routes incoming TPack by CorrelationID. Control channel = 0. No encryption in this implementation.
+ * Java uses even CorrelationIDs (2, 4, 6, ...). Matches C# ConnectionManager.
  */
 public class ConnectionManager implements IConnectionManager {
-    private static final long LARGE_FILE_THRESHOLD = 1024 * 1024; // 1MB
-    private static final int STREAM_CHUNK_SIZE = 64 * 1024; // 64KB
-    private static final int HANDSHAKE_TIMEOUT_SECONDS = 30;
 
-    private SocketTransport transport;
-    private Gson gson;
-    private IConnectionManager.RequestReceivedListener requestReceivedListener;
-    private IConnectionManager.ErrorOccurredListener errorOccurredListener;
-    private IConnectionManager.DataChunkListener dataChunkListener;
-    
-    // Executor for UI callbacks and file I/O
-    private ExecutorService callbackExecutor;
+    private ITransport transport;
+    private boolean ownsTransport;
+    private final IProtocolHandler protocolHandler;
+    private final ConcurrentHashMap<Integer, Consumer<byte[]>> routingMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Runnable> onFinByCorrelationId = new ConcurrentHashMap<>();
+    private volatile CompletableFuture<byte[]> pendingControlWaiter;
+    private final Object controlLock = new Object();
+    private final AtomicInteger nextCorrelationId = new AtomicInteger(2); // Java: even
+    private final ConcurrentLinkedQueue<Integer> releasedCorrelationIds = new ConcurrentLinkedQueue<>();
+    private volatile boolean disposed;
+    private final Gson gson = new Gson();
+    private final ExecutorService executor = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r);
+        t.setDaemon(true);
+        return t;
+    });
+    private ErrorOccurredListener errorOccurredListener;
+    private IConnectionManager.ClipboardReceivedListener clipboardReceivedListener;
 
-    /**
-     * Default constructor with default IP address.
-     */
     public ConnectionManager() {
-        this("192.168.1.76");
+        this(null);
     }
 
-    /**
-     * Constructor with custom IP address.
-     */
-    public ConnectionManager(String ip) {
-        this.gson = new Gson();
-        this.callbackExecutor = Executors.newCachedThreadPool();
-        String TAG = "ConnectionManager"; // A custom tag to filter your messages
-        Log.d(TAG, "ConnectionManager initialized");
-        this.initialize(new SocketTransport(), ip);
+    public ConnectionManager(IProtocolHandler protocolHandler) {
+        this.protocolHandler = protocolHandler != null ? protocolHandler : new ProtocolHandler();
     }
 
-    /**
-     * Initializes the connection manager with transport.
-     */
-    public void initialize(ITransport transport, String ip) {
-        if (transport == null) {
-            throw new IllegalArgumentException("Transport cannot be null.");
-        }
-
-        if (!(transport instanceof SocketTransport)) {
-            throw new IllegalArgumentException("Transport must be a SocketTransport instance.");
-        }
-
-        this.transport = (SocketTransport) transport;
-        this.transport.connect(ip);
-
-        // Register message handler for incoming TransferRequests (handshake)
-        // Use correlation-aware listener to get correlationId for responses
-        this.transport.setDataReceivedWithCorrelationListener(this::onTransportDataReceivedWithCorrelation);
-
-        // Register stream chunk handler for incoming large files
-        this.transport.setStreamChunkReceivedListener(this::onTransportStreamChunkReceived);
-    }
-
-    /**
-     * Sets the listener for data chunks (for writing to file).
-     */
     @Override
-    public void setDataChunkListener(IConnectionManager.DataChunkListener listener) {
-        this.dataChunkListener = listener;
+    public void initialize(ITransport transport) {
+        if (transport == null) throw new IllegalArgumentException("transport cannot be null");
+        if (this.transport != null) throw new IllegalStateException("Already initialized");
+        this.transport = transport;
+        this.ownsTransport = false;
+        transport.setOnDataReceivedListener(this::onTransportDataReceived);
     }
 
-    /**
-     * Sends a TransferRequest with streaming data support (async).
-     * Implements handshake protocol: sends metadata, waits for OK/REJECT, then streams data.
-     */
     @Override
-    public CompletableFuture<Void> smartSend(InputStream dataStream, TransferRequest req) {
-        if (dataStream == null) {
-            throw new IllegalArgumentException("Data stream cannot be null.");
+    public CompletableFuture<Void> connect(String targetId) {
+        if (disposed) {
+            return CompletableFuture.failedFuture(new IllegalStateException("ConnectionManager is disposed"));
         }
-        if (req == null) {
-            throw new IllegalArgumentException("Transfer request cannot be null.");
-        }
-        if (!req.isValid()) {
-            throw new IllegalArgumentException("Transfer request is invalid.");
-        }
-        if (transport == null) {
-            throw new IllegalStateException("Connection manager is not initialized. Call initialize() first.");
-        }
-        if (!transport.isConnected()) {
-            throw new IllegalStateException("Transport is not connected.");
-        }
-
-        // Generate RequestId if not provided
-        if (req.getRequestId() == null || req.getRequestId().trim().isEmpty()) {
-            req.setRequestId(UUID.randomUUID().toString().replace("-", "").substring(0, 16));
-        }
-
-        return CompletableFuture.runAsync(() -> {
-            try {
-                // Step 1: Serialize TransferRequest metadata to JSON (without payload)
-                byte[] originalPayload = req.getPayload();
-                req.setPayload(new byte[0]); // Metadata only, no payload in handshake
-
-                String json = gson.toJson(req);
-                byte[] metadataBytes = json.getBytes(StandardCharsets.UTF_8);
-
-                // Step 2: Handshake - Send metadata and wait for response
-                CompletableFuture<byte[]> handshakeFuture = transport.sendRequest(
-                        metadataBytes,
-                        req.getRequestId(),
-                        HANDSHAKE_TIMEOUT_SECONDS * 1000L
-                );
-
-                byte[] handshakeResponse = handshakeFuture.get();
-
-                // Step 3: Check handshake response
-                String responseText = new String(handshakeResponse, StandardCharsets.UTF_8).trim().toUpperCase();
-                if (!"OK".equals(responseText)) {
-                    if ("REJECT".equals(responseText)) {
-                        throw new IllegalStateException("Transfer request was rejected by the remote peer.");
-                    }
-                    throw new IllegalStateException("Unexpected handshake response: " + responseText);
+        if (transport != null) {
+            transport.setOnDataReceivedListener(null);
+            if (ownsTransport && transport instanceof AutoCloseable) {
+                try {
+                    ((AutoCloseable) transport).close();
+                } catch (Exception ignored) {
                 }
-
-                // Step 4: Stream data in chunks (memory-efficient)
-                streamData(dataStream);
-
-            } catch (Exception ex) {
-                notifyErrorOccurred(ex);
-                throw new IllegalStateException("Failed to send transfer request.", ex);
             }
-        }, callbackExecutor);
-    }
-
-    /**
-     * Legacy SmartSend for backward compatibility (sends TransferRequest with payload in memory)
-     */
-    @Override
-    public void smartSend(TransferRequest req) {
-        if (req == null) {
-            throw new IllegalArgumentException("Transfer request cannot be null.");
+            transport = null;
         }
-
-        // Convert payload to stream and use async version
-        try (ByteArrayInputStream stream = new ByteArrayInputStream(req.getPayload() != null ? req.getPayload() : new byte[0])) {
-            smartSend(stream, req).join();
-        } catch (Exception ex) {
-            notifyErrorOccurred(ex);
-            throw new IllegalStateException("Failed to send transfer request.", ex);
-        }
-    }
-
-    /**
-     * Streams data from the provided stream in 64KB chunks.
-     * Memory-efficient: doesn't load entire stream into RAM.
-     * CRITICAL: Each chunk is prefixed with 16-byte zero header (unsolicited message indicator).
-     */
-    private void streamData(InputStream dataStream) throws IOException {
-        byte[] buffer = new byte[STREAM_CHUNK_SIZE];
-        // 16-byte zero header for unsolicited stream chunks (protocol requirement)
-        byte[] zeroHeader = new byte[16]; // All zeros by default - indicates unsolicited message
-        
-        // CRITICAL: Reset stream position to start (if supported)
-        // Note: For ByteArrayInputStream, markSupported() returns true
-        // For FileInputStream, we can't reset, but that's usually fine as streams are read once
-        if (dataStream.markSupported()) {
-            // Mark the current position (should be at start for new streams)
-            dataStream.mark(Integer.MAX_VALUE);
-            // Reset to the marked position (start)
-            dataStream.reset();
-        }
-
-        int bytesRead;
-        while ((bytesRead = dataStream.read(buffer)) > 0) {
-            // Create packet with exact size: 16 (header) + bytesRead (data)
-            byte[] packet = new byte[16 + bytesRead];
-            
-            // Prepend 16-byte zero header (unsolicited message indicator)
-            System.arraycopy(zeroHeader, 0, packet, 0, 16);
-            
-            // Copy actual data chunk after the header
-            System.arraycopy(buffer, 0, packet, 16, bytesRead);
-            
-            // Send packet (SocketTransport will add 4-byte length prefix automatically)
-            // Final format: [4-byte Length][16-byte CorrelationID (zeros)][Payload]
-            transport.sendRaw(packet);
-        }
-    }
-
-    /**
-     * Handles incoming messages from transport (handshake requests).
-     * Decides whether to accept or reject, then sends response with same correlationId.
-     */
-    private void onTransportDataReceivedWithCorrelation(byte[] message, String correlationId) {
-        callbackExecutor.execute(() -> {
-            try {
-                // Check if this is JSON (TransferRequest) or plain text (interrupt)
-                String json = new String(message, StandardCharsets.UTF_8);
-                
-                // If not JSON, this is likely an interrupt - don't process as TransferRequest
-                if (!json.trim().startsWith("{") || !json.contains("\"MagicBytes\"")) {
-                    // This is not a TransferRequest - likely an interrupt message
-                    // Don't process it here, let it fall through to dataReceivedListener
-                    // But we don't have access to transport's dataReceivedListener from here
-                    // So we'll just ignore it (it should be handled by transport's listener)
-                    return;
-                }
-                
-                // Deserialize JSON to TransferRequest
-                TransferRequest req = gson.fromJson(json, TransferRequest.class);
-
-                if (req == null) {
-                    throw new IllegalStateException("Failed to deserialize transfer request.");
-                }
-
-                // Use correlationId from transport header if RequestId not in JSON
-                if ((req.getRequestId() == null || req.getRequestId().trim().isEmpty()) 
-                    && correlationId != null && !correlationId.trim().isEmpty()) {
-                    req.setRequestId(correlationId);
-                }
-
-                if (!req.isValid()) {
-                    if (correlationId != null && !correlationId.trim().isEmpty()) {
-                        sendHandshakeResponse(correlationId, "REJECT");
-                    }
-                    throw new IllegalStateException("Received invalid transfer request.");
-                }
-
-                // Decompress if needed (for small messages)
-                if (req.isCompressed() && req.getPayload().length > 0) {
-                    req.setPayload(decompress(req.getPayload()));
-                    req.setCompressed(false);
-                }
-
-                // Decision logic: accept or reject
-                boolean shouldAccept = shouldAcceptRequest(req);
-
-                // Send handshake response with same correlationId (from transport header)
-                if (correlationId != null && !correlationId.trim().isEmpty()) {
-                    String response = shouldAccept ? "OK" : "REJECT";
-                    sendHandshakeResponse(correlationId, response);
-                }
-
-                // If accepted, trigger RequestReceived event
-                if (shouldAccept) {
-                    notifyRequestReceived(req);
-                }
-            } catch (Exception ex) {
-                notifyErrorOccurred(ex);
-            }
-        });
-    }
-
-    /**
-     * Legacy handler for backward compatibility
-     */
-    private void onTransportDataReceived(byte[] message) {
-        onTransportDataReceivedWithCorrelation(message, null);
-    }
-
-    /**
-     * Sends a handshake response with the specified correlationId.
-     * The response must use the same correlationId from the incoming request.
-     * Format: [16-byte CorrelationID][Response Payload]
-     */
-    private void sendHandshakeResponse(String correlationId, String response) {
-        if (correlationId == null || correlationId.trim().isEmpty()) {
-            // Unsolicited message - no response needed
-            return;
-        }
-
-        try {
-            byte[] responseBytes = response.getBytes(StandardCharsets.UTF_8);
-            
-            // Prepend correlationId header (16 bytes) to response
-            // This matches the protocol: [Length][16-byte CorrelationID][Payload]
-            byte[] correlationBytes = encodeCorrelationId(correlationId);
-            byte[] messageWithHeader = new byte[16 + responseBytes.length];
-            System.arraycopy(correlationBytes, 0, messageWithHeader, 0, 16);
-            System.arraycopy(responseBytes, 0, messageWithHeader, 16, responseBytes.length);
-            
-            // Send via transport (transport will add length prefix)
-            transport.sendRaw(messageWithHeader);
-        } catch (Exception ex) {
-            notifyErrorOccurred(new IllegalStateException("Failed to send handshake response.", ex));
-        }
-    }
-
-    /**
-     * Encodes a correlation ID string to a 16-byte array (UTF-8, null-padded)
-     */
-    private byte[] encodeCorrelationId(String correlationId) {
-        byte[] bytes = new byte[16];
-        byte[] idBytes = correlationId.getBytes(StandardCharsets.UTF_8);
-        int copyLength = Math.min(idBytes.length, 16);
-        System.arraycopy(idBytes, 0, bytes, 0, copyLength);
-        return bytes;
-    }
-
-    /**
-     * Decision logic for accepting or rejecting incoming requests.
-     * Override this method to implement custom business logic.
-     */
-    protected boolean shouldAcceptRequest(TransferRequest req) {
-        // Default: accept all valid requests
-        // Override in subclasses for custom logic
-        return true;
-    }
-
-    /**
-     * Handles incoming stream chunks from transport (large files).
-     * Forwards chunks immediately without buffering.
-     * CRITICAL FIX: Check if this is actually a TransferRequest (JSON) instead of raw data.
-     * This can happen when the handshake message is routed to the stream handler.
-     */
-    private void onTransportStreamChunkReceived(byte[] chunk, boolean isFinal) {
-        callbackExecutor.execute(() -> {
-            try {
-                // CRITICAL FIX: Check if this is actually a TransferRequest (JSON) instead of raw data
-                // This can happen when the handshake message is routed to the stream handler
-                // Check for small messages that might be JSON (regardless of isFinal flag)
-                if (chunk.length < 1024 * 10) { // Small message, might be JSON
-                    try {
-                        String json = new String(chunk, StandardCharsets.UTF_8);
-                        if (json.trim().startsWith("{") && json.contains("\"MagicBytes\"")) {
-                            // This is a TransferRequest, route it to the message handler
-                            onTransportDataReceivedWithCorrelation(chunk, null);
-                            return;
-                        }
-                    } catch (Exception e) {
-                        // Not JSON, continue as stream chunk
-                    }
-                }
-                
-                // NOTE: SocketTransport already strips the 16-byte correlation ID header
-                // So the chunk parameter contains only the actual data (no header)
-                // Create a copy for the listener (they might hold references)
-                byte[] chunkCopy = new byte[chunk.length];
-                System.arraycopy(chunk, 0, chunkCopy, 0, chunk.length);
-
-                // Notify data chunk listener (for file writing)
-                if (dataChunkListener != null) {
-                    dataChunkListener.onDataChunkReceived(chunkCopy, isFinal);
-                }
-
-                // If final chunk, notify that transfer is complete
-                if (isFinal && dataChunkListener != null) {
-                    dataChunkListener.onTransferComplete();
-                }
-            } catch (Exception ex) {
-                notifyErrorOccurred(ex);
-            }
-        });
+        SocketTransport st = new SocketTransport();
+        transport = st;
+        ownsTransport = true;
+        transport.setOnDataReceivedListener(this::onTransportDataReceived);
+        return transport.connect(targetId);
     }
 
     @Override
-    public void handleIncoming(byte[] rawData) {
-        // This method is now handled by setDataReceivedListener
-        // Keeping for interface compatibility
-        if (rawData != null) {
-            onTransportDataReceived(rawData);
-        }
+    public boolean isConnected() {
+        return transport != null && transport.isConnected();
     }
 
     @Override
-    public String getStatus() {
-        return "regular";
+    public void registerHandler(int correlationId, Consumer<byte[]> callback) {
+        if (callback == null) throw new IllegalArgumentException("callback cannot be null");
+        routingMap.put(correlationId, callback);
     }
 
     @Override
-    public void switchStatus(ConnectionStatus status) {
-        // TODO: Implement switch status
+    public void unregisterHandler(int correlationId) {
+        routingMap.remove(correlationId);
     }
 
     @Override
-    public void setRequestReceivedListener(IConnectionManager.RequestReceivedListener listener) {
-        this.requestReceivedListener = listener;
-    }
-
-    @Override
-    public void setErrorOccurredListener(IConnectionManager.ErrorOccurredListener listener) {
+    public void setErrorOccurredListener(ErrorOccurredListener listener) {
         this.errorOccurredListener = listener;
     }
 
-    private byte[] compress(byte[] data) {
-        try {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            try (GZIPOutputStream gzipOut = new GZIPOutputStream(baos)) {
-                gzipOut.write(data);
-            }
-            return baos.toByteArray();
-        } catch (IOException ex) {
-            throw new IllegalStateException("Compression failed.", ex);
-        }
+    @Override
+    public void setOnClipboardReceivedListener(IConnectionManager.ClipboardReceivedListener listener) {
+        this.clipboardReceivedListener = listener;
     }
 
-    private byte[] decompress(byte[] compressedData) {
+    @Override
+    public CompletableFuture<Void> smartSend(InputStream source, String type, String payload) {
+        if (source == null) throw new IllegalArgumentException("source cannot be null");
+        if (type == null || type.trim().isEmpty()) throw new IllegalArgumentException("type cannot be null or empty");
+        if (transport == null || !transport.isConnected()) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Transport not connected. Initialize and connect first."));
+        }
+
+        int correlationId = allocateCorrelationId();
+        TransferRequest request = new TransferRequest();
+        request.setCorrelationID(correlationId);
+        request.setType(type);
+        request.setStatus("PUSH");
+        request.setFileSize(0);
+        request.setPayload(payload);
+
+        return runHandshakeAsync(request)
+                .thenCompose(ok -> {
+                    if (!ok) {
+                        releaseCorrelationIdIfOurs(correlationId);
+                        unregisterHandler(correlationId);
+                        return CompletableFuture.<Void>failedFuture(new IllegalStateException("Handshake rejected by peer."));
+                    }
+                    return streamDataAsync(source, correlationId)
+                            .whenComplete((v, e) -> unregisterHandler(correlationId));
+                });
+    }
+
+    @Override
+    public CompletableFuture<InputStream> getStream(String type, String payload) {
+        if (type == null || type.trim().isEmpty()) throw new IllegalArgumentException("type cannot be null or empty");
+        if (transport == null || !transport.isConnected()) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Transport not connected. Initialize and connect first."));
+        }
+
+        int correlationId = allocateCorrelationId();
+        BackBufferedInputStream backStream = new BackBufferedInputStream();
+
+        registerHandler(correlationId, backStream::writeChunk);
+        onFinByCorrelationId.put(correlationId, backStream::complete);
+
+        TransferRequest request = new TransferRequest();
+        request.setCorrelationID(correlationId);
+        request.setType(type);
+        request.setStatus("REQ");
+        request.setPayload(payload);
+
+        byte[] requestJson = gson.toJson(request).getBytes(StandardCharsets.UTF_8);
+        byte[] frame = protocolHandler.buildFrame(CoreConfig.CONTROL_CHANNEL_ID, requestJson);
+        return transport.sendRaw(frame)
+                .thenCompose(v -> waitForControlResponseAsync())
+                .thenCompose(controlResponse -> {
+                    TransferRequest approval = parseTransferRequest(controlResponse);
+                    if (approval == null || !"APPROVE".equals(approval.getStatus())) {
+                        releaseCorrelationIdIfOurs(correlationId);
+                        unregisterHandler(correlationId);
+                        onFinByCorrelationId.remove(correlationId);
+                        try { backStream.close(); } catch (IOException ignored) {}
+                        return CompletableFuture.<InputStream>failedFuture(new IllegalStateException("GetStream: expected APPROVE from peer."));
+                    }
+                    return sendControlResponseAsync(correlationId, "OK", null)
+                            .thenApply(v2 -> {
+                                executor.execute(() -> {
+                                    try {
+                                        releaseCorrelationIdIfOurs(correlationId);
+                                        unregisterHandler(correlationId);
+                                        onFinByCorrelationId.remove(correlationId);
+                                    } catch (Exception ex) {
+                                        onError(new IllegalStateException("GetStream receive failed.", ex));
+                                    }
+                                });
+                                return (InputStream) backStream;
+                            });
+                });
+    }
+
+    private void onTransportDataReceived(byte[] rawPacket) {
+        if (rawPacket == null || protocolHandler == null) return;
         try {
-            ByteArrayInputStream bais = new ByteArrayInputStream(compressedData);
-            try (GZIPInputStream gzipIn = new GZIPInputStream(bais);
-                 ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-                byte[] buffer = new byte[1024];
-                int len;
-                while ((len = gzipIn.read(buffer)) != -1) {
-                    baos.write(buffer, 0, len);
+            IProtocolHandler.ParseResult parsed = protocolHandler.parseFrame(rawPacket);
+            int correlationId = parsed.correlationId;
+            byte[] payload = parsed.payload;
+            byte flags = parsed.flags;
+
+            if (correlationId == CoreConfig.CONTROL_CHANNEL_ID) {
+                synchronized (controlLock) {
+                    if (pendingControlWaiter != null) {
+                        CompletableFuture<byte[]> w = pendingControlWaiter;
+                        pendingControlWaiter = null;
+                        w.complete(payload);
+                        return;
+                    }
                 }
-                return baos.toByteArray();
+                tryHandleIncomingHandshake(payload);
+                return;
             }
-        } catch (IOException ex) {
-            throw new IllegalStateException("Decompression failed.", ex);
+
+            Consumer<byte[]> handler = routingMap.get(correlationId);
+            if (handler != null) {
+                handler.accept(payload);
+                if ((flags & CoreConfig.FLAG_FIN) != 0) {
+                    Runnable onFin = onFinByCorrelationId.remove(correlationId);
+                    if (onFin != null) onFin.run();
+                    unregisterHandler(correlationId);
+                }
+                return;
+            }
+
+            tryHandleIncomingHandshake(payload);
+        } catch (Exception ex) {
+            onError(new IllegalStateException("HandleIncoming failed.", ex));
         }
     }
 
-    private void notifyRequestReceived(TransferRequest req) {
-        if (requestReceivedListener != null) {
-            requestReceivedListener.onRequestReceived(req);
+    private void tryHandleIncomingHandshake(byte[] payload) {
+        TransferRequest req = parseTransferRequest(payload);
+        if (req == null || !req.isValid()) return;
+        if ("REQ".equals(req.getStatus()) || "PUSH".equals(req.getStatus())) {
+            int correlationId = req.getCorrelationID();
+            if (!routingMap.containsKey(correlationId)) {
+                if ("PUSH".equals(req.getStatus()) && "CLIPBOARD".equals(req.getType()) && clipboardReceivedListener != null) {
+                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                    registerHandler(correlationId, data -> {
+                        if (data != null && data.length > 0) {
+                            try {
+                                buffer.write(data);
+                            } catch (IOException ignored) {}
+                        }
+                    });
+                    onFinByCorrelationId.put(correlationId, () -> {
+                        String text = new String(buffer.toByteArray(), StandardCharsets.UTF_8);
+                        clipboardReceivedListener.onClipboardReceived(text);
+                    });
+                } else {
+                    registerHandler(correlationId, b -> {});
+                }
+            }
+            sendControlResponseAsync(correlationId, "OK", req.getType());
         }
     }
 
-    private void notifyErrorOccurred(Exception ex) {
+    private CompletableFuture<Boolean> runHandshakeAsync(TransferRequest request) {
+        return protocolHandler.sendHandshakeAsync(
+                request,
+                data -> transport.sendRaw(data),
+                this::waitForControlResponseAsync);
+    }
+
+    private CompletableFuture<byte[]> waitForControlResponseAsync() {
+        CompletableFuture<byte[]> future;
+        synchronized (controlLock) {
+            if (pendingControlWaiter != null) {
+                throw new IllegalStateException("A handshake is already pending.");
+            }
+            pendingControlWaiter = future = new CompletableFuture<>();
+        }
+        future.orTimeout(CoreConfig.HANDSHAKE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        return future;
+    }
+
+    private CompletableFuture<Void> sendControlResponseAsync(int requestCorrelationId, String status, String type) {
+        TransferRequest response = new TransferRequest();
+        response.setMagicBytes(0x54415553L);
+        response.setCorrelationID(requestCorrelationId);
+        response.setType(type != null ? type : "");
+        response.setStatus(status);
+        response.setFileSize(0);
+        String json = gson.toJson(response);
+        byte[] body = json.getBytes(StandardCharsets.UTF_8);
+        byte[] frame = protocolHandler.buildFrame(CoreConfig.CONTROL_CHANNEL_ID, body);
+        return transport.sendRaw(frame);
+    }
+
+    private CompletableFuture<Void> streamDataAsync(InputStream source, int correlationId) {
+        return CompletableFuture.runAsync(() -> {
+            byte[] buffer = new byte[CoreConfig.STREAM_CHUNK_SIZE];
+            long totalSent = 0;
+            boolean first = true;
+            try {
+                int read;
+                while ((read = source.read(buffer)) > 0) {
+                    byte[] chunk = new byte[read];
+                    System.arraycopy(buffer, 0, chunk, 0, read);
+                    byte[] frame = protocolHandler.buildFrame(correlationId, chunk);
+                    transport.sendRaw(frame).join();
+                    totalSent += read;
+                    first = false;
+                }
+                if (first && totalSent == 0) return;
+                byte[] finFrame = protocolHandler.buildFrame(correlationId, new byte[0], CoreConfig.FLAG_FIN);
+                transport.sendRaw(finFrame).join();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }, executor);
+    }
+
+    private int allocateCorrelationId() {
+        Integer reused = releasedCorrelationIds.poll();
+        if (reused != null) return reused;
+        int id = nextCorrelationId.getAndAdd(2);
+        if (id <= 0) id = 2;
+        if (id > 0xFFFFFF) {
+            nextCorrelationId.set(2);
+            id = 2;
+        }
+        return id;
+    }
+
+    private void releaseCorrelationIdIfOurs(int correlationId) {
+        if (correlationId > 0 && correlationId <= 0xFFFFFF && (correlationId & 1) == 0) {
+            releasedCorrelationIds.add(correlationId);
+        }
+    }
+
+    private TransferRequest parseTransferRequest(byte[] payload) {
+        if (payload == null || payload.length == 0) return null;
+        try {
+            String json = new String(payload, StandardCharsets.UTF_8);
+            return gson.fromJson(json, TransferRequest.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void onError(Exception ex) {
         if (errorOccurredListener != null) {
             errorOccurredListener.onErrorOccurred(ex);
         }
     }
 
+    @Override
+    public void close() {
+        if (disposed) return;
+        disposed = true;
+        if (transport != null) {
+            transport.setOnDataReceivedListener(null);
+            if (ownsTransport && transport instanceof AutoCloseable) {
+                try {
+                    ((AutoCloseable) transport).close();
+                } catch (Exception ignored) {
+                }
+            }
+            transport = null;
+        }
+        routingMap.clear();
+        onFinByCorrelationId.clear();
+        synchronized (controlLock) {
+            if (pendingControlWaiter != null) {
+                pendingControlWaiter.cancel(false);
+                pendingControlWaiter = null;
+            }
+        }
+        executor.shutdown();
+    }
 }

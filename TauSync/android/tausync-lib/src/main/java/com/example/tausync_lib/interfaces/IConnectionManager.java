@@ -1,103 +1,91 @@
 package com.tausync.interfaces;
 
 import com.example.tausync_lib.models.TransferRequest;
-import com.tausync.core.ConnectionStatus;
 
 import java.io.InputStream;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 /**
- * Connection management layer interface - the brain that decides which ITransport to use.
+ * Connection manager — which connection and when; dispatcher and routing map.
+ * Routes incoming TPack by CorrelationID to registered handlers. Control channel = 0.
+ * Per TauSync Protocol Spec. Matches C# IConnectionManager.
  */
-public interface IConnectionManager {
+public interface IConnectionManager extends AutoCloseable {
+
     /**
-     * Sends a TransferRequest with streaming data support (async).
-     * Implements handshake protocol: sends metadata, waits for OK/REJECT, then streams data.
+     * Sets the listener for incoming CLIPBOARD push from the peer (e.g. Windows).
+     * When the peer sends PUSH with Type=CLIPBOARD, the received text is passed to this callback.
+     */
+    void setOnClipboardReceivedListener(ClipboardReceivedListener listener);
+
+    /**
+     * Listener for received clipboard content (incoming PUSH CLIPBOARD).
+     */
+    @FunctionalInterface
+    interface ClipboardReceivedListener {
+        void onClipboardReceived(String text);
+    }
+
+    /**
+     * Initializes the manager with the transport to use. Use this when the caller provides the transport.
+     * Alternatively, use {@link #connect(String)} to let the manager create and own the transport.
+     */
+    void initialize(ITransport transport);
+
+    /**
+     * Connects to the target by creating and managing the transport internally.
+     * Pass null or empty targetId for server mode (wait for incoming connection).
      *
-     * @param dataStream The stream containing data to send
-     * @param req        The transfer request metadata
-     * @return CompletableFuture that completes when the transfer is finished
-     * @throws IllegalArgumentException If req is null or invalid.
-     * @throws IllegalStateException    If not initialized, no transport is available, or send fails.
+     * @param targetId Target address (client mode), or null/empty for server mode.
+     * @return CompletableFuture that completes when connected.
      */
-    CompletableFuture<Void> smartSend(InputStream dataStream, TransferRequest req);
+    CompletableFuture<Void> connect(String targetId);
 
     /**
-     * Legacy SmartSend for backward compatibility (sends TransferRequest with payload in memory).
+     * Returns whether the underlying transport is connected.
+     */
+    boolean isConnected();
+
+    /**
+     * Pushes data: handshake on channel 0, then streams content on a dedicated CorrelationID.
      *
-     * @param req The transfer request with payload
-     * @throws IllegalArgumentException If req is null or invalid.
-     * @throws IllegalStateException    If not initialized, no transport is available, or send fails.
+     * @param source  Stream to read from (e.g. clipboard content).
+     * @param type    Task type (e.g. "CLIPBOARD").
+     * @param payload Optional JSON (e.g. {"FileName": "x"}). May be null.
+     * @return CompletableFuture that completes when the transfer is finished.
      */
-    void smartSend(TransferRequest req);
+    CompletableFuture<Void> smartSend(InputStream source, String type, String payload);
 
     /**
-     * Handles incoming raw data and processes it.
+     * Pulls data: double handshake on channel 0, then returns a stream fed by incoming TPack for the agreed CorrelationID.
      *
-     * @param rawData The raw binary data received.
-     * @throws IllegalArgumentException If rawData is null.
-     * @throws IllegalStateException    If not initialized or processing fails.
+     * @param type    Task type (e.g. "BACKUP").
+     * @param payload Optional JSON. May be null.
+     * @return CompletableFuture that completes with a stream ready for read.
      */
-    void handleIncoming(byte[] rawData);
+    CompletableFuture<InputStream> getStream(String type, String payload);
 
     /**
-     * Sets the listener for request received events.
+     * Registers a handler for a CorrelationID. When a TPack arrives with that ID, payload is passed to the callback.
      */
-    void setRequestReceivedListener(RequestReceivedListener listener);
+    void registerHandler(int correlationId, Consumer<byte[]> callback);
 
     /**
-     * Sets the listener for error events.
+     * Unregisters the handler for the given CorrelationID (e.g. after FIN or error).
+     */
+    void unregisterHandler(int correlationId);
+
+    /**
+     * Sets the listener for errors (e.g. handshake timeout, reject, dispatch failure).
      */
     void setErrorOccurredListener(ErrorOccurredListener listener);
 
     /**
-     * Sets the listener for data chunks (for writing to file).
+     * Listener for errors.
      */
-    void setDataChunkListener(DataChunkListener listener);
-
-    /**
-     * Gets the current connection status.
-     *
-     * @return Status string
-     */
-    String getStatus();
-
-    /**
-     * Switches the connection status.
-     *
-     * @param status The new connection status
-     */
-    void switchStatus(ConnectionStatus status);
-
-    /**
-     * Listener interface for request received events.
-     */
-    interface RequestReceivedListener {
-        void onRequestReceived(TransferRequest req);
-    }
-
-    /**
-     * Listener interface for error events.
-     */
+    @FunctionalInterface
     interface ErrorOccurredListener {
         void onErrorOccurred(Exception exception);
-    }
-
-    /**
-     * Listener interface for data chunks (for writing to file).
-     */
-    interface DataChunkListener {
-        /**
-         * Called when a data chunk is received.
-         *
-         * @param chunk  The chunk data
-         * @param isFinal True if this is the final chunk
-         */
-        void onDataChunkReceived(byte[] chunk, boolean isFinal);
-
-        /**
-         * Called when the transfer is complete (after final chunk).
-         */
-        void onTransferComplete();
     }
 }

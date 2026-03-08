@@ -1,67 +1,37 @@
 using System;
 using System.Threading.Tasks;
-using TauSync.Models;
 
 namespace TauSync.Interfaces
 {
     /// <summary>
-    /// Transport layer interface - the pipe through which bytes flow.
-    /// Each side (Windows/Android) must implement this for WiFi and Bluetooth.
+    /// Transport layer interface — manages the physical connection.
+    /// Implement as a singleton per medium (Bluetooth, WiFi).
+    /// Per TauSync Protocol Spec: raw bytes only; framing and reassembly are defined here.
     /// </summary>
     public interface ITransport : IDisposable
     {
         /// <summary>
-        /// Creates an initial connection to the target device.
+        /// Connects to the target. When <paramref name="targetId"/> is null or empty, acts as server: listens and waits for the first incoming connection.
         /// </summary>
-        /// <param name="targetId">The identifier of the target device to connect to.</param>
-        void Connect(string targetId);
+        /// <param name="targetId">IP address of the peer (client mode), or null/empty for server mode.</param>
+        /// <returns>Task that completes when connected.</returns>
+        Task Connect(string? targetId);
 
         /// <summary>
-        /// Sends raw binary data through the transport channel (thread-safe).
+        /// Sends raw binary data (full TPack: 8-byte header + payload). No extra length prefix.
         /// </summary>
-        /// <param name="data">The binary data to send.</param>
-        void SendRaw(byte[] data);
+        /// <param name="data">The complete TPack to send.</param>
+        /// <returns>Task that completes when send is done.</returns>
+        Task SendRaw(byte[] data);
 
         /// <summary>
-        /// Checks the connection status.
+        /// Returns the current connection status.
         /// </summary>
-        /// <returns>True if connected, false otherwise.</returns>
         bool IsConnected();
 
         /// <summary>
-        /// Sends a request and waits for a response with the specified correlationId.
+        /// Fired when a complete TPack has been received (after reassembly: 8-byte header + Length bytes payload).
         /// </summary>
-        /// <param name="data">The data to send (will be prefixed with correlationId)</param>
-        /// <param name="correlationId">Unique identifier for request-response matching (max 16 bytes)</param>
-        /// <param name="timeout">Timeout for waiting for response</param>
-        /// <returns>Task that completes with the response data (without correlationId header)</returns>
-        Task<byte[]> SendRequestAsync(byte[] data, string correlationId, TimeSpan timeout);
-
-        /// <summary>
-        /// Registers a handler for small messages (metadata, JSON, etc.) - dependency injection.
-        /// </summary>
-        /// <param name="handler">Action that receives the message data</param>
-        void RegisterMessageHandler(Action<byte[]> handler);
-
-        /// <summary>
-        /// Registers a handler for streaming chunks: (chunk, bytesRead, isFinal) - dependency injection.
-        /// </summary>
-        /// <param name="handler">Action that receives chunk data, bytes read, and final flag</param>
-        void RegisterStreamChunkHandler(Action<byte[], int, bool> handler);
-
-        /// <summary>
-        /// Event for small messages received (< 1MB) - for event-based subscriptions.
-        /// </summary>
-        event EventHandler<byte[]>? OnMessageReceived;
-
-        /// <summary>
-        /// Event for streaming chunks received (>= 1MB) - for event-based subscriptions.
-        /// </summary>
-        event EventHandler<StreamChunkEventArgs>? OnStreamChunkReceived;
-
-        /// <summary>
-        /// Legacy event for backward compatibility (buffers entire message).
-        /// </summary>
-        event EventHandler<byte[]>? DataReceived;
+        event EventHandler<byte[]>? OnDataReceived;
     }
 }

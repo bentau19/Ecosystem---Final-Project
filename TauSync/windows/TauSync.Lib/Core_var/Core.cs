@@ -1,6 +1,8 @@
 namespace TauSync.Core
 {
-    // הגדרת הטיפוס הספציפי
+    /// <summary>
+    /// Connection state for UI/diagnostics (optional).
+    /// </summary>
     public enum ConnectionStatus
     {
         Disconnected,
@@ -11,30 +13,29 @@ namespace TauSync.Core
     }
 
     /// <summary>
-    /// Core configuration and protocol constants shared across TauSync.
+    /// Protocol and implementation constants per TauSync Protocol Spec.
     /// </summary>
     public static class CoreConfig
     {
-        /// <summary>
-        /// Threshold above which files will be sent using streaming (in bytes).
-        /// </summary>
-        public static readonly long LargeFileThreshold = 1024 * 1024; // 1MB
+        /// <summary>TPack header size in bytes (Length 4B + CorrelationID 3B + Flags 1B).</summary>
+        public const int TPackHeaderSize = 8;
 
-        /// <summary>
-        /// Default chunk size used for streaming (in bytes).
-        /// </summary>
-        public static readonly int StreamChunkSize = 64 * 1024; // 64KB chunks for streaming
+        /// <summary>CorrelationID in header is 3 bytes (max 0xFFFFFF).</summary>
+        public const int CorrelationIdBytes = 3;
 
-        /// <summary>
-        /// Handshake timeout in seconds.
-        /// </summary>
-        public static readonly int HandshakeTimeoutSeconds = 30;
+        /// <summary>Control channel CorrelationID.</summary>
+        public const int ControlChannelId = 0;
 
+        /// <summary>FIN flag: bit 0 = 0x01.</summary>
+        public const byte FlagFin = 0x01;
 
-        
-        public static readonly int DefaultPort = 8888;
-        public static readonly int StreamingThreshold = 1024 * 1024; // 1MB - switch to streaming mode
-        public static readonly int ChunkBufferSize = 64 * 1024; // 64KB chunks for streaming
-        public static readonly int CorrelationIdLength = 16;
+        /// <summary>Stream chunk size for send/receive (64 KB).</summary>
+        public const int StreamChunkSize = 64 * 1024;
+
+        /// <summary>Handshake timeout in seconds.</summary>
+        public const int HandshakeTimeoutSeconds = 30;
+
+        /// <summary>Default TCP port.</summary>
+        public const int DefaultPort = 8888;
     }
 }

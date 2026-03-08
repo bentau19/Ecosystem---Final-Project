@@ -1,94 +1,45 @@
 package com.tausync.interfaces;
 
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 
 /**
- * Transport layer interface - the pipe through which bytes flow.
- * Each side (Windows/Android) must implement this for WiFi and Bluetooth.
+ * Transport layer interface — manages the physical connection.
+ * Per TauSync Protocol Spec: raw bytes only; framing and reassembly are transport's responsibility.
+ * Matches C# ITransport: Connect (null/empty = server mode), SendRaw, IsConnected, OnDataReceived.
  */
-public interface ITransport {
-    /**
-     * Creates an initial connection to the target device.
-     *
-     * @param targetId The identifier of the target device to connect to.
-     * @throws IllegalArgumentException If targetId is null or empty.
-     * @throws IllegalStateException If connection fails.
-     */
-    void connect(String targetId);
+public interface ITransport extends AutoCloseable {
 
     /**
-     * Sends raw binary data through the transport channel (thread-safe).
+     * Connects to the target. When targetId is null or empty, acts as server: listens and waits for the first incoming connection.
      *
-     * @param data The binary data to send.
-     * @throws IllegalArgumentException If data is null.
-     * @throws IllegalStateException If not connected or send fails.
+     * @param targetId IP address of the peer (client mode), or null/empty for server mode.
+     * @return CompletableFuture that completes when connected.
      */
-    void sendRaw(byte[] data);
+    CompletableFuture<Void> connect(String targetId);
 
     /**
-     * Checks the connection status.
+     * Sends raw binary data (full TPack: 8-byte header + payload). No extra length prefix.
      *
-     * @return True if connected, false otherwise.
+     * @param data The complete TPack to send.
+     * @return CompletableFuture that completes when send is done.
+     */
+    CompletableFuture<Void> sendRaw(byte[] data);
+
+    /**
+     * Returns the current connection status.
      */
     boolean isConnected();
 
     /**
-     * Sends a request and waits for a response with the specified correlationId.
-     *
-     * @param data          The data to send (will be prefixed with correlationId)
-     * @param correlationId Unique identifier for request-response matching (max 16 bytes)
-     * @param timeoutMs     Timeout in milliseconds
-     * @return CompletableFuture that completes with the response data (without correlationId header)
+     * Sets the listener invoked when a complete TPack has been received (after reassembly: 8-byte header + Length bytes payload).
      */
-    CompletableFuture<byte[]> sendRequest(byte[] data, String correlationId, long timeoutMs);
+    void setOnDataReceivedListener(OnDataReceivedListener listener);
 
     /**
-     * Sets the listener for small messages (< 1MB) - legacy.
+     * Listener for complete TPack reception.
      */
-    void setDataReceivedListener(DataReceivedListener listener);
-
-    /**
-     * Sets the listener for small messages with correlation ID (< 1MB).
-     * Use this when you need the correlationId to send responses.
-     */
-    void setDataReceivedWithCorrelationListener(DataReceivedWithCorrelationListener listener);
-
-    /**
-     * Sets the listener for streaming chunks (>= 1MB).
-     */
-    void setStreamChunkReceivedListener(StreamChunkReceivedListener listener);
-
-    /**
-     * Listener interface for data reception events (legacy).
-     */
-    interface DataReceivedListener {
+    @FunctionalInterface
+    interface OnDataReceivedListener {
         void onDataReceived(byte[] data);
-    }
-
-    /**
-     * Listener interface for data reception with correlation ID (for handshake responses).
-     */
-    interface DataReceivedWithCorrelationListener {
-        /**
-         * Called when data is received.
-         *
-         * @param data          The received data (payload only, without correlationId header)
-         * @param correlationId The correlation ID from the header (null if unsolicited/all zeros)
-         */
-        void onDataReceived(byte[] data, String correlationId);
-    }
-
-    /**
-     * Listener interface for streaming chunk events.
-     */
-    interface StreamChunkReceivedListener {
-        /**
-         * Called when a streaming chunk is received.
-         *
-         * @param chunk   The chunk data
-         * @param isFinal True if this is the final chunk
-         */
-        void onStreamChunkReceived(byte[] chunk, boolean isFinal);
     }
 }

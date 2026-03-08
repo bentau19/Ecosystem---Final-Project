@@ -4,87 +4,46 @@ using System.Text.Json.Serialization;
 namespace TauSync.Models
 {
     /// <summary>
-    /// Represents a data transfer request in the TauSync protocol.
-    /// All information passed through the TauSync protocol is packaged within this object (in JSON format).
+    /// Signaling message for task coordination. Sent as the payload of a TPack with header CorrelationID = 0.
+    /// The CorrelationID inside this object is the stream ID we are listening to or negotiating.
     /// </summary>
     public class TransferRequest
     {
-        /// <summary>
-        /// Magic bytes identifier. Always 0x54415553 ("TAUS" in ASCII).
-        /// </summary>
+        /// <summary>Protocol identity: 0x54415553 ("TAUS").</summary>
         [JsonPropertyName("MagicBytes")]
         public uint MagicBytes { get; set; } = 0x54415553;
 
-        /// <summary>
-        /// Current protocol version (always 1).
-        /// </summary>
-        [JsonPropertyName("Version")]
-        public int Version { get; set; } = 1;
+        /// <summary>Stream ID (odd in C#, even in Java).</summary>
+        [JsonPropertyName("CorrelationID")]
+        public int CorrelationID { get; set; }
 
-        /// <summary>
-        /// Raw data (file/message) after encryption.
-        /// </summary>
+        /// <summary>Task type (e.g. "FILE", "CLIPBOARD", "BACKUP").</summary>
+        [JsonPropertyName("Type")]
+        public string? Type { get; set; }
+
+        /// <summary>Conversation state: REQ, PUSH, APPROVE, OK, REJECT, FIN.</summary>
+        [JsonPropertyName("Status")]
+        public string? Status { get; set; }
+
+        /// <summary>Total payload size in bytes (64-bit).</summary>
+        [JsonPropertyName("FileSize")]
+        public long FileSize { get; set; }
+
+        /// <summary>Optional inner JSON (e.g. {"FileName": "pic.jpg"}).</summary>
         [JsonPropertyName("Payload")]
-        public byte[] Payload { get; set; } = Array.Empty<byte>();
+        public string? Payload { get; set; }
 
         /// <summary>
-        /// Priority level: 0 (Low/BT), 1 (High/WiFi).
+        /// Validates the request per TauSync Protocol (MagicBytes, CorrelationID range for 3 bytes, Status/Type non-empty when required).
         /// </summary>
-        [JsonPropertyName("Priority")]
-        public int Priority { get; set; } = 0;
-
-        /// <summary>
-        /// Whether the Payload has been compressed with GZip.
-        /// </summary>
-        [JsonPropertyName("IsCompressed")]
-        public bool IsCompressed { get; set; } = false;
-
-        /// <summary>
-        /// Initialization Vector used for encrypting the Payload.
-        /// Must be unique (Random) for each transmission.
-        /// </summary>
-        [JsonPropertyName("CryptoIV")]
-        public byte[] CryptoIV { get; set; } = Array.Empty<byte>();
-
-        /// <summary>
-        /// Request ID for request-response correlation. 
-        /// Used as correlationId in the transport layer.
-        /// </summary>
-        [JsonPropertyName("RequestId")]
-        public string? RequestId { get; set; }
-
-        /// <summary>
-        /// Validates the TransferRequest structure.
-        /// </summary>
-        /// <returns>True if valid, false otherwise.</returns>
         public bool IsValid()
         {
-            if (MagicBytes != 0x54415553)
-                return false;
-
-            if (Version != 1)
-                return false;
-
-            if (Priority < 0 || Priority > 1)
-                return false;
-
-            if (Payload == null)
-                return false;
-
-            // CryptoIV can be empty if no encryption is used
-            if (CryptoIV == null)
-                return false;
-
+            if (MagicBytes != 0x54415553) return false;
+            if (CorrelationID < 0 || CorrelationID > 0xFFFFFF) return false; // 3-byte max
+            if (string.IsNullOrWhiteSpace(Status)) return false;
+            if (string.IsNullOrWhiteSpace(Type)) return false;
+            if (FileSize < 0) return false;
             return true;
-        }
-
-        /// <summary>
-        /// Gets the size of the payload in bytes.
-        /// </summary>
-        /// <returns>Payload size in bytes.</returns>
-        public long GetPayloadSize()
-        {
-            return Payload?.Length ?? 0;
         }
     }
 }

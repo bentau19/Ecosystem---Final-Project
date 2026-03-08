@@ -3,30 +3,35 @@ package com.example.tausync_lib.models;
 import com.google.gson.annotations.SerializedName;
 
 /**
- * Represents a data transfer request in the TauSync protocol.
- * All information passed through the TauSync protocol is packaged within this object (in JSON format).
+ * Signaling message for task coordination per TauSync Protocol Spec.
+ * Sent as the payload of a TPack with header CorrelationID = 0.
+ * The CorrelationID inside this object is the stream ID we are listening to or negotiating.
  */
 public class TransferRequest {
+
+    /** Protocol identity: 0x54415553 ("TAUS"). */
     @SerializedName("MagicBytes")
     private long magicBytes = 0x54415553L;
 
-    @SerializedName("Version")
-    private int version = 1;
+    /** Stream ID (odd in C#, even in Java). */
+    @SerializedName("CorrelationID")
+    private int correlationID;
 
+    /** Task type (e.g. "FILE", "CLIPBOARD", "BACKUP"). */
+    @SerializedName("Type")
+    private String type;
+
+    /** Conversation state: REQ, PUSH, APPROVE, OK, REJECT, FIN. */
+    @SerializedName("Status")
+    private String status;
+
+    /** Total payload size in bytes (64-bit). */
+    @SerializedName("FileSize")
+    private long fileSize;
+
+    /** Optional inner JSON (e.g. {"FileName": "pic.jpg"}). */
     @SerializedName("Payload")
-    private byte[] payload = new byte[0];
-
-    @SerializedName("Priority")
-    private int priority = 0;
-
-    @SerializedName("IsCompressed")
-    private boolean isCompressed = false;
-
-    @SerializedName("CryptoIV")
-    private byte[] cryptoIV = new byte[0];
-
-    @SerializedName("RequestId")
-    private String requestId;
+    private String payload;
 
     public TransferRequest() {
     }
@@ -39,75 +44,55 @@ public class TransferRequest {
         this.magicBytes = magicBytes;
     }
 
-    public int getVersion() {
-        return version;
+    public int getCorrelationID() {
+        return correlationID;
     }
 
-    public void setVersion(int version) {
-        this.version = version;
+    public void setCorrelationID(int correlationID) {
+        this.correlationID = correlationID;
     }
 
-    public byte[] getPayload() {
+    public String getType() {
+        return type;
+    }
+
+    public void setType(String type) {
+        this.type = type;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public long getFileSize() {
+        return fileSize;
+    }
+
+    public void setFileSize(long fileSize) {
+        this.fileSize = fileSize;
+    }
+
+    public String getPayload() {
         return payload;
     }
 
-    public void setPayload(byte[] payload) {
-        this.payload = payload != null ? payload : new byte[0];
+    public void setPayload(String payload) {
+        this.payload = payload;
     }
 
-    public int getPriority() {
-        return priority;
-    }
-
-    public void setPriority(int priority) {
-        this.priority = priority;
-    }
-
-    public boolean isCompressed() {
-        return isCompressed;
-    }
-
-    public void setCompressed(boolean compressed) {
-        isCompressed = compressed;
-    }
-
-    public byte[] getCryptoIV() {
-        return cryptoIV;
-    }
-
-    public void setCryptoIV(byte[] cryptoIV) {
-        this.cryptoIV = cryptoIV != null ? cryptoIV : new byte[0];
-    }
-
-    public String getRequestId() {
-        return requestId;
-    }
-
-    public void setRequestId(String requestId) {
-        this.requestId = requestId;
-    }
-
+    /**
+     * Validates the request per TauSync Protocol (MagicBytes, CorrelationID range for 3 bytes, Status/Type non-empty when required).
+     */
     public boolean isValid() {
-        if (magicBytes != 0x54415553L) {
-            return false;
-        }
-        if (version != 1) {
-            return false;
-        }
-        if (priority < 0 || priority > 1) {
-            return false;
-        }
-        if (payload == null) {
-            return false;
-        }
-        // CryptoIV can be empty if no encryption is used
-        if (cryptoIV == null) {
-            return false;
-        }
+        if (magicBytes != 0x54415553L) return false;
+        if (correlationID < 0 || correlationID > 0xFFFFFF) return false;
+        if (status == null || status.trim().isEmpty()) return false;
+        if (type == null || type.trim().isEmpty()) return false;
+        if (fileSize < 0) return false;
         return true;
-    }
-
-    public long getPayloadSize() {
-        return payload != null ? payload.length : 0;
     }
 }
