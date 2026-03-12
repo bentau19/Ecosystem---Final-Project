@@ -1,0 +1,35 @@
+#batteryCard {
+    background: {{SURFACE}};
+    border-color: {{BORDER}};
+    border-style: solid;
+    border-width: 2px;
+    border-radius: 14px;
+}
+
+
+#batteryIcon {
+    background: rgba(0,230,118,0.1);
+    border-radius: 8px;
+    font-size: 14px;
+}
+#batteryTitle {
+    color: {{MUTED}};
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    background: transparent;
+}
+
+#batteryValue {
+    color: {{TEXT}};
+    font-size: 16px;
+    font-weight: 700;
+    background: transparent;
+}
+
+#batteryCharging {
+    color: {{GREEN}};
+    font-size: 11px;
+    font-weight: 600;
+    background: transparent;
+}

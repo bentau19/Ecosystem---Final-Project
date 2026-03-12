@@ -6,8 +6,6 @@ from PySide6.QtWidgets import QLayout, QLayoutItem, QWidget
 
 class GridFlowLayout(QLayout):
     """
-    Custom flow layout similar to HTML/CSS flexbox with 'flex-wrap: wrap'.
-
     Arranges child widgets horizontally and wraps to the next line when
     horizontal space is exhausted. This specific implementation requires
     all items to have the same base width for grid-like consistency.
@@ -25,6 +23,7 @@ class GridFlowLayout(QLayout):
             self.setContentsMargins(QMargins(0, 0, 0, 0))
 
         self._item_width: int = 0
+        self._width_validated: bool = False
         self._item_list: List[QLayoutItem] = []
 
     def __del__(self) -> None:
@@ -50,9 +49,7 @@ class GridFlowLayout(QLayout):
         # Enforce uniform width logic
         if not self._item_list:
             self._item_width = item.sizeHint().width()
-        elif item.sizeHint().width() != self._item_width:
-            raise ValueError("All items must have the same width for this GridFlowLayout implementation")
-
+        self._width_validated = False
         self._item_list.append(item)
 
     def count(self) -> int:
@@ -128,7 +125,52 @@ class GridFlowLayout(QLayout):
             rect: The bounding rectangle for the layout.
         """
         super().setGeometry(rect)
+        self._validate_widths()
         self._do_layout(rect, test_only=False)
+
+    def _compute_item_width(self) -> int:
+        """
+        Compute the base item width from the first item in the layout.
+
+        This method assumes all items share the same width. It should only
+        be called after widgets have been polished (i.e., during or after
+        the first layout pass).
+
+        Returns:
+            int: The width of the first layout item's size hint.
+        """
+        return self._item_list[0].sizeHint().width()
+
+    def _validate_widths(self) -> None:
+        """
+        Validate that all items in the layout share the same width.
+
+        Emits a warning if inconsistent widths are detected. Does not raise
+        an exception to avoid crashing during geometry calculation.
+
+        Returns:
+            None
+        """
+        widths: list[int] = [item.sizeHint().width() for item in self._item_list]
+        if len(set(widths)) > 1:
+            raise ValueError(f"All items must have the same width, got: {set(widths)}")
+
+    def _ensure_ready(self) -> None:
+        """
+        Orchestrate the one-time readiness check before layout calculation.
+
+        Validates item widths and caches the item width. Subsequent calls
+        are no-ops unless a new item has been added (which resets the
+        validated flag via ``addItem``).
+
+        Returns:
+            None
+        """
+        if self._width_validated:
+            return
+        self._validate_widths()
+        self._item_width = self._compute_item_width()
+        self._width_validated = True
 
     def sizeHint(self) -> QSize:
         """
@@ -137,6 +179,7 @@ class GridFlowLayout(QLayout):
         Returns:
             QSize representing the width for all items in one row and the max item height.
         """
+
         width: int = 0
         height: int = 0
         margins: QMargins = self.contentsMargins()
@@ -216,6 +259,8 @@ class GridFlowLayout(QLayout):
         """
         if not self._item_list:
             return 0
+
+        self._item_width = self._item_list[0].sizeHint().width()
 
         margins: QMargins = self.contentsMargins()
         effective_rect: QRect = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom())

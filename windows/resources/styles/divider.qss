@@ -1,0 +1,4 @@
+Divider {
+    background: {{SIDEBAR_BORDER}};
+    border: none;
+}

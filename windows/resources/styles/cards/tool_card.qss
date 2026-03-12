@@ -1,0 +1,15 @@
+ToolCard {
+    background: rgb(17, 19, 24);
+    border-width: 1px;
+    border-style: solid;
+    border-color: {{Colors.BORDER}};
+    border-radius: 16px;
+
+}
+
+ToolCard:hover {
+    background: {{Colors.SURFACE2}};
+    border-width: 1px;
+    border-style: solid;
+    border-color: #2a2d38;
+}

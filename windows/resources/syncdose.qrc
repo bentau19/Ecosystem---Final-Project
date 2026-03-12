@@ -1,0 +1,22 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file alias="logo.svg">icons/logo.svg</file>
+        <file alias="settings.svg">icons/settings.svg</file>
+        <file alias="dashboard.svg">icons/dashboard.svg</file>
+        <file alias="lightning.svg">icons/lightning.svg</file>
+    </qresource>
+
+
+    <qresource prefix="/styles">
+        <file alias="navigation_item.qss">styles/navigation/navigation_item.qss</file>
+        <file alias="connection_pill.qss">styles/indicators/connection_pill.qss</file>
+        <file alias="divider.qss">styles/divider.qss</file>
+        <file alias="sidebar.qss">styles/navigation/sidebar.qss</file>
+        <file alias="battery_card.qss">styles/cards/battery_card.qss</file>
+        <file alias="tool_card.qss">styles/cards/tool_card.qss</file>
+        <file alias="logo_widget.qss">styles/navigation/logo_widget.qss</file>
+        <file alias="navigation_container.qss">styles/navigation/navigation_container.qss</file>
+        <file alias="battery_card.qss">styles/cards/battery_card.qss</file>
+    </qresource>
+
+</RCC>
