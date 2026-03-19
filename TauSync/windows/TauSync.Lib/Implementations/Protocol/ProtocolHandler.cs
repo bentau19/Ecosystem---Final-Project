@@ -8,18 +8,17 @@ using TauSync.Models;
 namespace TauSync.Implementations.Protocol
 {
     /// <summary>
-    /// Implements TauSync TPack: 8-byte header (Length 4B LE + CorrelationID 3B + Flags 1B) + payload.
-    /// Handshake on control channel (CorrelationID 0). No encryption in this implementation.
+    /// Implements TauSync TPack: 8-byte header (Length 4B LE + TargetID 3B + Flags 1B) + payload.
+    /// Handshake on control channel (TargetID 0). TargetID routes to ConnectionContext.Instance.
     /// </summary>
     public class ProtocolHandler : IProtocolHandler
     {
-        /// <inheritdoc />
-        public byte[] BuildFrame(int correlationId, byte[] payload, byte flags = 0)
+        public byte[] BuildFrame(int targetId, byte[] payload, byte flags = 0)
         {
             if (payload == null)
                 throw new ArgumentNullException(nameof(payload));
-            if (correlationId < 0 || correlationId > 0xFFFFFF)
-                throw new ArgumentOutOfRangeException(nameof(correlationId), "CorrelationID must fit in 3 bytes (0..0xFFFFFF).");
+            if (targetId < 0 || targetId > 0xFFFFFF)
+                throw new ArgumentOutOfRangeException(nameof(targetId), "TargetID must fit in 3 bytes (0..0xFFFFFF).");
 
             byte[] header = new byte[CoreConfig.TPackHeaderSize];
             int len = payload.Length;
@@ -27,9 +26,9 @@ namespace TauSync.Implementations.Protocol
             header[1] = (byte)((len >> 8) & 0xFF);
             header[2] = (byte)((len >> 16) & 0xFF);
             header[3] = (byte)((len >> 24) & 0xFF);
-            header[4] = (byte)(correlationId & 0xFF);
-            header[5] = (byte)((correlationId >> 8) & 0xFF);
-            header[6] = (byte)((correlationId >> 16) & 0xFF);
+            header[4] = (byte)(targetId & 0xFF);
+            header[5] = (byte)((targetId >> 8) & 0xFF);
+            header[6] = (byte)((targetId >> 16) & 0xFF);
             header[7] = flags;
 
             byte[] frame = new byte[CoreConfig.TPackHeaderSize + payload.Length];
@@ -38,10 +37,8 @@ namespace TauSync.Implementations.Protocol
             return frame;
         }
 
-        /// <summary>
-        /// Parses a complete TPack into CorrelationID, payload, and flags.
-        /// </summary>
-        public (int correlationId, byte[] payload, byte flags) ParseFrame(byte[] rawPacket)
+        /// <inheritdoc />
+        public (int targetId, byte[] payload, byte flags) ParseFrame(byte[] rawPacket)
         {
             if (rawPacket == null)
                 throw new ArgumentNullException(nameof(rawPacket));
@@ -49,7 +46,7 @@ namespace TauSync.Implementations.Protocol
                 throw new ArgumentException($"Packet too small: need at least {CoreConfig.TPackHeaderSize} bytes.", nameof(rawPacket));
 
             int length = rawPacket[0] | (rawPacket[1] << 8) | (rawPacket[2] << 16) | (rawPacket[3] << 24);
-            int correlationId = rawPacket[4] | (rawPacket[5] << 8) | (rawPacket[6] << 16);
+            int targetId = rawPacket[4] | (rawPacket[5] << 8) | (rawPacket[6] << 16);
             byte flags = rawPacket[7];
 
             if (rawPacket.Length != CoreConfig.TPackHeaderSize + length)
@@ -58,11 +55,26 @@ namespace TauSync.Implementations.Protocol
             byte[] payload = new byte[length];
             if (length > 0)
                 Buffer.BlockCopy(rawPacket, CoreConfig.TPackHeaderSize, payload, 0, length);
-            return (correlationId, payload, flags);
+            return (targetId, payload, flags);
         }
 
         /// <inheritdoc />
-        public async Task<bool> SendHandshakeAsync(
+        public int GetHeaderSize() => CoreConfig.TPackHeaderSize;
+
+        /// <inheritdoc />
+        public int GetPayloadLength(byte[] header)
+        {
+            if (header == null || header.Length < CoreConfig.TPackHeaderSize)
+                return 0;
+            return header[0] | (header[1] << 8) | (header[2] << 16) | (header[3] << 24);
+        }
+
+        /// <inheritdoc />
+        public bool IsControlFrame(int targetId, byte flags) =>
+            targetId == CoreConfig.ControlChannelId;
+
+        /// <inheritdoc />
+        public async Task<TransferRequest?> SendHandshakeAsync(
             TransferRequest request,
             Func<byte[], Task> sendRaw,
             Func<Task<byte[]>> receiveResponse)
@@ -78,12 +90,21 @@ namespace TauSync.Implementations.Protocol
 
             string json = System.Text.Json.JsonSerializer.Serialize(request);
             byte[] jsonBytes = Encoding.UTF8.GetBytes(json);
-            byte[] frame = BuildFrame(CoreConfig.ControlChannelId, jsonBytes);
+            byte[] frame = BuildFrame(CoreConfig.ControlChannelId, jsonBytes, CoreConfig.FlagControl);
             await sendRaw(frame).ConfigureAwait(false);
 
             byte[] responsePayload = await receiveResponse().ConfigureAwait(false);
-            var response = System.Text.Json.JsonSerializer.Deserialize<TransferRequest>(Encoding.UTF8.GetString(responsePayload));
-            return response?.Status?.ToUpperInvariant() == "OK";
+            if (responsePayload == null || responsePayload.Length == 0)
+                return null;
+            try
+            {
+                string responseJson = Encoding.UTF8.GetString(responsePayload);
+                return System.Text.Json.JsonSerializer.Deserialize<TransferRequest>(responseJson);
+            }
+            catch
+            {
+                return null;
+            }
         }
     }
 }

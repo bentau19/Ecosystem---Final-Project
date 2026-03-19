@@ -17,7 +17,7 @@ public interface IProtocolHandler {
     /**
      * Builds a TPack: 8-byte header (Length LE, CorrelationID 3B, Flags 1B) + payload.
      *
-     * @param correlationId Stream/channel ID (0 = control). Java uses even IDs.
+     * @param correlationId Stream/channel ID (0 = control).
      * @param payload      Payload bytes (not encrypted in this pass).
      * @param flags        Flags byte (e.g. 0x01 for FIN). Default 0.
      * @return Complete TPack ready to send.

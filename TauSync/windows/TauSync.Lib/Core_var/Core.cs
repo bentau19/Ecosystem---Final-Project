@@ -17,17 +17,21 @@ namespace TauSync.Core
     /// </summary>
     public static class CoreConfig
     {
-        /// <summary>TPack header size in bytes (Length 4B + CorrelationID 3B + Flags 1B).</summary>
+        /// <summary>TPack header size in bytes (Length 4B + TargetID 3B + Flags 1B).</summary>
         public const int TPackHeaderSize = 8;
 
-        /// <summary>CorrelationID in header is 3 bytes (max 0xFFFFFF).</summary>
+        /// <summary>TargetID in header is 3 bytes (max 0xFFFFFF).</summary>
         public const int CorrelationIdBytes = 3;
 
-        /// <summary>Control channel CorrelationID.</summary>
+        public const uint MagicBytes = 0x54415553;
+        /// <summary>Control channel / discovery: TargetID = 0.</summary>
         public const int ControlChannelId = 0;
 
         /// <summary>FIN flag: bit 0 = 0x01.</summary>
         public const byte FlagFin = 0x01;
+
+        /// <summary>CONTROL flag: bit 1 = 0x02. Payload is TransferRequest JSON when set.</summary>
+        public const byte FlagControl = 0x02;
 
         /// <summary>Stream chunk size for send/receive (64 KB).</summary>
         public const int StreamChunkSize = 64 * 1024;
@@ -37,5 +41,6 @@ namespace TauSync.Core
 
         /// <summary>Default TCP port.</summary>
         public const int DefaultPort = 8888;
+        public const int ClientConnectRetryDelaySeconds = 2;
     }
 }

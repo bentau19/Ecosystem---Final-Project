@@ -46,41 +46,27 @@ namespace TauSync.Implementations.Management
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            if (buffer == null) throw new ArgumentNullException(nameof(buffer));
-            if (offset < 0 || count < 0 || offset + count > buffer.Length)
-                throw new ArgumentOutOfRangeException(nameof(buffer));
-            if (_disposed) throw new ObjectDisposedException(nameof(BackBufferedStream));
+            ValidateReadArguments(buffer, offset, count);
 
             int totalRead = 0;
             while (count > 0)
             {
-                if (_currentChunk != null)
+                int copied = CopyFromCurrentChunk(buffer, ref offset, ref count);
+                if (copied > 0)
                 {
-                    int toCopy = Math.Min(count, _currentChunk.Length - _currentOffset);
-                    Buffer.BlockCopy(_currentChunk, _currentOffset, buffer, offset, toCopy);
-                    offset += toCopy;
-                    count -= toCopy;
-                    totalRead += toCopy;
-                    _currentOffset += toCopy;
-                    if (_currentOffset >= _currentChunk.Length)
-                        _currentChunk = null;
+                    totalRead += copied;
                     continue;
                 }
 
-                if (_channel.Reader.TryRead(out byte[]? next))
-                {
-                    _currentChunk = next;
-                    _currentOffset = 0;
+                if (TryLoadCurrentChunkFromQueue())
                     continue;
-                }
 
                 if (_completed)
                     return totalRead;
 
                 try
                 {
-                    _currentChunk = _channel.Reader.ReadAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
-                    _currentOffset = 0;
+                    LoadCurrentChunkBlocking();
                 }
                 catch (ChannelClosedException)
                 {
@@ -92,41 +78,27 @@ namespace TauSync.Implementations.Management
 
         public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
-            if (buffer == null) throw new ArgumentNullException(nameof(buffer));
-            if (offset < 0 || count < 0 || offset + count > buffer.Length)
-                throw new ArgumentOutOfRangeException(nameof(buffer));
-            if (_disposed) throw new ObjectDisposedException(nameof(BackBufferedStream));
+            ValidateReadArguments(buffer, offset, count);
 
             int totalRead = 0;
             while (count > 0)
             {
-                if (_currentChunk != null)
+                int copied = CopyFromCurrentChunk(buffer, ref offset, ref count);
+                if (copied > 0)
                 {
-                    int toCopy = Math.Min(count, _currentChunk.Length - _currentOffset);
-                    Buffer.BlockCopy(_currentChunk, _currentOffset, buffer, offset, toCopy);
-                    offset += toCopy;
-                    count -= toCopy;
-                    totalRead += toCopy;
-                    _currentOffset += toCopy;
-                    if (_currentOffset >= _currentChunk.Length)
-                        _currentChunk = null;
+                    totalRead += copied;
                     continue;
                 }
 
-                if (_channel.Reader.TryRead(out byte[]? next))
-                {
-                    _currentChunk = next;
-                    _currentOffset = 0;
+                if (TryLoadCurrentChunkFromQueue())
                     continue;
-                }
 
                 if (_completed)
                     return totalRead;
 
                 try
                 {
-                    _currentChunk = await _channel.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-                    _currentOffset = 0;
+                    await LoadCurrentChunkAsync(cancellationToken).ConfigureAwait(false);
                 }
                 catch (ChannelClosedException)
                 {
@@ -140,6 +112,58 @@ namespace TauSync.Implementations.Management
         public override void Flush() { }
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
+
+        private void ValidateReadArguments(byte[] buffer, int offset, int count)
+        {
+            if (buffer == null) throw new ArgumentNullException(nameof(buffer));
+            if (offset < 0 || count < 0 || offset + count > buffer.Length)
+                throw new ArgumentOutOfRangeException(nameof(buffer));
+            if (_disposed) throw new ObjectDisposedException(nameof(BackBufferedStream));
+        }
+
+        private int CopyFromCurrentChunk(byte[] buffer, ref int offset, ref int count)
+        {
+            if (_currentChunk == null)
+                return 0;
+
+            int toCopy = Math.Min(count, _currentChunk.Length - _currentOffset);
+            Buffer.BlockCopy(_currentChunk, _currentOffset, buffer, offset, toCopy);
+            offset += toCopy;
+            count -= toCopy;
+            _currentOffset += toCopy;
+
+            if (_currentOffset >= _currentChunk.Length)
+                _currentChunk = null;
+
+            return toCopy;
+        }
+
+        private bool TryLoadCurrentChunkFromQueue()
+        {
+            if (!_channel.Reader.TryRead(out byte[]? nextChunk))
+                return false;
+
+            SetCurrentChunk(nextChunk);
+            return true;
+        }
+
+        private void LoadCurrentChunkBlocking()
+        {
+            byte[] nextChunk = _channel.Reader.ReadAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
+            SetCurrentChunk(nextChunk);
+        }
+
+        private async Task LoadCurrentChunkAsync(CancellationToken cancellationToken)
+        {
+            byte[] nextChunk = await _channel.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            SetCurrentChunk(nextChunk);
+        }
+
+        private void SetCurrentChunk(byte[] nextChunk)
+        {
+            _currentChunk = nextChunk;
+            _currentOffset = 0;
+        }
 
         private static byte[] CopySlice(byte[] buffer, int offset, int count)
         {

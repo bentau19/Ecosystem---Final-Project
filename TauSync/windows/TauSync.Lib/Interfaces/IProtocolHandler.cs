@@ -5,36 +5,38 @@ using TauSync.Models;
 namespace TauSync.Interfaces
 {
     /// <summary>
-    /// Protocol handler — framing, parsing, and handshake (how data flows).
-    /// Does not decide which transport or when to connect; that is IConnectionManager's role.
-    /// Per TauSync Protocol Spec: 8-byte header (Length 4B + CorrelationID 3B + Flags 1B) + payload.
+    /// Protocol handler — framing, parsing, and handshake.
+    /// Transport uses only this interface to read frames; no protocol constants in transport.
     /// </summary>
     public interface IProtocolHandler
     {
-        /// <summary>
-        /// Builds a TPack: 8-byte header (Length LE, CorrelationID 3B, Flags 1B) + payload.
-        /// </summary>
-        /// <param name="correlationId">Stream/channel ID (0 = control). C# uses odd IDs.</param>
-        /// <param name="payload">Payload bytes (not encrypted in this pass).</param>
-        /// <param name="flags">Flags byte (e.g. 0x01 for FIN). Default 0.</param>
-        /// <returns>Complete TPack ready to send.</returns>
-        byte[] BuildFrame(int correlationId, byte[] payload, byte flags = 0);
+        /// <summary>Size in bytes of the fixed-length frame header.</summary>
+        int GetHeaderSize();
+
+        /// <summary>Given the header bytes, returns the payload length to read for this frame.</summary>
+        int GetPayloadLength(byte[] header);
+
+        /// <summary>True if this (targetId, flags) denotes a control frame (e.g. discovery/handshake).</summary>
+        bool IsControlFrame(int targetId, byte flags);
 
         /// <summary>
-        /// Parses a complete TPack into CorrelationID, payload, and flags.
+        /// Builds a frame: header + payload. Format is protocol-specific.
         /// </summary>
-        /// <param name="rawPacket">Full TPack (8-byte header + payload).</param>
-        /// <returns>(correlationId, payload, flags). Flags bit 0 = FIN.</returns>
-        (int correlationId, byte[] payload, byte flags) ParseFrame(byte[] rawPacket);
+        byte[] BuildFrame(int targetId, byte[] payload, byte flags = 0);
 
         /// <summary>
-        /// Sends a TransferRequest on the control channel (CorrelationID 0) and waits for OK/REJECT.
+        /// Parses a complete frame (header + payload) into targetId, payload, and flags.
         /// </summary>
-        /// <param name="request">The request to send (serialized as JSON in payload).</param>
-        /// <param name="sendRaw">Delegate to send raw TPack.</param>
-        /// <param name="receiveResponse">Delegate that returns the next control-channel payload (TPack with id 0).</param>
-        /// <returns>True if response was "OK", false if "REJECT".</returns>
-        Task<bool> SendHandshakeAsync(
+        (int targetId, byte[] payload, byte flags) ParseFrame(byte[] rawPacket);
+
+        /// <summary>
+        /// Sends a handshake request and waits for the response.
+        /// </summary>
+        /// <param name="request">The handshake request to send.</param>
+        /// <param name="sendRaw">Delegate to send the raw frame (e.g. transport).</param>
+        /// <param name="receiveResponse">Delegate to wait for and return the response payload (caller may apply timeout).</param>
+        /// <returns>The parsed <see cref="TransferRequest"/> from the peer, or null if invalid/missing.</returns>
+        Task<TransferRequest?> SendHandshakeAsync(
             TransferRequest request,
             Func<byte[], Task> sendRaw,
             Func<Task<byte[]>> receiveResponse);

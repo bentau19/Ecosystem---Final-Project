@@ -1,0 +1,84 @@
+---
+name: coding-best-practices
+description: >
+  Use when writing, reviewing, or refactoring code. Provides coding best practices,
+  design patterns, and principles for clean, maintainable code.
+  Trigger on: code review, refactoring, clean code, best practices, design patterns,
+  code quality, architecture decisions, technical debt, maintainability.
+---
+
+# Coding Best Practices
+
+Apply these principles when writing, reviewing, or refactoring code.
+
+## Naming
+
+Names are the single most impactful readability tool. Every name should reveal intent, be pronounceable, and require zero mental translation.
+
+- **Reveal intent** — a name should answer *why it exists, what it does, and how to use it* without needing a comment. `activeUsersByStatus` not `d`. `WORK_DAYS_PER_WEEK` not `5`.
+- **Be pronounceable and searchable** — if you can't say it in a code review, rename it. Single letters and bare numbers are unsearchable; name length should match scope size.
+- **Never mislead** — a Dictionary should not be called `userList`. Names varying only slightly (e.g. `userData` vs `userDate`) cause auto-complete bugs. Avoid `l`/`1` and `O`/`0` ambiguity.
+- **Make meaningful distinctions** — if two names exist, they must mean different things. Avoid generic suffixes like `Manager`, `Handler`, `Utils` that describe nothing.
+- **No abbreviations, no Hungarian notation** — `creationDate` not `CrtnDt`, `activeUsers` not `lstActiveUsers`. Modern IDEs handle type info; prefixes are noise.
+
+## Functions
+
+### Structure
+
+Functions should be short, do one thing, and read like a top-down narrative. Each function operates at a single level of abstraction — high-level functions describe *intent*, low-level ones handle *details*. If you can extract a block and give it a meaningful name (not just restating the implementation), it should be its own function.
+
+### Readability refactor before finalizing
+
+It is acceptable to write a longer implementation while exploring the solution, but before finalizing, refactor long functions into smaller intention-revealing functions. Final code should be readable through structure and naming, not by adding explanatory comments. Avoid leaving "god functions" that mix validation, orchestration, protocol, cleanup, and error paths in one body.
+
+### Arguments
+
+Fewer arguments = better. Zero is ideal, one is clear, two is acceptable, three is a signal to refactor. When arguments are related, group them into an object. Never use boolean flags that branch into two behaviors — write two separate functions instead. Data flows *in* through arguments and *out* through return values; don't modify inputs as a side effect.
+
+### Naming
+
+Function names are contracts — they must honestly describe *all* behavior. If `checkPassword` also initializes a session, that's a hidden side effect and a bug source. Include nouns that clarify what the argument represents: `sendEmail(recipient)` not `send(value)`.
+
+### Command-Query Separation
+
+Commands change state and return nothing. Queries return data and change nothing. A function that does both creates bugs when callers only want one effect.
+
+## Comments
+
+### When comments help
+
+- **Business rules and constraints** — explain *why* a seemingly arbitrary value exists ("Free tier limit of 100 requires product team approval to change")
+- **Warnings** — alert to non-obvious consequences ("This test takes 30s, skip during local dev")
+- **Translating complex logic** — convert formulas or bitwise operations into plain English
+- **TODO with reason** — include what's blocked and why, not just "fix this"
+- **Public API docs** — external users can't read your implementation; document inputs, outputs, errors, and examples
+
+### When comments hurt — remove them
+
+- **Redundant** — restating what the code already says (`// get the user` above `getUser()`)
+- **Attribution/journal** — "Written by John, 2022" or changelogs belong in git, not code
+- **Section markers and closing-brace labels** — symptoms of functions that are too long; refactor instead
+- **Mandated noise** — requiring comments on every function trains people to write useless ones, so real comments get ignored
+- **About code you don't own** — comments on external dependencies go stale silently when that dependency changes
+- **Inaccurate** — a wrong comment is worse than none; if you write it, maintain it
+
+## Design Patterns
+
+### Polymorphism over switch statements
+
+When you find the same switch on a type repeated across multiple functions, replace it with an interface where each type handles its own logic. The switch lives once in a factory; adding a new type means adding a class, not editing every function.
+
+## Refactoring
+
+### DRY — Don't Repeat Yourself
+
+Every piece of knowledge should have one authoritative source. Duplication creates silent bugs when one copy gets updated but others don't. Extract shared logic into a single location.
+
+### Iterative improvement
+
+Clean code is not written perfectly on the first try. Start messy but testable, then refactor with confidence. Tests are the safety net that enables fearless restructuring.
+
+## Version Control Hygiene
+
+- **Delete commented-out code** — git keeps full history; dead code in files creates confusion about what's active.
+- **TODO comments need context** — include the ticket/bug number and what you're waiting on, not just "fix later."

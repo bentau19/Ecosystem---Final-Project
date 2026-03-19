@@ -1,52 +1,34 @@
-using System;
 using System.Collections.Concurrent;
-using System.IO;
 using System.Text;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
+using System.Threading.Channels;
 using TauSync.Core;
 using TauSync.Implementations.Protocol;
-using TauSync.Implementations.Transport;
 using TauSync.Interfaces;
 using TauSync.Models;
 
 namespace TauSync.Implementations.Management
 {
     /// <summary>
-    /// Connection manager per TauSync Protocol Spec: which connection and when; dispatcher and routing map.
-    /// Routes incoming TPack by CorrelationID. Control channel = 0. No encryption in this implementation.
+    /// Connection manager per TauSync v3: both sides call Connect(word); when two peers use the same word they are paired and get a stream.
     /// </summary>
     public class ConnectionManager : IConnectionManager
     {
-        private ITransport? _transport;
-        private bool _ownsTransport;
+        private ITransport? _wifiTransport;
         private readonly IProtocolHandler _protocolHandler;
+        /// <summary>Per-word queue of incoming connections (when the other side sent REQ first).</summary>
+        private readonly ConcurrentDictionary<string, Channel<Stream>> _incomingByWord = new(StringComparer.OrdinalIgnoreCase);
         private bool _disposed;
-
-        /// <summary>Routing map: CorrelationID -> handler. Thread-safe.</summary>
-        private readonly ConcurrentDictionary<int, Action<byte[]>> _routingMap = new();
-
-        /// <summary>When FIN is received for a CorrelationID, this action is invoked (e.g. complete BackBufferedStream).</summary>
-        private readonly ConcurrentDictionary<int, Action> _onFinByCorrelationId = new();
-
-        /// <summary>Waiter for the next control-channel payload (handshake response).</summary>
-        private TaskCompletionSource<byte[]>? _pendingControlWaiter;
-        private readonly object _controlLock = new object();
-
-        /// <summary>Next CorrelationID for C# (odd: 1, 3, 5, ...). Falls back to increment when no released ID available.</summary>
-        private int _nextCorrelationId = 1;
-
-        /// <summary>Released odd CorrelationIDs returned to the pool when handlers are unregistered (avoids exhausting 3-byte space in long-running services).</summary>
-        private readonly ConcurrentBag<int> _releasedCorrelationIds = new();
 
         public event EventHandler<Exception>? ErrorOccurred;
 
-        public ConnectionManager() : this(null) { }
-
-        public ConnectionManager(IProtocolHandler? protocolHandler)
+        public ConnectionManager()
         {
-            _protocolHandler = protocolHandler ?? new ProtocolHandler();
+            _protocolHandler = new ProtocolHandler();
+            ITransport? transport = ConnectionContext.Instance.GetWifiTransport();
+            if (transport == null)
+                throw new InvalidOperationException("ConnectionContext has no transport.");
+            Initialize(transport);
         }
 
         /// <inheritdoc />
@@ -54,314 +36,174 @@ namespace TauSync.Implementations.Management
         {
             if (transport == null)
                 throw new ArgumentNullException(nameof(transport));
-            if (_transport != null)
+            if (_wifiTransport != null)
                 throw new InvalidOperationException("Already initialized.");
-
-            _transport = transport;
-            _ownsTransport = false;
-            _transport.OnDataReceived += OnTransportDataReceived;
+            _wifiTransport = transport;
         }
 
         /// <inheritdoc />
-        public async Task Connect(string? targetId)
+        public async Task ConnectTransport(string? targetId)
         {
+            await ConnectionContext.Instance.InitializeTransports(targetId).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc />
+        public bool IsConnected() => _wifiTransport?.IsConnected() ?? false;
+
+        /// <inheritdoc />
+        public async Task<Stream> Connect(string word)
+        {
+            ValidateConnectState(word);
+            string wordTrimmed = word.Trim();
+            Channel<Stream> channel = GetOrCreateWordChannel(wordTrimmed);
+            RegisterWordListener(wordTrimmed, channel);
+
+            var ctx = ConnectionContext.Instance;
+            ConnectAttempt attempt = CreateConnectAttempt(ctx);
+            await SendWordRequestAsync(wordTrimmed, attempt.LocalId).ConfigureAwait(false);
+            return await ResolveConnectRaceAsync(ctx, channel, attempt).ConfigureAwait(false);
+        }
+
+        private void ValidateConnectState(string word)
+        {
+            if (string.IsNullOrWhiteSpace(word))
+                throw new ArgumentException("Word cannot be null or empty.", nameof(word));
+            if (_wifiTransport == null || !_wifiTransport.IsConnected())
+                throw new InvalidOperationException("Transport not connected. ConnectTransport first.");
             if (_disposed)
                 throw new ObjectDisposedException(nameof(ConnectionManager));
-
-            if (_transport != null)
-            {
-                _transport.OnDataReceived -= OnTransportDataReceived;
-                if (_ownsTransport)
-                    _transport.Dispose();
-                _transport = null;
-            }
-
-            var transport = new SocketTransport();
-            _transport = transport;
-            _ownsTransport = true;
-            _transport.OnDataReceived += OnTransportDataReceived;
-            await _transport.Connect(targetId).ConfigureAwait(false);
         }
 
-        /// <inheritdoc />
-        public bool IsConnected() => _transport?.IsConnected() ?? false;
-
-        /// <inheritdoc />
-        public void RegisterHandler(int correlationId, Action<byte[]> callback)
+        private Channel<Stream> GetOrCreateWordChannel(string word)
         {
-            if (callback == null)
-                throw new ArgumentNullException(nameof(callback));
-            _routingMap.AddOrUpdate(correlationId, callback, (_, __) => callback);
+            return _incomingByWord.GetOrAdd(word, _ =>
+                Channel.CreateUnbounded<Stream>(new UnboundedChannelOptions { SingleReader = false, SingleWriter = false }));
         }
 
-        /// <inheritdoc />
-        public void UnregisterHandler(int correlationId)
+        private ConnectAttempt CreateConnectAttempt(ConnectionContext ctx)
         {
-            _routingMap.TryRemove(correlationId, out _);
-        }
-
-        /// <inheritdoc />
-        public async Task SmartSend(Stream source, string type, string? payload = null)
-        {
-            if (source == null)
-                throw new ArgumentNullException(nameof(source));
-            if (string.IsNullOrWhiteSpace(type))
-                throw new ArgumentException("Type cannot be null or empty.", nameof(type));
-            if (_transport == null || !_transport.IsConnected())
-                throw new InvalidOperationException("Transport not connected. Initialize and connect first.");
-
-            int correlationId = AllocateCorrelationId();
-            var request = new TransferRequest
-            {
-                CorrelationID = correlationId,
-                Type = type,
-                Status = "PUSH",
-                FileSize = source.CanSeek ? source.Length : 0,
-                Payload = payload
-            };
-
-            bool ok = await RunHandshakeAsync(request).ConfigureAwait(false);
-            if (!ok)
-            {
-                ReleaseCorrelationIdIfOurs(correlationId);
-                UnregisterHandler(correlationId);
-                throw new InvalidOperationException("Handshake rejected by peer.");
-            }
-
-            try
-            {
-                await StreamDataAsync(source, correlationId).ConfigureAwait(false);
-            }
-            finally
-            {
-                UnregisterHandler(correlationId);
-            }
-        }
-
-        /// <inheritdoc />
-        public async Task<Stream> GetStream(string type, string? payload = null)
-        {
-            if (string.IsNullOrWhiteSpace(type))
-                throw new ArgumentException("Type cannot be null or empty.", nameof(type));
-            if (_transport == null || !_transport.IsConnected())
-                throw new InvalidOperationException("Transport not connected. Initialize and connect first.");
-
-            int correlationId = AllocateCorrelationId();
+            int localId = ctx.ReserveId();
             var backStream = new BackBufferedStream();
+            var responseTcs = new TaskCompletionSource<byte[]>();
 
-            void Handler(byte[] data)
+            void Handler(byte[] payload, byte flags)
             {
-                backStream.WriteChunk(data);
+                if ((flags & CoreConfig.FlagControl) != 0)
+                {
+                    responseTcs.TrySetResult(payload ?? Array.Empty<byte>());
+                    return;
+                }
+
+                if (payload != null && payload.Length > 0)
+                    backStream.WriteChunk(payload);
+                if ((flags & CoreConfig.FlagFin) != 0)
+                    backStream.Complete();
             }
 
-            RegisterHandler(correlationId, Handler);
-            _onFinByCorrelationId[correlationId] = () => backStream.Complete();
+            ctx.RegisterHandler(localId, Handler);
+            return new ConnectAttempt(localId, backStream, responseTcs);
+        }
 
-            var request = new TransferRequest
-            {
-                CorrelationID = correlationId,
-                Type = type,
-                Status = "REQ",
-                Payload = payload
-            };
+        private async Task<Stream> ResolveConnectRaceAsync(ConnectionContext ctx, Channel<Stream> channel, ConnectAttempt attempt)
+        {
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(CoreConfig.HandshakeTimeoutSeconds));
+            timeoutCts.Token.Register(() => attempt.ResponseTcs.TrySetException(new TimeoutException("Handshake timeout.")));
 
-            byte[] controlResponse = await WaitForControlResponseAsync().ConfigureAwait(false);
-            TransferRequest? approval = ParseTransferRequest(controlResponse);
-            if (approval == null || approval.Status != "APPROVE")
-            {
-                ReleaseCorrelationIdIfOurs(correlationId);
-                UnregisterHandler(correlationId);
-                backStream.Dispose();
-                throw new InvalidOperationException("GetStream: expected APPROVE from peer.");
-            }
+            Task<Stream> streamFromOwnRequest = WaitForOkAndBuildStreamAsync(attempt.ResponseTcs.Task, ctx, attempt.LocalId, attempt.BackStream);
+            Task<Stream> streamFromPeerRequest = channel.Reader.ReadAsync(CancellationToken.None).AsTask();
 
-            await SendControlResponseAsync(correlationId, "OK").ConfigureAwait(false);
+            Task<Stream> winningTask = await Task.WhenAny(streamFromOwnRequest, streamFromPeerRequest).ConfigureAwait(false);
+            if (winningTask == streamFromOwnRequest)
+                return await streamFromOwnRequest.ConfigureAwait(false);
 
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await WaitForStreamFinAsync(correlationId, backStream).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    OnError(new InvalidOperationException("GetStream receive failed.", ex));
-                }
-                finally
-                {
-                    ReleaseCorrelationIdIfOurs(correlationId);
-                    UnregisterHandler(correlationId);
-                    _onFinByCorrelationId.TryRemove(correlationId, out _);
-                }
-            });
+            CleanupLosingOutgoingAttempt(ctx, attempt);
+            return await streamFromPeerRequest.ConfigureAwait(false);
+        }
 
-            return backStream;
+        private static void CleanupLosingOutgoingAttempt(ConnectionContext ctx, ConnectAttempt attempt)
+        {
+            ctx.ReleaseId(attempt.LocalId);
+            ctx.UnregisterHandler(attempt.LocalId);
+            attempt.BackStream.Dispose();
         }
 
         /// <summary>
-        /// Called by transport when a complete TPack is received.
-        /// Reassembly (buffer until 8-byte header + Length bytes payload) is done in the Transport layer (e.g. SocketTransport);
-        /// this method always receives a full TPack, never a fragment.
+        /// Registers a per-word callback ("listener") that accepts incoming REQ handshakes,
+        /// responds with OK, and publishes the created duplex stream to the word channel.
         /// </summary>
-        private void OnTransportDataReceived(object? sender, byte[] rawPacket)
+        private void RegisterWordListener(string word, Channel<Stream> channel)
         {
-            if (rawPacket == null || _protocolHandler == null) return;
+            ConnectionContext.Instance.RegisterService(word, (localId, peerSenderId, stream) =>
+            {
+                HandleWordRequest(word, channel, localId, peerSenderId, stream);
+            });
+        }
 
+        private void HandleWordRequest(string word, Channel<Stream> channel, int localId, int peerSenderId, Stream stream)
+        {
             try
             {
-                (int correlationId, byte[] payload, byte flags) = _protocolHandler.ParseFrame(rawPacket);
+                byte[] frame = BuildOkFrame(word, localId, peerSenderId);
+                _wifiTransport!.SendRaw(frame).GetAwaiter().GetResult();
 
-                if (correlationId == CoreConfig.ControlChannelId)
-                {
-                    lock (_controlLock)
-                    {
-                        if (_pendingControlWaiter != null)
-                        {
-                            var tcs = _pendingControlWaiter;
-                            _pendingControlWaiter = null;
-                            tcs.TrySetResult(payload);
-                            return;
-                        }
-                    }
-
-                    TryHandleIncomingHandshake(payload);
-                    return;
-                }
-
-                if (_routingMap.TryGetValue(correlationId, out var handler))
-                {
-                    handler(payload);
-                    if ((flags & CoreConfig.FlagFin) != 0)
-                    {
-                        if (_onFinByCorrelationId.TryRemove(correlationId, out var onFin))
-                            onFin();
-                        UnregisterHandler(correlationId);
-                    }
-                    return;
-                }
-
-                TryHandleIncomingHandshake(payload);
+                var duplex = new DuplexStream(stream, localId, _protocolHandler, _wifiTransport);
+                channel.Writer.TryWrite(duplex);
             }
             catch (Exception ex)
             {
-                OnError(new InvalidOperationException("HandleIncoming failed.", ex));
+                ErrorOccurred?.Invoke(this, ex);
             }
         }
 
-        private void TryHandleIncomingHandshake(byte[] payload)
+        private byte[] BuildOkFrame(string word, int localId, int peerSenderId)
         {
-            TransferRequest? req = ParseTransferRequest(payload);
-            if (req == null || !req.IsValid())
-                return;
-
-            if (req.Status == "REQ" || req.Status == "PUSH")
+            var ok = new TransferRequest
             {
-                if (!_routingMap.ContainsKey(req.CorrelationID))
-                {
-                    var defaultHandler = new Action<byte[]>(_ => { });
-                    RegisterHandler(req.CorrelationID, defaultHandler);
-                }
-                _ = SendControlResponseAsync(req.CorrelationID, "OK", req.Type);
-            }
-        }
-
-        private async Task<bool> RunHandshakeAsync(TransferRequest request)
-        {
-            return await _protocolHandler.SendHandshakeAsync(
-                request,
-                data => _transport!.SendRaw(data),
-                () => WaitForControlResponseAsync()).ConfigureAwait(false);
-        }
-
-        private Task<byte[]> WaitForControlResponseAsync()
-        {
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(CoreConfig.HandshakeTimeoutSeconds));
-            TaskCompletionSource<byte[]> tcs;
-            lock (_controlLock)
-            {
-                if (_pendingControlWaiter != null)
-                    throw new InvalidOperationException("A handshake is already pending.");
-                _pendingControlWaiter = tcs = new TaskCompletionSource<byte[]>();
-            }
-
-            cts.Token.Register(() => tcs.TrySetException(new TimeoutException("Handshake timeout.")));
-            return tcs.Task;
-        }
-
-        private async Task SendControlResponseAsync(int requestCorrelationId, string status, string? type = null)
-        {
-            var response = new TransferRequest
-            {
-                MagicBytes = 0x54415553,
-                CorrelationID = requestCorrelationId,
-                Type = type ?? string.Empty,
-                Status = status,
-                FileSize = 0
+                MagicBytes = CoreConfig.MagicBytes,
+                SenderID = localId,
+                Type = word,
+                Status = "OK"
             };
-            string json = JsonSerializer.Serialize(response);
+
+            string json = JsonSerializer.Serialize(ok);
             byte[] body = Encoding.UTF8.GetBytes(json);
-            byte[] frame = _protocolHandler.BuildFrame(CoreConfig.ControlChannelId, body);
-            await _transport!.SendRaw(frame).ConfigureAwait(false);
+            return _protocolHandler.BuildFrame(peerSenderId, body, CoreConfig.FlagControl);
         }
 
-        private async Task StreamDataAsync(Stream source, int correlationId)
+        /// <summary>
+        /// Sends a REQ control handshake frame for the given word and local id.
+        /// </summary>
+        private async Task SendWordRequestAsync(string word, int localId)
         {
-            byte[] buffer = new byte[CoreConfig.StreamChunkSize];
-            long totalSent = 0;
-            int read;
-            bool first = true;
-
-            while ((read = await source.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+            var request = new TransferRequest
             {
-                byte[] chunk = new byte[read];
-                Buffer.BlockCopy(buffer, 0, chunk, 0, read);
-                byte[] frame = _protocolHandler.BuildFrame(correlationId, chunk);
-                await _transport!.SendRaw(frame).ConfigureAwait(false);
-                totalSent += read;
-                first = false;
+                MagicBytes = CoreConfig.MagicBytes,
+                SenderID = localId,
+                Type = word,
+                Status = "REQ"
+            };
+
+            byte[] reqBody = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request));
+            byte[] reqFrame = _protocolHandler.BuildFrame(CoreConfig.ControlChannelId, reqBody, CoreConfig.FlagControl);
+            await _wifiTransport!.SendRaw(reqFrame).ConfigureAwait(false);
+        }
+
+        private async Task<Stream> WaitForOkAndBuildStreamAsync(Task<byte[]> responseTask, ConnectionContext ctx, int localId, BackBufferedStream backStream)
+        {
+            byte[] payload = await responseTask.ConfigureAwait(false);
+            TransferRequest? response = ParseTransferResponse(payload);
+            if (response == null || !string.Equals(response.Status?.Trim(), "OK", StringComparison.OrdinalIgnoreCase))
+            {
+                ctx.ReleaseId(localId);
+                ctx.UnregisterHandler(localId);
+                backStream.Dispose();
+                throw new InvalidOperationException("Connect rejected by peer.");
             }
-
-            if (first && totalSent == 0)
-                return;
-
-            byte[] finFrame = _protocolHandler.BuildFrame(correlationId, Array.Empty<byte>(), CoreConfig.FlagFin);
-            await _transport!.SendRaw(finFrame).ConfigureAwait(false);
+            ctx.SetTargetForSend(localId, response.SenderID);
+            return new DuplexStream(backStream, localId, _protocolHandler, _wifiTransport!);
         }
 
-        /// <summary>
-        /// Stub: stream EOF is signaled when a TPack with FIN flag is received in <see cref="OnTransportDataReceived"/>,
-        /// which invokes the callback in <see cref="_onFinByCorrelationId"/> and calls <see cref="BackBufferedStream.Complete"/>.
-        /// The Python (or other) reader then sees end-of-stream and does not block indefinitely.
-        /// </summary>
-        private async Task WaitForStreamFinAsync(int correlationId, BackBufferedStream backStream)
-        {
-            await Task.CompletedTask.ConfigureAwait(false);
-        }
-
-        /// <summary>
-        /// Returns an odd CorrelationID for C#. Reuses released IDs first to avoid exhausting 3-byte space in long-running services.
-        /// </summary>
-        private int AllocateCorrelationId()
-        {
-            if (_releasedCorrelationIds.TryTake(out int reused))
-                return reused;
-
-            int id = Interlocked.Add(ref _nextCorrelationId, 2) - 2;
-            if (id <= 0) id = 1;
-            if (id > 0xFFFFFF) { Interlocked.Exchange(ref _nextCorrelationId, 1); id = 1; }
-            return id;
-        }
-
-        /// <summary>
-        /// Returns a CorrelationID to the pool when it is one we allocated (odd) and in valid range, so it can be reused.
-        /// </summary>
-        private void ReleaseCorrelationIdIfOurs(int correlationId)
-        {
-            if (correlationId > 0 && correlationId <= 0xFFFFFF && (correlationId & 1) != 0)
-                _releasedCorrelationIds.Add(correlationId);
-        }
-
-        private static TransferRequest? ParseTransferRequest(byte[] payload)
+        private static TransferRequest? ParseTransferResponse(byte[] payload)
         {
             if (payload == null || payload.Length == 0) return null;
             try
@@ -375,28 +217,118 @@ namespace TauSync.Implementations.Management
             }
         }
 
-        private void OnError(Exception ex)
+        private sealed class ConnectAttempt
         {
-            ErrorOccurred?.Invoke(this, ex);
+            public int LocalId { get; }
+            public BackBufferedStream BackStream { get; }
+            public TaskCompletionSource<byte[]> ResponseTcs { get; }
+
+            public ConnectAttempt(int localId, BackBufferedStream backStream, TaskCompletionSource<byte[]> responseTcs)
+            {
+                LocalId = localId;
+                BackStream = backStream;
+                ResponseTcs = responseTcs;
+            }
         }
+
 
         public void Dispose()
         {
             if (_disposed) return;
-            if (_transport != null)
+            _disposed = true;
+            foreach (Channel<Stream> ch in _incomingByWord.Values)
+                ch.Writer.Complete();
+            _incomingByWord.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Duplex stream: read from a backing stream (e.g. BackBufferedStream), write sends TPack with TargetID = peer for the given localId.
+    /// On dispose, sends FIN and releases the local ID.
+    /// </summary>
+    internal sealed class DuplexStream : Stream
+    {
+        private readonly Stream _readStream;
+        private readonly int _localId;
+        private readonly IProtocolHandler _protocolHandler;
+        private readonly ITransport _transport;
+        private bool _disposed;
+        private bool _finSent;
+
+        public DuplexStream(Stream readStream, int localId, IProtocolHandler protocolHandler, ITransport transport)
+        {
+            _readStream = readStream ?? throw new ArgumentNullException(nameof(readStream));
+            _localId = localId;
+            _protocolHandler = protocolHandler ?? throw new ArgumentNullException(nameof(protocolHandler));
+            _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        }
+
+        public override bool CanRead => true;
+        public override bool CanWrite => true;
+        public override bool CanSeek => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
+            return _readStream.Read(buffer, offset, count);
+        }
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
+            return await _readStream.ReadAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
+            if (_finSent) return;
+            if (count <= 0) return;
+            int? peerId = ConnectionContext.Instance.GetPeerIdFor(_localId);
+            if (peerId == null) return;
+            byte[] chunk = new byte[count];
+            Buffer.BlockCopy(buffer, offset, chunk, 0, count);
+            byte[] frame = _protocolHandler.BuildFrame(peerId.Value, chunk, 0);
+            _transport.SendRaw(frame).GetAwaiter().GetResult();
+        }
+
+        public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
+            if (_finSent) return;
+            if (count <= 0) return;
+            int? peerId = ConnectionContext.Instance.GetPeerIdFor(_localId);
+            if (peerId == null) return;
+            byte[] chunk = new byte[count];
+            Buffer.BlockCopy(buffer, offset, chunk, 0, count);
+            byte[] frame = _protocolHandler.BuildFrame(peerId.Value, chunk, 0);
+            await _transport.SendRaw(frame).ConfigureAwait(false);
+        }
+
+        public override void Flush() => _readStream?.Flush();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (_disposed) return;
+            if (disposing && !_finSent)
             {
-                _transport.OnDataReceived -= OnTransportDataReceived;
-                if (_ownsTransport)
-                    _transport.Dispose();
-                _transport = null;
-            }
-            _routingMap.Clear();
-            _onFinByCorrelationId.Clear();
-            lock (_controlLock)
-            {
-                _pendingControlWaiter?.TrySetCanceled();
+                _finSent = true;
+                int? peerId = ConnectionContext.Instance.GetPeerIdFor(_localId);
+                if (peerId != null)
+                {
+                    byte[] finFrame = _protocolHandler.BuildFrame(peerId.Value, Array.Empty<byte>(), CoreConfig.FlagFin);
+                    _transport.SendRaw(finFrame).GetAwaiter().GetResult();
+                }
+                ConnectionContext.Instance.ReleaseId(_localId);
+                _readStream?.Dispose();
             }
             _disposed = true;
+            base.Dispose(disposing);
         }
     }
 }

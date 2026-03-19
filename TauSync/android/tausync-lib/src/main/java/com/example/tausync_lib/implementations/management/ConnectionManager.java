@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 /**
  * Connection manager per TauSync Protocol Spec: which connection and when; dispatcher and routing map.
  * Routes incoming TPack by CorrelationID. Control channel = 0. No encryption in this implementation.
- * Java uses even CorrelationIDs (2, 4, 6, ...). Matches C# ConnectionManager.
+ * Java uses same CorrelationID pool (1, 2, 3, ...). Matches C# ConnectionManager.
  */
 public class ConnectionManager implements IConnectionManager {
 
@@ -36,7 +36,7 @@ public class ConnectionManager implements IConnectionManager {
     private final ConcurrentHashMap<Integer, Runnable> onFinByCorrelationId = new ConcurrentHashMap<>();
     private volatile CompletableFuture<byte[]> pendingControlWaiter;
     private final Object controlLock = new Object();
-    private final AtomicInteger nextCorrelationId = new AtomicInteger(2); // Java: even
+    private final AtomicInteger nextCorrelationId = new AtomicInteger(1);
     private final ConcurrentLinkedQueue<Integer> releasedCorrelationIds = new ConcurrentLinkedQueue<>();
     private volatile boolean disposed;
     private final Gson gson = new Gson();
@@ -156,6 +156,7 @@ public class ConnectionManager implements IConnectionManager {
 
         TransferRequest request = new TransferRequest();
         request.setCorrelationID(correlationId);
+        request.setParentID(0);
         request.setType(type);
         request.setStatus("REQ");
         request.setPayload(payload);
@@ -313,17 +314,17 @@ public class ConnectionManager implements IConnectionManager {
     private int allocateCorrelationId() {
         Integer reused = releasedCorrelationIds.poll();
         if (reused != null) return reused;
-        int id = nextCorrelationId.getAndAdd(2);
-        if (id <= 0) id = 2;
+        int id = nextCorrelationId.getAndIncrement();
+        if (id <= 0) id = 1;
         if (id > 0xFFFFFF) {
             nextCorrelationId.set(2);
-            id = 2;
+            id = 1;
         }
         return id;
     }
 
     private void releaseCorrelationIdIfOurs(int correlationId) {
-        if (correlationId > 0 && correlationId <= 0xFFFFFF && (correlationId & 1) == 0) {
+        if (correlationId > 0 && correlationId <= 0xFFFFFF) {
             releasedCorrelationIds.add(correlationId);
         }
     }

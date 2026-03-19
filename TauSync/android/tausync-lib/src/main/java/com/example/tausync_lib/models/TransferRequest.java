@@ -5,7 +5,7 @@ import com.google.gson.annotations.SerializedName;
 /**
  * Signaling message for task coordination per TauSync Protocol Spec.
  * Sent as the payload of a TPack with header CorrelationID = 0.
- * The CorrelationID inside this object is the stream ID we are listening to or negotiating.
+ * CorrelationID = stream ID assigned by this process. ParentID = ID of the message we are responding to (0 when initiating).
  */
 public class TransferRequest {
 
@@ -13,9 +13,13 @@ public class TransferRequest {
     @SerializedName("MagicBytes")
     private long magicBytes = 0x54415553L;
 
-    /** Stream ID (odd in C#, even in Java). */
+    /** Stream ID assigned by this process (1..0xFFFFFF). */
     @SerializedName("CorrelationID")
     private int correlationID;
+
+    /** When responding (OK/REJECT/APPROVE), the CorrelationID of the request we are responding to. 0 when initiating. */
+    @SerializedName("ParentID")
+    private int parentID;
 
     /** Task type (e.g. "FILE", "CLIPBOARD", "BACKUP"). */
     @SerializedName("Type")
@@ -90,6 +94,7 @@ public class TransferRequest {
     public boolean isValid() {
         if (magicBytes != 0x54415553L) return false;
         if (correlationID < 0 || correlationID > 0xFFFFFF) return false;
+        if (parentID < 0 || parentID > 0xFFFFFF) return false;
         if (status == null || status.trim().isEmpty()) return false;
         if (type == null || type.trim().isEmpty()) return false;
         if (fileSize < 0) return false;
