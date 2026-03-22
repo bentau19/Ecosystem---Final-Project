@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
@@ -104,6 +105,13 @@ namespace TauSync.Implementations.Management
             return new ConnectAttempt(localId, backStream, responseTcs);
         }
 
+        /// <summary>
+        /// Resolves the simultaneous-connect race deterministically using the transport role:
+        /// the TCP client always uses the outgoing (own REQ→OK) path,
+        /// the TCP server always uses the incoming (peer REQ→service callback) path.
+        /// This guarantees both sides pick complementary streams so data flows correctly.
+        /// Falls back to the other path if the preferred one fails.
+        /// </summary>
         private async Task<Stream> ResolveConnectRaceAsync(ConnectionContext ctx, Channel<Stream> channel, ConnectAttempt attempt)
         {
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(CoreConfig.HandshakeTimeoutSeconds));
@@ -112,12 +120,31 @@ namespace TauSync.Implementations.Management
             Task<Stream> streamFromOwnRequest = WaitForOkAndBuildStreamAsync(attempt.ResponseTcs.Task, ctx, attempt.LocalId, attempt.BackStream);
             Task<Stream> streamFromPeerRequest = channel.Reader.ReadAsync(CancellationToken.None).AsTask();
 
-            Task<Stream> winningTask = await Task.WhenAny(streamFromOwnRequest, streamFromPeerRequest).ConfigureAwait(false);
-            if (winningTask == streamFromOwnRequest)
-                return await streamFromOwnRequest.ConfigureAwait(false);
+            bool preferOwnPath = !ctx.IsTransportServerMode;
 
-            CleanupLosingOutgoingAttempt(ctx, attempt);
-            return await streamFromPeerRequest.ConfigureAwait(false);
+            if (preferOwnPath)
+            {
+                try
+                {
+                    return await streamFromOwnRequest.ConfigureAwait(false);
+                }
+                catch
+                {
+                    CleanupLosingOutgoingAttempt(ctx, attempt);
+                    return await streamFromPeerRequest.ConfigureAwait(false);
+                }
+            }
+
+            try
+            {
+                Stream result = await streamFromPeerRequest.ConfigureAwait(false);
+                CleanupLosingOutgoingAttempt(ctx, attempt);
+                return result;
+            }
+            catch
+            {
+                return await streamFromOwnRequest.ConfigureAwait(false);
+            }
         }
 
         private static void CleanupLosingOutgoingAttempt(ConnectionContext ctx, ConnectAttempt attempt)
@@ -146,7 +173,7 @@ namespace TauSync.Implementations.Management
                 byte[] frame = BuildOkFrame(word, localId, peerSenderId);
                 _wifiTransport!.SendRaw(frame).GetAwaiter().GetResult();
 
-                var duplex = new DuplexStream(stream, localId, _protocolHandler, _wifiTransport);
+                var duplex = new DuplexStream(stream, localId, this);
                 channel.Writer.TryWrite(duplex);
             }
             catch (Exception ex)
@@ -200,7 +227,75 @@ namespace TauSync.Implementations.Management
                 throw new InvalidOperationException("Connect rejected by peer.");
             }
             ctx.SetTargetForSend(localId, response.SenderID);
-            return new DuplexStream(backStream, localId, _protocolHandler, _wifiTransport!);
+            return new DuplexStream(backStream, localId, this);
+        }
+
+        /// <inheritdoc />
+        public void SendStreamData(int localId, byte[] buffer, int offset, int count)
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(ConnectionManager));
+            if (_wifiTransport == null)
+                throw new InvalidOperationException("Transport not initialized.");
+            if (buffer == null)
+                throw new ArgumentNullException(nameof(buffer));
+            if (offset < 0 || count < 0 || offset + count > buffer.Length)
+                throw new ArgumentOutOfRangeException(nameof(buffer));
+            if (count <= 0)
+                return;
+
+            int? peerId = ConnectionContext.Instance.GetPeerIdFor(localId);
+            if (peerId == null)
+                throw new InvalidOperationException(
+                    $"No peer route for localId {localId}. Handshake may not have completed; do not write before Connect(word) finishes.");
+
+            byte[] chunk = new byte[count];
+            Buffer.BlockCopy(buffer, offset, chunk, 0, count);
+            byte[] frame = _protocolHandler.BuildFrame(peerId.Value, chunk, 0);
+            _wifiTransport.SendRaw(frame).GetAwaiter().GetResult();
+        }
+
+        /// <inheritdoc />
+        public async Task SendStreamDataAsync(int localId, byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(ConnectionManager));
+            if (_wifiTransport == null)
+                throw new InvalidOperationException("Transport not initialized.");
+            if (buffer == null)
+                throw new ArgumentNullException(nameof(buffer));
+            if (offset < 0 || count < 0 || offset + count > buffer.Length)
+                throw new ArgumentOutOfRangeException(nameof(buffer));
+            if (count <= 0)
+                return;
+
+            int? peerId = ConnectionContext.Instance.GetPeerIdFor(localId);
+            if (peerId == null)
+                throw new InvalidOperationException(
+                    $"No peer route for localId {localId}. Handshake may not have completed; do not write before Connect(word) finishes.");
+
+            cancellationToken.ThrowIfCancellationRequested();
+            byte[] chunk = new byte[count];
+            Buffer.BlockCopy(buffer, offset, chunk, 0, count);
+            byte[] frame = _protocolHandler.BuildFrame(peerId.Value, chunk, 0);
+            await _wifiTransport.SendRaw(frame).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc />
+        public void CompleteStream(int localId)
+        {
+            if (_disposed)
+                return;
+            if (_wifiTransport == null)
+                return;
+
+            int? peerId = ConnectionContext.Instance.GetPeerIdFor(localId);
+            if (peerId != null)
+            {
+                byte[] finFrame = _protocolHandler.BuildFrame(peerId.Value, Array.Empty<byte>(), CoreConfig.FlagFin);
+                _wifiTransport.SendRaw(finFrame).GetAwaiter().GetResult();
+            }
+            ConnectionContext.Instance.ReleaseId(localId);
         }
 
         private static TransferRequest? ParseTransferResponse(byte[] payload)
@@ -250,17 +345,15 @@ namespace TauSync.Implementations.Management
     {
         private readonly Stream _readStream;
         private readonly int _localId;
-        private readonly IProtocolHandler _protocolHandler;
-        private readonly ITransport _transport;
+        private readonly IConnectionManager _connectionManager;
         private bool _disposed;
         private bool _finSent;
 
-        public DuplexStream(Stream readStream, int localId, IProtocolHandler protocolHandler, ITransport transport)
+        public DuplexStream(Stream readStream, int localId, IConnectionManager connectionManager)
         {
             _readStream = readStream ?? throw new ArgumentNullException(nameof(readStream));
             _localId = localId;
-            _protocolHandler = protocolHandler ?? throw new ArgumentNullException(nameof(protocolHandler));
-            _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+            _connectionManager = connectionManager ?? throw new ArgumentNullException(nameof(connectionManager));
         }
 
         public override bool CanRead => true;
@@ -288,26 +381,14 @@ namespace TauSync.Implementations.Management
         {
             if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
             if (_finSent) return;
-            if (count <= 0) return;
-            int? peerId = ConnectionContext.Instance.GetPeerIdFor(_localId);
-            if (peerId == null) return;
-            byte[] chunk = new byte[count];
-            Buffer.BlockCopy(buffer, offset, chunk, 0, count);
-            byte[] frame = _protocolHandler.BuildFrame(peerId.Value, chunk, 0);
-            _transport.SendRaw(frame).GetAwaiter().GetResult();
+            _connectionManager.SendStreamData(_localId, buffer, offset, count);
         }
 
         public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
             if (_finSent) return;
-            if (count <= 0) return;
-            int? peerId = ConnectionContext.Instance.GetPeerIdFor(_localId);
-            if (peerId == null) return;
-            byte[] chunk = new byte[count];
-            Buffer.BlockCopy(buffer, offset, chunk, 0, count);
-            byte[] frame = _protocolHandler.BuildFrame(peerId.Value, chunk, 0);
-            await _transport.SendRaw(frame).ConfigureAwait(false);
+            await _connectionManager.SendStreamDataAsync(_localId, buffer, offset, count, cancellationToken).ConfigureAwait(false);
         }
 
         public override void Flush() => _readStream?.Flush();
@@ -318,13 +399,7 @@ namespace TauSync.Implementations.Management
             if (disposing && !_finSent)
             {
                 _finSent = true;
-                int? peerId = ConnectionContext.Instance.GetPeerIdFor(_localId);
-                if (peerId != null)
-                {
-                    byte[] finFrame = _protocolHandler.BuildFrame(peerId.Value, Array.Empty<byte>(), CoreConfig.FlagFin);
-                    _transport.SendRaw(finFrame).GetAwaiter().GetResult();
-                }
-                ConnectionContext.Instance.ReleaseId(_localId);
+                _connectionManager.CompleteStream(_localId);
                 _readStream?.Dispose();
             }
             _disposed = true;

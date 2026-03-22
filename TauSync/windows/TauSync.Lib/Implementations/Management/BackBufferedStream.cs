@@ -41,7 +41,7 @@ namespace TauSync.Implementations.Management
         public void Complete()
         {
             _completed = true;
-            _channel.Writer.Complete();
+            _channel.Writer.TryComplete();
         }
 
         public override int Read(byte[] buffer, int offset, int count)
@@ -55,6 +55,12 @@ namespace TauSync.Implementations.Management
                 if (copied > 0)
                 {
                     totalRead += copied;
+                    if (count == 0)
+                        return totalRead;
+
+                    // Stream.Read should not block after already returning some bytes.
+                    if (!TryLoadCurrentChunkFromQueue())
+                        return totalRead;
                     continue;
                 }
 
@@ -62,6 +68,10 @@ namespace TauSync.Implementations.Management
                     continue;
 
                 if (_completed)
+                    return totalRead;
+
+                // No buffered data. If we already read some bytes, return them now.
+                if (totalRead > 0)
                     return totalRead;
 
                 try
@@ -87,6 +97,12 @@ namespace TauSync.Implementations.Management
                 if (copied > 0)
                 {
                     totalRead += copied;
+                    if (count == 0)
+                        return totalRead;
+
+                    // Stream.ReadAsync should not await for more after already reading bytes.
+                    if (!TryLoadCurrentChunkFromQueue())
+                        return totalRead;
                     continue;
                 }
 
@@ -94,6 +110,10 @@ namespace TauSync.Implementations.Management
                     continue;
 
                 if (_completed)
+                    return totalRead;
+
+                // No buffered data. If we already read some bytes, return them now.
+                if (totalRead > 0)
                     return totalRead;
 
                 try
@@ -176,7 +196,7 @@ namespace TauSync.Implementations.Management
         {
             if (_disposed) return;
             _disposed = true;
-            _channel.Writer.Complete();
+            _channel.Writer.TryComplete();
             base.Dispose(disposing);
         }
     }

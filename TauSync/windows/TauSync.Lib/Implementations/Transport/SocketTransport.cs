@@ -36,6 +36,9 @@ namespace TauSync.Implementations.Transport
         /// <summary>When true, only server (listen); when false, only client (connect); when null, mode is determined by Connect(targetId).</summary>
         private bool _isServerMode;
 
+        /// <summary>Whether this transport accepted a connection (server) rather than initiated one (client).</summary>
+        public bool IsServerMode => _isServerMode;
+
         public event EventHandler<byte[]>? OnDataReceived;
 
         /// <summary>Uses the given protocol handler for framing; if null, uses default <see cref="ProtocolHandler"/>.</summary>

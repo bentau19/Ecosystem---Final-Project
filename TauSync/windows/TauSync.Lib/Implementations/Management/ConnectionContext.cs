@@ -27,7 +27,16 @@ namespace TauSync.Implementations.Management
         private const int MaxId = 0xFFFFFF;
 
         private int _nextCorrelationId = MinId;
-        private readonly ConcurrentBag<int> _releasedIds = new();
+
+        /// <summary>
+        /// IDs eligible for reuse, keyed for idempotent add (prevents double-recycle when both
+        /// FIN-dispatch and <see cref="ConnectionManager.CompleteStream"/> release the same ID).
+        /// IDs are added only after a grace period so that in-flight FIN frames targeting a recycled
+        /// ID don't corrupt the new handler registered for that ID.
+        /// </summary>
+        private readonly ConcurrentDictionary<int, byte> _releasedIds = new();
+
+        private const int IdRecycleDelayMs = 2000;
 
         /// <summary>LocalID -> handler(payload, flags). Handler decides DATA vs in-band CONTROL.</summary>
         private readonly ConcurrentDictionary<int, Action<byte[], byte>> _routingMap = new();
@@ -38,6 +47,15 @@ namespace TauSync.Implementations.Management
         /// <summary>Meeting Word -> callback(localId, peerSenderId, stream). Invoked when REQ arrives on TargetID=0.</summary>
         private readonly ConcurrentDictionary<string, Action<int, int, Stream>> _serviceRegistry =
             new ConcurrentDictionary<string, Action<int, int, Stream>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// REQ payloads queued per word when a discovery frame arrives before <see cref="RegisterService"/> was called
+        /// (e.g. client calls <c>Connect(word)</c> before the server has registered the same word). Drained when the service registers.
+        /// </summary>
+        private readonly ConcurrentDictionary<string, ConcurrentQueue<byte[]>> _pendingDiscoveryByWord =
+            new ConcurrentDictionary<string, ConcurrentQueue<byte[]>>(StringComparer.OrdinalIgnoreCase);
+
+        private const int MaxPendingDiscoveryPerWord = 64;
 
         private readonly ITransport _wifiTransport;
 
@@ -59,10 +77,22 @@ namespace TauSync.Implementations.Management
         public ITransport? GetWifiTransport() => _wifiTransport as ITransport;
         public SocketTransport? GetWifiTransportAsSocket() => _wifiTransport as SocketTransport;
 
+        /// <summary>
+        /// Returns true when the underlying transport accepted a connection (server mode).
+        /// Used by <see cref="ConnectionManager"/> to deterministically break the simultaneous-connect race:
+        /// the server side prefers the incoming (peer) path, the client side prefers the outgoing (own) path.
+        /// </summary>
+        public bool IsTransportServerMode =>
+            (_wifiTransport as SocketTransport)?.IsServerMode ?? false;
+
         public int ReserveId()
         {
-            if (_releasedIds.TryTake(out int reused))
-                return reused;
+            foreach (var key in _releasedIds.Keys)
+            {
+                if (_releasedIds.TryRemove(key, out _))
+                    return key;
+            }
+
             int id = Interlocked.Increment(ref _nextCorrelationId) - 1;
             if (id < MinId || id > MaxId)
             {
@@ -72,14 +102,24 @@ namespace TauSync.Implementations.Management
             return id;
         }
 
-        /// <summary>Releases ID to pool; removes from _routingMap and _targetMap (§0.2).</summary>
+        /// <summary>
+        /// Releases ID: clears routing/target maps immediately, then schedules the ID
+        /// for recycling after <see cref="IdRecycleDelayMs"/> so that in-flight FIN frames
+        /// are processed before another handler can claim the same ID.
+        /// </summary>
         public void ReleaseId(int id)
         {
             if (id < MinId || id > MaxId)
                 return;
             _routingMap.TryRemove(id, out _);
             _targetMap.TryRemove(id, out _);
-            _releasedIds.Add(id);
+            _ = RecycleIdAfterDelayAsync(id);
+        }
+
+        private async Task RecycleIdAfterDelayAsync(int id)
+        {
+            await Task.Delay(IdRecycleDelayMs).ConfigureAwait(false);
+            _releasedIds[id] = 0;
         }
 
         /// <summary>PeerID to use when sending for this local task. Returns null if not bound.</summary>
@@ -111,13 +151,17 @@ namespace TauSync.Implementations.Management
         {
             if (string.IsNullOrWhiteSpace(word)) throw new ArgumentException("Word cannot be null or empty.", nameof(word));
             if (callback == null) throw new ArgumentNullException(nameof(callback));
-            _serviceRegistry[word.Trim()] = callback;
+            string key = word.Trim();
+            _serviceRegistry[key] = callback;
+            DrainPendingDiscovery(key);
         }
 
         public void UnregisterService(string word)
         {
             if (string.IsNullOrWhiteSpace(word)) return;
-            _serviceRegistry.TryRemove(word.Trim(), out _);
+            string key = word.Trim();
+            _serviceRegistry.TryRemove(key, out _);
+            _pendingDiscoveryByWord.TryRemove(key, out _);
         }
 
         /// <summary>Dispatch: check TargetID first (§0.1). targetId=0 requires CONTROL+MagicBytes; targetId&gt;0 pass to handler. FIN: cleanup both maps + ReleaseId (§0.2).</summary>
@@ -152,8 +196,48 @@ namespace TauSync.Implementations.Management
             if (!TryParseDiscoveryRequest(payload, out TransferRequest request))
                 return false;
             if (!TryResolveServiceCallback(request, out Action<int, int, Stream> callback))
+            {
+                // Peer sent REQ before we registered this word — queue and report handled so the frame is not dropped.
+                string? word = request.Type?.Trim();
+                if (!string.IsNullOrEmpty(word))
+                {
+                    EnqueuePendingDiscovery(word, payload);
+                    return true;
+                }
                 return false;
+            }
 
+            return CompleteDiscoveryHandshake(request, callback);
+        }
+
+        private void EnqueuePendingDiscovery(string word, byte[] payload)
+        {
+            ConcurrentQueue<byte[]> queue = _pendingDiscoveryByWord.GetOrAdd(word, _ => new ConcurrentQueue<byte[]>());
+            byte[] copy = new byte[payload.Length];
+            Buffer.BlockCopy(payload, 0, copy, 0, payload.Length);
+            while (queue.Count >= MaxPendingDiscoveryPerWord && queue.TryDequeue(out _)) { }
+            queue.Enqueue(copy);
+        }
+
+        private void DrainPendingDiscovery(string word)
+        {
+            if (!_pendingDiscoveryByWord.TryGetValue(word, out ConcurrentQueue<byte[]>? queue) || queue == null)
+                return;
+
+            while (queue.TryDequeue(out byte[]? payload))
+            {
+                if (payload == null || payload.Length == 0)
+                    continue;
+                if (!TryParseDiscoveryRequest(payload, out TransferRequest request))
+                    continue;
+                if (!TryResolveServiceCallback(request, out Action<int, int, Stream> callback))
+                    continue;
+                CompleteDiscoveryHandshake(request, callback);
+            }
+        }
+
+        private bool CompleteDiscoveryHandshake(TransferRequest request, Action<int, int, Stream> callback)
+        {
             int localId = ReserveId();
             _targetMap[localId] = request.SenderID;
 

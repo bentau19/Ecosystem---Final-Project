@@ -37,5 +37,20 @@ namespace TauSync.Interfaces
         /// Fired when an error occurs (e.g. handshake timeout, reject, dispatch failure).
         /// </summary>
         event EventHandler<Exception>? ErrorOccurred;
+
+        /// <summary>
+        /// Sends data over an existing logical stream identified by localId.
+        /// </summary>
+        void SendStreamData(int localId, byte[] buffer, int offset, int count);
+
+        /// <summary>
+        /// Sends data over an existing logical stream identified by localId (async).
+        /// </summary>
+        Task SendStreamDataAsync(int localId, byte[] buffer, int offset, int count, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Completes a logical stream by sending FIN and releasing local resources.
+        /// </summary>
+        void CompleteStream(int localId);
     }
 }
