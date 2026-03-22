@@ -1,335 +1,355 @@
 package com.example.tausync_lib.implementations.management;
 
-import com.tausync.core.CoreConfig;
-import com.tausync.interfaces.IConnectionManager;
-import com.tausync.interfaces.IProtocolHandler;
-import com.tausync.interfaces.ITransport;
-import com.tausync.implementations.transport.SocketTransport;
+import com.example.tausync_lib.core.CoreConfig;
 import com.example.tausync_lib.implementations.protocol.ProtocolHandler;
+import com.example.tausync_lib.interfaces.IConnectionManager;
+import com.example.tausync_lib.interfaces.IProtocolHandler;
+import com.example.tausync_lib.interfaces.ITransport;
 import com.example.tausync_lib.models.TransferRequest;
 import com.google.gson.Gson;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeoutException;
 
 /**
- * Connection manager per TauSync Protocol Spec: which connection and when; dispatcher and routing map.
- * Routes incoming TPack by CorrelationID. Control channel = 0. No encryption in this implementation.
- * Java uses same CorrelationID pool (1, 2, 3, ...). Matches C# ConnectionManager.
+ * Connection manager per TauSync v3: both sides call {@link #connect(String)} with the
+ * same Meeting Word; when two peers use the same word they are paired and each gets a
+ * bidirectional {@link TauSyncStream}.
+ *
+ * <p>Matches C# ConnectionManager.
  */
 public class ConnectionManager implements IConnectionManager {
 
-    private ITransport transport;
-    private boolean ownsTransport;
+    private ITransport wifiTransport;
     private final IProtocolHandler protocolHandler;
-    private final ConcurrentHashMap<Integer, Consumer<byte[]>> routingMap = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Integer, Runnable> onFinByCorrelationId = new ConcurrentHashMap<>();
-    private volatile CompletableFuture<byte[]> pendingControlWaiter;
-    private final Object controlLock = new Object();
-    private final AtomicInteger nextCorrelationId = new AtomicInteger(1);
-    private final ConcurrentLinkedQueue<Integer> releasedCorrelationIds = new ConcurrentLinkedQueue<>();
-    private volatile boolean disposed;
     private final Gson gson = new Gson();
-    private final ExecutorService executor = Executors.newCachedThreadPool(r -> {
-        Thread t = new Thread(r);
-        t.setDaemon(true);
-        return t;
-    });
-    private ErrorOccurredListener errorOccurredListener;
-    private IConnectionManager.ClipboardReceivedListener clipboardReceivedListener;
+
+    /** Per-word queue of incoming connections (peer sent REQ before us or simultaneously). */
+    private final ConcurrentHashMap<String, LinkedBlockingQueue<TauSyncStream>> incomingByWord =
+            new ConcurrentHashMap<>();
+
+    /**
+     * Dedicated pool for blocking handshake operations. Avoids starving the
+     * default ForkJoinPool.commonPool() on Android devices with few cores.
+     */
+    private static final ExecutorService HANDSHAKE_POOL =
+            Executors.newCachedThreadPool(r -> {
+                Thread t = new Thread(r, "TauSync-Handshake");
+                t.setDaemon(true);
+                return t;
+            });
+
+    private volatile boolean disposed;
+    private volatile ErrorListener errorListener;
 
     public ConnectionManager() {
-        this(null);
-    }
-
-    public ConnectionManager(IProtocolHandler protocolHandler) {
-        this.protocolHandler = protocolHandler != null ? protocolHandler : new ProtocolHandler();
+        protocolHandler = new ProtocolHandler();
+        ITransport transport = ConnectionContext.getInstance().getWifiTransport();
+        if (transport == null) {
+            throw new IllegalStateException("ConnectionContext has no transport.");
+        }
+        initialize(transport);
     }
 
     @Override
     public void initialize(ITransport transport) {
-        if (transport == null) throw new IllegalArgumentException("transport cannot be null");
-        if (this.transport != null) throw new IllegalStateException("Already initialized");
-        this.transport = transport;
-        this.ownsTransport = false;
-        transport.setOnDataReceivedListener(this::onTransportDataReceived);
+        if (transport == null) throw new IllegalArgumentException("transport must not be null");
+        if (wifiTransport != null) throw new IllegalStateException("Already initialized.");
+        wifiTransport = transport;
     }
 
     @Override
-    public CompletableFuture<Void> connect(String targetId) {
-        if (disposed) {
-            return CompletableFuture.failedFuture(new IllegalStateException("ConnectionManager is disposed"));
-        }
-        if (transport != null) {
-            transport.setOnDataReceivedListener(null);
-            if (ownsTransport && transport instanceof AutoCloseable) {
-                try {
-                    ((AutoCloseable) transport).close();
-                } catch (Exception ignored) {
-                }
+    public CompletableFuture<Void> connectTransport(String targetId) {
+        return CompletableFuture.runAsync(() -> {
+            try {
+                ConnectionContext.getInstance().initializeTransports(targetId);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
-            transport = null;
-        }
-        SocketTransport st = new SocketTransport();
-        transport = st;
-        ownsTransport = true;
-        transport.setOnDataReceivedListener(this::onTransportDataReceived);
-        return transport.connect(targetId);
+        });
     }
 
     @Override
     public boolean isConnected() {
-        return transport != null && transport.isConnected();
+        return wifiTransport != null && wifiTransport.isConnected();
     }
 
     @Override
-    public void registerHandler(int correlationId, Consumer<byte[]> callback) {
-        if (callback == null) throw new IllegalArgumentException("callback cannot be null");
-        routingMap.put(correlationId, callback);
+    public CompletableFuture<TauSyncStream> connect(String word) {
+        validateConnectState(word);
+        String wordTrimmed = word.trim();
+        String wordKey = wordTrimmed.toUpperCase();
+
+        LinkedBlockingQueue<TauSyncStream> wordChannel = getOrCreateWordChannel(wordKey);
+        registerWordListener(wordKey, wordChannel);
+
+        ConnectionContext ctx = ConnectionContext.getInstance();
+        ConnectAttempt attempt = createConnectAttempt(ctx);
+
+        return sendWordRequestAsync(wordTrimmed, attempt.localId)
+                .thenCompose(ignored -> resolveConnectRaceAsync(ctx, wordChannel, attempt));
     }
 
-    @Override
-    public void unregisterHandler(int correlationId) {
-        routingMap.remove(correlationId);
-    }
+    // ── Connect internals ─────────────────────────────────────────────
 
-    @Override
-    public void setErrorOccurredListener(ErrorOccurredListener listener) {
-        this.errorOccurredListener = listener;
-    }
-
-    @Override
-    public void setOnClipboardReceivedListener(IConnectionManager.ClipboardReceivedListener listener) {
-        this.clipboardReceivedListener = listener;
-    }
-
-    @Override
-    public CompletableFuture<Void> smartSend(InputStream source, String type, String payload) {
-        if (source == null) throw new IllegalArgumentException("source cannot be null");
-        if (type == null || type.trim().isEmpty()) throw new IllegalArgumentException("type cannot be null or empty");
-        if (transport == null || !transport.isConnected()) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Transport not connected. Initialize and connect first."));
+    private void validateConnectState(String word) {
+        if (word == null || word.trim().isEmpty()) {
+            throw new IllegalArgumentException("Word cannot be null or empty.");
         }
-
-        int correlationId = allocateCorrelationId();
-        TransferRequest request = new TransferRequest();
-        request.setCorrelationID(correlationId);
-        request.setType(type);
-        request.setStatus("PUSH");
-        request.setFileSize(0);
-        request.setPayload(payload);
-
-        return runHandshakeAsync(request)
-                .thenCompose(ok -> {
-                    if (!ok) {
-                        releaseCorrelationIdIfOurs(correlationId);
-                        unregisterHandler(correlationId);
-                        return CompletableFuture.<Void>failedFuture(new IllegalStateException("Handshake rejected by peer."));
-                    }
-                    return streamDataAsync(source, correlationId)
-                            .whenComplete((v, e) -> unregisterHandler(correlationId));
-                });
+        if (wifiTransport == null || !wifiTransport.isConnected()) {
+            throw new IllegalStateException("Transport not connected. connectTransport first.");
+        }
+        if (disposed) {
+            throw new IllegalStateException("ConnectionManager is disposed.");
+        }
     }
 
-    @Override
-    public CompletableFuture<InputStream> getStream(String type, String payload) {
-        if (type == null || type.trim().isEmpty()) throw new IllegalArgumentException("type cannot be null or empty");
-        if (transport == null || !transport.isConnected()) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Transport not connected. Initialize and connect first."));
-        }
+    private LinkedBlockingQueue<TauSyncStream> getOrCreateWordChannel(String wordKey) {
+        return incomingByWord.computeIfAbsent(wordKey, k -> new LinkedBlockingQueue<>());
+    }
 
-        int correlationId = allocateCorrelationId();
+    private void registerWordListener(String wordKey, LinkedBlockingQueue<TauSyncStream> channel) {
+        ConnectionContext.getInstance().registerService(wordKey, (localId, peerSenderId, stream) ->
+                handleWordRequest(wordKey, channel, localId, peerSenderId, stream));
+    }
+
+    private ConnectAttempt createConnectAttempt(ConnectionContext ctx) {
+        int localId = ctx.reserveId();
         BackBufferedInputStream backStream = new BackBufferedInputStream();
+        CompletableFuture<byte[]> responseFuture = new CompletableFuture<>();
 
-        registerHandler(correlationId, backStream::writeChunk);
-        onFinByCorrelationId.put(correlationId, backStream::complete);
-
-        TransferRequest request = new TransferRequest();
-        request.setCorrelationID(correlationId);
-        request.setParentID(0);
-        request.setType(type);
-        request.setStatus("REQ");
-        request.setPayload(payload);
-
-        byte[] requestJson = gson.toJson(request).getBytes(StandardCharsets.UTF_8);
-        byte[] frame = protocolHandler.buildFrame(CoreConfig.CONTROL_CHANNEL_ID, requestJson);
-        return transport.sendRaw(frame)
-                .thenCompose(v -> waitForControlResponseAsync())
-                .thenCompose(controlResponse -> {
-                    TransferRequest approval = parseTransferRequest(controlResponse);
-                    if (approval == null || !"APPROVE".equals(approval.getStatus())) {
-                        releaseCorrelationIdIfOurs(correlationId);
-                        unregisterHandler(correlationId);
-                        onFinByCorrelationId.remove(correlationId);
-                        try { backStream.close(); } catch (IOException ignored) {}
-                        return CompletableFuture.<InputStream>failedFuture(new IllegalStateException("GetStream: expected APPROVE from peer."));
-                    }
-                    return sendControlResponseAsync(correlationId, "OK", null)
-                            .thenApply(v2 -> {
-                                executor.execute(() -> {
-                                    try {
-                                        releaseCorrelationIdIfOurs(correlationId);
-                                        unregisterHandler(correlationId);
-                                        onFinByCorrelationId.remove(correlationId);
-                                    } catch (Exception ex) {
-                                        onError(new IllegalStateException("GetStream receive failed.", ex));
-                                    }
-                                });
-                                return (InputStream) backStream;
-                            });
-                });
-    }
-
-    private void onTransportDataReceived(byte[] rawPacket) {
-        if (rawPacket == null || protocolHandler == null) return;
-        try {
-            IProtocolHandler.ParseResult parsed = protocolHandler.parseFrame(rawPacket);
-            int correlationId = parsed.correlationId;
-            byte[] payload = parsed.payload;
-            byte flags = parsed.flags;
-
-            if (correlationId == CoreConfig.CONTROL_CHANNEL_ID) {
-                synchronized (controlLock) {
-                    if (pendingControlWaiter != null) {
-                        CompletableFuture<byte[]> w = pendingControlWaiter;
-                        pendingControlWaiter = null;
-                        w.complete(payload);
-                        return;
-                    }
-                }
-                tryHandleIncomingHandshake(payload);
+        ctx.registerHandler(localId, (payload, flags) -> {
+            if ((flags & CoreConfig.FLAG_CONTROL) != 0) {
+                responseFuture.complete(payload != null ? payload : new byte[0]);
                 return;
             }
-
-            Consumer<byte[]> handler = routingMap.get(correlationId);
-            if (handler != null) {
-                handler.accept(payload);
-                if ((flags & CoreConfig.FLAG_FIN) != 0) {
-                    Runnable onFin = onFinByCorrelationId.remove(correlationId);
-                    if (onFin != null) onFin.run();
-                    unregisterHandler(correlationId);
-                }
-                return;
+            if (payload != null && payload.length > 0) {
+                backStream.writeChunk(payload);
             }
-
-            tryHandleIncomingHandshake(payload);
-        } catch (Exception ex) {
-            onError(new IllegalStateException("HandleIncoming failed.", ex));
-        }
-    }
-
-    private void tryHandleIncomingHandshake(byte[] payload) {
-        TransferRequest req = parseTransferRequest(payload);
-        if (req == null || !req.isValid()) return;
-        if ("REQ".equals(req.getStatus()) || "PUSH".equals(req.getStatus())) {
-            int correlationId = req.getCorrelationID();
-            if (!routingMap.containsKey(correlationId)) {
-                if ("PUSH".equals(req.getStatus()) && "CLIPBOARD".equals(req.getType()) && clipboardReceivedListener != null) {
-                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-                    registerHandler(correlationId, data -> {
-                        if (data != null && data.length > 0) {
-                            try {
-                                buffer.write(data);
-                            } catch (IOException ignored) {}
-                        }
-                    });
-                    onFinByCorrelationId.put(correlationId, () -> {
-                        String text = new String(buffer.toByteArray(), StandardCharsets.UTF_8);
-                        clipboardReceivedListener.onClipboardReceived(text);
-                    });
-                } else {
-                    registerHandler(correlationId, b -> {});
-                }
+            if ((flags & CoreConfig.FLAG_FIN) != 0) {
+                backStream.complete();
             }
-            sendControlResponseAsync(correlationId, "OK", req.getType());
-        }
+        });
+
+        return new ConnectAttempt(localId, backStream, responseFuture);
     }
 
-    private CompletableFuture<Boolean> runHandshakeAsync(TransferRequest request) {
-        return protocolHandler.sendHandshakeAsync(
-                request,
-                data -> transport.sendRaw(data),
-                this::waitForControlResponseAsync);
-    }
+    /**
+     * Resolves the simultaneous-connect race deterministically using the transport role:
+     * TCP client prefers the outgoing (own REQ->OK) path,
+     * TCP server prefers the incoming (peer REQ->service callback) path.
+     * Falls back to the other path if the preferred one fails.
+     */
+    private CompletableFuture<TauSyncStream> resolveConnectRaceAsync(
+            ConnectionContext ctx,
+            LinkedBlockingQueue<TauSyncStream> channel,
+            ConnectAttempt attempt) {
 
-    private CompletableFuture<byte[]> waitForControlResponseAsync() {
-        CompletableFuture<byte[]> future;
-        synchronized (controlLock) {
-            if (pendingControlWaiter != null) {
-                throw new IllegalStateException("A handshake is already pending.");
-            }
-            pendingControlWaiter = future = new CompletableFuture<>();
-        }
-        future.orTimeout(CoreConfig.HANDSHAKE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-        return future;
-    }
+        int timeoutSec = CoreConfig.HANDSHAKE_TIMEOUT_SECONDS;
 
-    private CompletableFuture<Void> sendControlResponseAsync(int requestCorrelationId, String status, String type) {
-        TransferRequest response = new TransferRequest();
-        response.setMagicBytes(0x54415553L);
-        response.setCorrelationID(requestCorrelationId);
-        response.setType(type != null ? type : "");
-        response.setStatus(status);
-        response.setFileSize(0);
-        String json = gson.toJson(response);
-        byte[] body = json.getBytes(StandardCharsets.UTF_8);
-        byte[] frame = protocolHandler.buildFrame(CoreConfig.CONTROL_CHANNEL_ID, body);
-        return transport.sendRaw(frame);
-    }
+        CompletableFuture<TauSyncStream> ownPath =
+                waitForOkAndBuildStreamAsync(attempt.responseFuture, ctx, attempt.localId, attempt.backStream);
 
-    private CompletableFuture<Void> streamDataAsync(InputStream source, int correlationId) {
-        return CompletableFuture.runAsync(() -> {
-            byte[] buffer = new byte[CoreConfig.STREAM_CHUNK_SIZE];
-            long totalSent = 0;
-            boolean first = true;
+        CompletableFuture<TauSyncStream> peerPath = CompletableFuture.supplyAsync(() -> {
             try {
-                int read;
-                while ((read = source.read(buffer)) > 0) {
-                    byte[] chunk = new byte[read];
-                    System.arraycopy(buffer, 0, chunk, 0, read);
-                    byte[] frame = protocolHandler.buildFrame(correlationId, chunk);
-                    transport.sendRaw(frame).join();
-                    totalSent += read;
-                    first = false;
+                TauSyncStream stream = channel.poll(timeoutSec, TimeUnit.SECONDS);
+                if (stream == null) {
+                    throw new RuntimeException(new TimeoutException("Peer path timed out"));
                 }
-                if (first && totalSent == 0) return;
-                byte[] finFrame = protocolHandler.buildFrame(correlationId, new byte[0], CoreConfig.FLAG_FIN);
-                transport.sendRaw(finFrame).join();
-            } catch (IOException e) {
+                return stream;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
                 throw new RuntimeException(e);
             }
-        }, executor);
-    }
+        }, HANDSHAKE_POOL);
 
-    private int allocateCorrelationId() {
-        Integer reused = releasedCorrelationIds.poll();
-        if (reused != null) return reused;
-        int id = nextCorrelationId.getAndIncrement();
-        if (id <= 0) id = 1;
-        if (id > 0xFFFFFF) {
-            nextCorrelationId.set(2);
-            id = 1;
+        boolean preferOwnPath = !ctx.isTransportServerMode();
+
+        if (preferOwnPath) {
+            return ownPath
+                    .orTimeout(timeoutSec, TimeUnit.SECONDS)
+                    .handle((stream, ex) -> {
+                        if (ex == null) return CompletableFuture.completedFuture(stream);
+                        cleanupLosingOutgoingAttempt(ctx, attempt);
+                        return peerPath;
+                    })
+                    .thenCompose(f -> f);
         }
-        return id;
+
+        return peerPath
+                .handle((stream, ex) -> {
+                    if (ex == null) {
+                        cleanupLosingOutgoingAttempt(ctx, attempt);
+                        return CompletableFuture.completedFuture(stream);
+                    }
+                    return ownPath.orTimeout(timeoutSec, TimeUnit.SECONDS);
+                })
+                .thenCompose(f -> f);
     }
 
-    private void releaseCorrelationIdIfOurs(int correlationId) {
-        if (correlationId > 0 && correlationId <= 0xFFFFFF) {
-            releasedCorrelationIds.add(correlationId);
+    private static void cleanupLosingOutgoingAttempt(ConnectionContext ctx, ConnectAttempt attempt) {
+        ctx.releaseId(attempt.localId);
+        ctx.unregisterHandler(attempt.localId);
+        try { attempt.backStream.close(); } catch (Exception ignored) {}
+    }
+
+    private void handleWordRequest(String wordKey, LinkedBlockingQueue<TauSyncStream> channel,
+                                   int localId, int peerSenderId, InputStream stream) {
+        try {
+            byte[] frame = buildOkFrame(wordKey, localId, peerSenderId);
+            wifiTransport.sendRaw(frame).get();
+
+            TauSyncStream duplex = new TauSyncStream(stream, localId, this);
+            channel.offer(duplex);
+        } catch (Exception ex) {
+            ErrorListener listener = errorListener;
+            if (listener != null) {
+                listener.onError(ex instanceof Exception ? (Exception) ex : new RuntimeException(ex));
+            }
         }
     }
 
-    private TransferRequest parseTransferRequest(byte[] payload) {
+    private byte[] buildOkFrame(String word, int localId, int peerSenderId) {
+        TransferRequest ok = new TransferRequest();
+        ok.setMagicBytes(CoreConfig.MAGIC_BYTES);
+        ok.setSenderID(localId);
+        ok.setType(word);
+        ok.setStatus("OK");
+
+        String json = gson.toJson(ok);
+        byte[] body = json.getBytes(StandardCharsets.UTF_8);
+        return protocolHandler.buildFrame(peerSenderId, body, CoreConfig.FLAG_CONTROL);
+    }
+
+    private CompletableFuture<Void> sendWordRequestAsync(String word, int localId) {
+        TransferRequest request = new TransferRequest();
+        request.setMagicBytes(CoreConfig.MAGIC_BYTES);
+        request.setSenderID(localId);
+        request.setType(word);
+        request.setStatus("REQ");
+
+        String json = gson.toJson(request);
+        byte[] reqBody = json.getBytes(StandardCharsets.UTF_8);
+        byte[] reqFrame = protocolHandler.buildFrame(CoreConfig.CONTROL_CHANNEL_ID, reqBody, CoreConfig.FLAG_CONTROL);
+        return wifiTransport.sendRaw(reqFrame);
+    }
+
+    private CompletableFuture<TauSyncStream> waitForOkAndBuildStreamAsync(
+            CompletableFuture<byte[]> responseTask,
+            ConnectionContext ctx,
+            int localId,
+            BackBufferedInputStream backStream) {
+
+        return responseTask.thenApply(payload -> {
+            TransferRequest response = parseTransferResponse(payload);
+            if (response == null || response.getStatus() == null
+                    || !response.getStatus().trim().equalsIgnoreCase("OK")) {
+                ctx.releaseId(localId);
+                ctx.unregisterHandler(localId);
+                try { backStream.close(); } catch (Exception ignored) {}
+                throw new RuntimeException("Connect rejected by peer.");
+            }
+            ctx.setTargetForSend(localId, response.getSenderID());
+            return new TauSyncStream(backStream, localId, this);
+        });
+    }
+
+    // ── Stream Data ───────────────────────────────────────────────────
+
+    @Override
+    public void sendStreamData(int localId, byte[] buffer, int offset, int count) {
+        if (disposed) throw new IllegalStateException("ConnectionManager is disposed.");
+        if (wifiTransport == null) throw new IllegalStateException("Transport not initialized.");
+        if (buffer == null) throw new IllegalArgumentException("buffer must not be null");
+        if (offset < 0 || count < 0 || offset + count > buffer.length) {
+            throw new IndexOutOfBoundsException("Invalid offset/count");
+        }
+        if (count == 0) return;
+
+        Integer peerId = ConnectionContext.getInstance().getPeerIdFor(localId);
+        if (peerId == null) {
+            throw new IllegalStateException(
+                    "No peer route for localId " + localId
+                            + ". Handshake may not have completed; do not write before connect(word) finishes.");
+        }
+
+        byte[] chunk = new byte[count];
+        System.arraycopy(buffer, offset, chunk, 0, count);
+        byte[] frame = protocolHandler.buildFrame(peerId, chunk, (byte) 0);
+        try {
+            wifiTransport.sendRaw(frame).get();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to send stream data", e);
+        }
+    }
+
+    @Override
+    public CompletableFuture<Void> sendStreamDataAsync(int localId, byte[] buffer, int offset, int count) {
+        if (disposed) {
+            return CompletableFuture.failedFuture(new IllegalStateException("ConnectionManager is disposed."));
+        }
+        if (wifiTransport == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Transport not initialized."));
+        }
+        if (buffer == null) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("buffer must not be null"));
+        }
+        if (offset < 0 || count < 0 || offset + count > buffer.length) {
+            return CompletableFuture.failedFuture(new IndexOutOfBoundsException("Invalid offset/count"));
+        }
+        if (count == 0) return CompletableFuture.completedFuture(null);
+
+        Integer peerId = ConnectionContext.getInstance().getPeerIdFor(localId);
+        if (peerId == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                    "No peer route for localId " + localId));
+        }
+
+        byte[] chunk = new byte[count];
+        System.arraycopy(buffer, offset, chunk, 0, count);
+        byte[] frame = protocolHandler.buildFrame(peerId, chunk, (byte) 0);
+        return wifiTransport.sendRaw(frame);
+    }
+
+    @Override
+    public void completeStream(int localId) {
+        if (disposed) return;
+        if (wifiTransport == null) return;
+
+        Integer peerId = ConnectionContext.getInstance().getPeerIdFor(localId);
+        if (peerId != null) {
+            byte[] finFrame = protocolHandler.buildFrame(peerId, new byte[0], CoreConfig.FLAG_FIN);
+            try {
+                wifiTransport.sendRaw(finFrame).get();
+            } catch (Exception ignored) {}
+        }
+        ConnectionContext.getInstance().releaseId(localId);
+    }
+
+    @Override
+    public void setErrorListener(ErrorListener listener) {
+        this.errorListener = listener;
+    }
+
+    // ── Lifecycle ─────────────────────────────────────────────────────
+
+    @Override
+    public void close() {
+        if (disposed) return;
+        disposed = true;
+        incomingByWord.clear();
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────
+
+    private TransferRequest parseTransferResponse(byte[] payload) {
         if (payload == null || payload.length == 0) return null;
         try {
             String json = new String(payload, StandardCharsets.UTF_8);
@@ -339,34 +359,16 @@ public class ConnectionManager implements IConnectionManager {
         }
     }
 
-    private void onError(Exception ex) {
-        if (errorOccurredListener != null) {
-            errorOccurredListener.onErrorOccurred(ex);
-        }
-    }
+    private static final class ConnectAttempt {
+        final int localId;
+        final BackBufferedInputStream backStream;
+        final CompletableFuture<byte[]> responseFuture;
 
-    @Override
-    public void close() {
-        if (disposed) return;
-        disposed = true;
-        if (transport != null) {
-            transport.setOnDataReceivedListener(null);
-            if (ownsTransport && transport instanceof AutoCloseable) {
-                try {
-                    ((AutoCloseable) transport).close();
-                } catch (Exception ignored) {
-                }
-            }
-            transport = null;
+        ConnectAttempt(int localId, BackBufferedInputStream backStream,
+                       CompletableFuture<byte[]> responseFuture) {
+            this.localId = localId;
+            this.backStream = backStream;
+            this.responseFuture = responseFuture;
         }
-        routingMap.clear();
-        onFinByCorrelationId.clear();
-        synchronized (controlLock) {
-            if (pendingControlWaiter != null) {
-                pendingControlWaiter.cancel(false);
-                pendingControlWaiter = null;
-            }
-        }
-        executor.shutdown();
     }
 }

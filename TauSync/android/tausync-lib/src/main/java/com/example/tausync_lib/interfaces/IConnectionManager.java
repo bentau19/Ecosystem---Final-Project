@@ -1,91 +1,83 @@
-package com.tausync.interfaces;
+package com.example.tausync_lib.interfaces;
 
-import com.example.tausync_lib.models.TransferRequest;
+import com.example.tausync_lib.implementations.management.TauSyncStream;
 
-import java.io.InputStream;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Consumer;
 
 /**
- * Connection manager — which connection and when; dispatcher and routing map.
- * Routes incoming TPack by CorrelationID to registered handlers. Control channel = 0.
- * Per TauSync Protocol Spec. Matches C# IConnectionManager.
+ * Public API consumed by applications per TauSync v3.
+ *
+ * <p>Both sides call {@link #connect(String)} with the same Meeting Word;
+ * they are paired and each gets a bidirectional {@link TauSyncStream}.
+ * Matches C# IConnectionManager.
  */
 public interface IConnectionManager extends AutoCloseable {
 
     /**
-     * Sets the listener for incoming CLIPBOARD push from the peer (e.g. Windows).
-     * When the peer sends PUSH with Type=CLIPBOARD, the received text is passed to this callback.
-     */
-    void setOnClipboardReceivedListener(ClipboardReceivedListener listener);
-
-    /**
-     * Listener for received clipboard content (incoming PUSH CLIPBOARD).
-     */
-    @FunctionalInterface
-    interface ClipboardReceivedListener {
-        void onClipboardReceived(String text);
-    }
-
-    /**
-     * Initializes the manager with the transport to use. Use this when the caller provides the transport.
-     * Alternatively, use {@link #connect(String)} to let the manager create and own the transport.
+     * Binds this manager to a transport. Called once.
+     *
+     * @param transport the transport to use
+     * @throws IllegalArgumentException if transport is null
+     * @throws IllegalStateException    if already initialised
      */
     void initialize(ITransport transport);
 
     /**
-     * Connects to the target by creating and managing the transport internally.
-     * Pass null or empty targetId for server mode (wait for incoming connection).
+     * Establishes the underlying TCP connection.
+     * Delegates to {@code ConnectionContext.initializeTransports}.
      *
-     * @param targetId Target address (client mode), or null/empty for server mode.
-     * @return CompletableFuture that completes when connected.
+     * @param targetId peer IP for client mode; null/empty for server mode
+     * @return future that completes when connected
      */
-    CompletableFuture<Void> connect(String targetId);
+    CompletableFuture<Void> connectTransport(String targetId);
 
     /**
-     * Returns whether the underlying transport is connected.
+     * @return true when the transport has an active connection
      */
     boolean isConnected();
 
     /**
-     * Pushes data: handshake on channel 0, then streams content on a dedicated CorrelationID.
+     * Symmetric connect — both sides call with the same word.
      *
-     * @param source  Stream to read from (e.g. clipboard content).
-     * @param type    Task type (e.g. "CLIPBOARD").
-     * @param payload Optional JSON (e.g. {"FileName": "x"}). May be null.
-     * @return CompletableFuture that completes when the transfer is finished.
+     * @param word the Meeting Word (case-insensitive)
+     * @return future containing a bidirectional stream
+     * @throws IllegalArgumentException if word is null or blank
+     * @throws IllegalStateException    if transport not connected or manager disposed
      */
-    CompletableFuture<Void> smartSend(InputStream source, String type, String payload);
+    CompletableFuture<TauSyncStream> connect(String word);
 
     /**
-     * Pulls data: double handshake on channel 0, then returns a stream fed by incoming TPack for the agreed CorrelationID.
+     * Sends data over an existing stream channel.
      *
-     * @param type    Task type (e.g. "BACKUP").
-     * @param payload Optional JSON. May be null.
-     * @return CompletableFuture that completes with a stream ready for read.
+     * @param localId the local stream ID
+     * @param buffer  source byte array
+     * @param offset  start position in buffer
+     * @param count   number of bytes to send
+     * @throws IllegalStateException if no peer route exists for localId
      */
-    CompletableFuture<InputStream> getStream(String type, String payload);
+    void sendStreamData(int localId, byte[] buffer, int offset, int count);
 
     /**
-     * Registers a handler for a CorrelationID. When a TPack arrives with that ID, payload is passed to the callback.
+     * Async variant of {@link #sendStreamData(int, byte[], int, int)}.
      */
-    void registerHandler(int correlationId, Consumer<byte[]> callback);
+    CompletableFuture<Void> sendStreamDataAsync(int localId, byte[] buffer, int offset, int count);
 
     /**
-     * Unregisters the handler for the given CorrelationID (e.g. after FIN or error).
+     * Sends FIN and releases the local ID.
+     *
+     * @param localId the local stream ID to complete
      */
-    void unregisterHandler(int correlationId);
+    void completeStream(int localId);
 
     /**
-     * Sets the listener for errors (e.g. handshake timeout, reject, dispatch failure).
+     * Registers a listener for errors that occur during handshake or I/O.
+     *
+     * @param listener the callback, or null to clear
      */
-    void setErrorOccurredListener(ErrorOccurredListener listener);
+    void setErrorListener(ErrorListener listener);
 
-    /**
-     * Listener for errors.
-     */
     @FunctionalInterface
-    interface ErrorOccurredListener {
-        void onErrorOccurred(Exception exception);
+    interface ErrorListener {
+        void onError(Exception error);
     }
 }

@@ -4,9 +4,7 @@ plugins {
 
 android {
     namespace = "com.example.tausync_lib"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 24

@@ -107,7 +107,7 @@ Discovery and handshake use JSON payloads inside **control frames** (TargetID=0,
 
 ```json
 {
-  "MagicBytes": 1415009875,
+  "MagicBytes": 1413567827,
   "SenderID":   <int>,
   "Type":       "<string>",
   "Status":     "REQ" | "OK" | "REJECT"
@@ -116,7 +116,7 @@ Discovery and handshake use JSON payloads inside **control frames** (TargetID=0,
 
 | Field | Type | Description |
 |:---|:---|:---|
-| `MagicBytes` | `uint32` | Must be `0x54415553` (decimal `1415009875`). Protocol identity check. |
+| `MagicBytes` | `uint32` | Must be `0x54415553` (decimal `1413567827`). Protocol identity check. |
 | `SenderID` | `int` | The **local ID of the sender** — the ID the peer should target when sending frames back. Range: 1..0xFFFFFF. |
 | `Type` | `string` | The **Meeting Word** (e.g. `"CLIPBOARD"`, `"FILE"`, `"main"`). Case-insensitive matching. Required for `REQ`, echoed back in `OK`. |
 | `Status` | `string` | `"REQ"` = initiate, `"OK"` = accept, `"REJECT"` = deny. |

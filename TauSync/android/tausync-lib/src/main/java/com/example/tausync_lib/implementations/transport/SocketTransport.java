@@ -1,54 +1,193 @@
-package com.tausync.implementations.transport;
+package com.example.tausync_lib.implementations.transport;
 
-import com.tausync.core.CoreConfig;
-import com.tausync.interfaces.ITransport;
+import com.example.tausync_lib.core.CoreConfig;
+import com.example.tausync_lib.implementations.management.ConnectionContext;
+import com.example.tausync_lib.implementations.protocol.ProtocolHandler;
+import com.example.tausync_lib.interfaces.IProtocolHandler;
+import com.example.tausync_lib.interfaces.ITransport;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * TCP socket transport. Per spec: sends/receives raw TPack (8-byte header + payload).
- * Performs TPack reassembly: buffers incoming bytes until a complete TPack is available,
- * then invokes OnDataReceived with the full packet. Connect(null/empty) = server mode (listen and wait for one client).
- * Matches C# SocketTransport.
+ * TCP socket transport. Protocol-agnostic: reads frames via {@link IProtocolHandler} only.
+ *
+ * <p>Server mode ({@code connect(null)}/{@code connect("")}): binds to
+ * {@code 0.0.0.0:DefaultPort}, accepts one client, then stops listening.
+ * Client mode: retries every {@link CoreConfig#CLIENT_CONNECT_RETRY_DELAY_SECONDS}
+ * until success or disposal.
+ *
+ * <p>Matches C# SocketTransport.
  */
 public class SocketTransport implements ITransport {
-
-    public static final int DEFAULT_PORT = CoreConfig.DEFAULT_PORT;
 
     private Socket socket;
     private ServerSocket serverSocket;
     private InputStream inputStream;
     private OutputStream outputStream;
-    private final AtomicBoolean connected = new AtomicBoolean(false);
-    private final AtomicBoolean disposed = new AtomicBoolean(false);
-    private volatile Future<?> receiveTask;
-    private volatile CompletableFuture<Void> connectionFuture; // for server mode
-    private final ExecutorService executor = Executors.newCachedThreadPool(r -> {
-        Thread t = new Thread(r);
-        t.setDaemon(true);
-        return t;
-    });
-    private final byte[] headerBuffer = new byte[CoreConfig.TPACK_HEADER_SIZE];
-    private byte[] receiveBuffer;
+    private volatile boolean connected;
+    private volatile boolean disposed;
+    private volatile boolean serverMode;
+    private Thread receiveThread;
+    private Thread acceptThread;
+    private final Semaphore sendLock = new Semaphore(1);
+    private final IProtocolHandler protocolHandler;
     private OnDataReceivedListener dataReceivedListener;
-    private int port = DEFAULT_PORT;
 
-    public int getPort() {
-        return port;
+    private int port = CoreConfig.DEFAULT_PORT;
+
+    public SocketTransport() {
+        this(null);
     }
 
-    public void setPort(int port) {
-        this.port = port;
+    /**
+     * @param protocolHandler framing handler; defaults to {@link ProtocolHandler}
+     */
+    public SocketTransport(IProtocolHandler protocolHandler) {
+        this.protocolHandler = protocolHandler != null ? protocolHandler : new ProtocolHandler();
+    }
+
+    public int getPort() { return port; }
+    public void setPort(int port) { this.port = port; }
+
+    @Override
+    public boolean isServerMode() {
+        return serverMode;
+    }
+
+    @Override
+    public CompletableFuture<Void> connect(String targetId) {
+        if (disposed) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Transport disposed"));
+        }
+        if (connected) {
+            disconnect();
+        }
+
+        boolean wantServer = targetId == null || targetId.trim().isEmpty();
+        serverMode = wantServer;
+
+        if (wantServer) {
+            return startListening();
+        }
+        return connectToServerWithRetry(targetId.trim());
+    }
+
+    // ── Server Mode ───────────────────────────────────────────────────
+
+    private CompletableFuture<Void> startListening() {
+        CompletableFuture<Void> connectionFuture = new CompletableFuture<>();
+
+        acceptThread = new Thread(() -> {
+            try {
+                serverSocket = new ServerSocket(port);
+                socket = serverSocket.accept();
+                inputStream = socket.getInputStream();
+                outputStream = socket.getOutputStream();
+                connected = true;
+                startReceiveLoop();
+                connectionFuture.complete(null);
+            } catch (Exception e) {
+                if (!disposed) {
+                    connectionFuture.completeExceptionally(e);
+                }
+            } finally {
+                closeServerSocket();
+            }
+        }, "TauSync-Accept");
+        acceptThread.setDaemon(true);
+        acceptThread.start();
+
+        return connectionFuture;
+    }
+
+    // ── Client Mode ───────────────────────────────────────────────────
+
+    private CompletableFuture<Void> connectToServerWithRetry(String host) {
+        CompletableFuture<Void> connectionFuture = new CompletableFuture<>();
+        int delayMs = CoreConfig.CLIENT_CONNECT_RETRY_DELAY_SECONDS * 1000;
+
+        Thread retryThread = new Thread(() -> {
+            while (!connectionFuture.isDone() && !disposed) {
+                try {
+                    Socket attempt = new Socket(host, port);
+                    if (connectionFuture.isDone() || disposed) {
+                        attempt.close();
+                        return;
+                    }
+
+                    socket = attempt;
+                    inputStream = socket.getInputStream();
+                    outputStream = socket.getOutputStream();
+                    connected = true;
+                    startReceiveLoop();
+                    connectionFuture.complete(null);
+                    return;
+                } catch (IOException e) {
+                    if (disposed) {
+                        connectionFuture.completeExceptionally(
+                                new IllegalStateException("Transport disposed during connect"));
+                        return;
+                    }
+                    try {
+                        Thread.sleep(delayMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        connectionFuture.completeExceptionally(ie);
+                        return;
+                    }
+                } catch (Exception e) {
+                    connectionFuture.completeExceptionally(e);
+                    return;
+                }
+            }
+        }, "TauSync-ConnectRetry");
+        retryThread.setDaemon(true);
+        retryThread.start();
+
+        return connectionFuture;
+    }
+
+    // ── Send ──────────────────────────────────────────────────────────
+
+    @Override
+    public CompletableFuture<Void> sendRaw(byte[] data) {
+        if (data == null) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("data must not be null"));
+        }
+        if (disposed) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Transport disposed"));
+        }
+        if (!connected || outputStream == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Not connected"));
+        }
+
+        try {
+            sendLock.acquire();
+            try {
+                outputStream.write(data);
+                outputStream.flush();
+            } finally {
+                sendLock.release();
+            }
+            return CompletableFuture.completedFuture(null);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return CompletableFuture.failedFuture(new RuntimeException("Send interrupted", e));
+        } catch (IOException e) {
+            return CompletableFuture.failedFuture(new RuntimeException("Send failed", e));
+        }
+    }
+
+    @Override
+    public boolean isConnected() {
+        return connected && !disposed && socket != null && !socket.isClosed();
     }
 
     @Override
@@ -56,155 +195,119 @@ public class SocketTransport implements ITransport {
         this.dataReceivedListener = listener;
     }
 
-    @Override
-    public CompletableFuture<Void> connect(String targetId) {
-        if (disposed.get()) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Transport is disposed"));
-        }
-        disconnect();
+    // ── Receive Loop ──────────────────────────────────────────────────
 
-        if (targetId == null || targetId.trim().isEmpty()) {
-            return startListeningAndWait();
-        }
+    private void startReceiveLoop() {
+        receiveThread = new Thread(() -> receiveLoop(), "TauSync-Receive");
+        receiveThread.setDaemon(true);
+        receiveThread.start();
+    }
 
-        CompletableFuture<Void> future = new CompletableFuture<>();
-        executor.execute(() -> {
+    private void receiveLoop() {
+        int headerSize = protocolHandler.getHeaderSize();
+        byte[] headerBuffer = new byte[headerSize];
+
+        while (connected && !disposed && inputStream != null) {
             try {
-                socket = new Socket(targetId, port);
-                inputStream = socket.getInputStream();
-                outputStream = socket.getOutputStream();
-                connected.set(true);
-                startReceiveLoop();
-                future.complete(null);
-            } catch (IOException e) {
-                future.completeExceptionally(e);
-            }
-        });
-        return future;
-    }
+                int headerRead = readExactly(inputStream, headerBuffer, 0, headerSize);
+                if (headerRead != headerSize) break;
 
-    private CompletableFuture<Void> startListeningAndWait() {
-        connectionFuture = new CompletableFuture<>();
-        executor.execute(() -> {
-            try {
-                serverSocket = new ServerSocket(port);
-                Socket client = serverSocket.accept();
-                socket = client;
-                inputStream = socket.getInputStream();
-                outputStream = socket.getOutputStream();
-                connected.set(true);
-                startReceiveLoop();
-                if (connectionFuture != null) {
-                    connectionFuture.complete(null);
+                int payloadLength = protocolHandler.getPayloadLength(headerBuffer);
+                if (payloadLength < 0) break;
+
+                int totalFrameSize = headerSize + payloadLength;
+                byte[] frame = new byte[totalFrameSize];
+                System.arraycopy(headerBuffer, 0, frame, 0, headerSize);
+
+                if (payloadLength > 0) {
+                    int payloadRead = readExactly(inputStream, frame, headerSize, payloadLength);
+                    if (payloadRead != payloadLength) break;
                 }
-            } catch (IOException e) {
-                if (connectionFuture != null) {
-                    connectionFuture.completeExceptionally(e);
-                }
+
+                IProtocolHandler.ParseResult result = protocolHandler.parseFrame(frame);
+                dispatchFrame(result.getTargetId(), result.getPayload(), result.getFlags(), frame);
+
+            } catch (Exception e) {
+                break;
             }
-        });
-        return connectionFuture;
+        }
+
+        if (connected) {
+            disconnect();
+        }
     }
 
-    @Override
-    public CompletableFuture<Void> sendRaw(byte[] data) {
-        if (data == null) {
-            return CompletableFuture.failedFuture(new IllegalArgumentException("data cannot be null"));
-        }
-        if (!connected.get() || outputStream == null) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Not connected"));
-        }
-        return CompletableFuture.runAsync(() -> {
-            synchronized (outputStream) {
-                try {
-                    outputStream.write(data);
-                    outputStream.flush();
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
+    private void dispatchFrame(int targetId, byte[] payload, byte flags, byte[] rawFrame) {
+        if (protocolHandler.isControlFrame(targetId, flags)) {
+            boolean handled = ConnectionContext.getInstance().dispatch(targetId, payload, flags);
+            if (!handled && dataReceivedListener != null) {
+                dataReceivedListener.onDataReceived(rawFrame);
             }
-        }, executor);
+            return;
+        }
+        ConnectionContext.getInstance().dispatch(targetId, payload, flags);
     }
 
-    @Override
-    public boolean isConnected() {
-        return connected.get() && !disposed.get() && socket != null && socket.isConnected() && !socket.isClosed();
+    /**
+     * Reads exactly {@code count} bytes from the stream, looping until done or EOF.
+     *
+     * @return number of bytes actually read (less than count only on EOF)
+     */
+    private static int readExactly(InputStream stream, byte[] buffer, int offset, int count)
+            throws IOException {
+        int totalRead = 0;
+        while (totalRead < count) {
+            int r = stream.read(buffer, offset + totalRead, count - totalRead);
+            if (r < 0) return totalRead;
+            totalRead += r;
+        }
+        return totalRead;
     }
 
-    private void disconnect() {
-        if (!connected.get()) return;
-        connected.set(false);
-        if (receiveTask != null) {
-            receiveTask.cancel(true);
-        }
-        try {
-            if (inputStream != null) inputStream.close();
-            if (outputStream != null) outputStream.close();
-            if (socket != null) socket.close();
-        } catch (IOException ignored) {
-        }
+    // ── Lifecycle ─────────────────────────────────────────────────────
+
+    public void disconnect() {
+        if (!connected) return;
+        connected = false;
+
+        closeQuietly(inputStream);
+        closeQuietly(outputStream);
+        closeQuietly(socket);
         inputStream = null;
         outputStream = null;
         socket = null;
     }
 
-    private void startReceiveLoop() {
-        receiveTask = executor.submit(this::receiveLoop);
-    }
-
-    private void receiveLoop() {
-        while (connected.get() && inputStream != null && !disposed.get()) {
-            try {
-                int headerRead = readExactly(inputStream, headerBuffer, 0, CoreConfig.TPACK_HEADER_SIZE);
-                if (headerRead != CoreConfig.TPACK_HEADER_SIZE) break;
-
-                int payloadLength = (headerBuffer[0] & 0xFF) | ((headerBuffer[1] & 0xFF) << 8)
-                        | ((headerBuffer[2] & 0xFF) << 16) | ((headerBuffer[3] & 0xFF) << 24);
-                if (payloadLength < 0) break;
-
-                int totalSize = CoreConfig.TPACK_HEADER_SIZE + payloadLength;
-                if (receiveBuffer == null || receiveBuffer.length < totalSize) {
-                    receiveBuffer = new byte[Math.max(totalSize, 65536)];
-                }
-                System.arraycopy(headerBuffer, 0, receiveBuffer, 0, CoreConfig.TPACK_HEADER_SIZE);
-                if (payloadLength > 0) {
-                    int payloadRead = readExactly(inputStream, receiveBuffer, CoreConfig.TPACK_HEADER_SIZE, payloadLength);
-                    if (payloadRead != payloadLength) break;
-                }
-
-                byte[] packet = new byte[totalSize];
-                System.arraycopy(receiveBuffer, 0, packet, 0, totalSize);
-                if (dataReceivedListener != null) {
-                    dataReceivedListener.onDataReceived(packet);
-                }
-            } catch (Exception e) {
-                break;
-            }
-        }
-        if (connected.get()) {
-            disconnect();
-        }
-    }
-
-    private static int readExactly(InputStream in, byte[] buf, int offset, int count) throws IOException {
-        int total = 0;
-        while (total < count) {
-            int r = in.read(buf, offset + total, count - total);
-            if (r <= 0) return total;
-            total += r;
-        }
-        return total;
-    }
-
     @Override
     public void close() {
-        if (disposed.getAndSet(true)) return;
+        if (disposed) return;
+        disposed = true;
         disconnect();
-        try {
-            if (serverSocket != null) serverSocket.close();
-        } catch (IOException ignored) {
+        closeServerSocket();
+
+        if (acceptThread != null) {
+            acceptThread.interrupt();
         }
-        serverSocket = null;
-        executor.shutdown();
+        if (receiveThread != null) {
+            receiveThread.interrupt();
+        }
+    }
+
+    private void closeServerSocket() {
+        if (serverSocket != null) {
+            try { serverSocket.close(); } catch (IOException ignored) {}
+            serverSocket = null;
+        }
+    }
+
+    private static void closeQuietly(AutoCloseable closeable) {
+        if (closeable == null) return;
+        try { closeable.close(); } catch (Exception ignored) {}
+    }
+
+    @SuppressWarnings("unused")
+    private static void closeQuietly(Socket socket) {
+        if (socket == null) return;
+        try { socket.close(); } catch (Exception ignored) {}
     }
 }

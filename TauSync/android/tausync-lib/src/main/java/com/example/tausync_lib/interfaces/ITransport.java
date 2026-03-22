@@ -1,42 +1,54 @@
-package com.tausync.interfaces;
+package com.example.tausync_lib.interfaces;
 
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Transport layer interface — manages the physical connection.
- * Per TauSync Protocol Spec: raw bytes only; framing and reassembly are transport's responsibility.
- * Matches C# ITransport: Connect (null/empty = server mode), SendRaw, IsConnected, OnDataReceived.
+ * Transport layer — manages the physical TCP connection.
+ *
+ * <p>{@code connect(null)} or {@code connect("")} enters server mode (listen for
+ * one client). A non-empty targetId enters client mode (connect to peer IP).
+ *
+ * <p>Matches C# ITransport.
  */
 public interface ITransport extends AutoCloseable {
 
     /**
-     * Connects to the target. When targetId is null or empty, acts as server: listens and waits for the first incoming connection.
+     * Establishes the transport connection.
      *
-     * @param targetId IP address of the peer (client mode), or null/empty for server mode.
-     * @return CompletableFuture that completes when connected.
+     * @param targetId peer IP for client mode; null or empty for server mode
+     * @return future that completes when the connection is established
      */
     CompletableFuture<Void> connect(String targetId);
 
     /**
-     * Sends raw binary data (full TPack: 8-byte header + payload). No extra length prefix.
+     * Sends a complete TPack frame (header + payload) over the wire.
+     * Thread-safe — implementations must serialise concurrent calls.
      *
-     * @param data The complete TPack to send.
-     * @return CompletableFuture that completes when send is done.
+     * @param data the raw frame bytes
+     * @return future that completes when the write finishes
      */
     CompletableFuture<Void> sendRaw(byte[] data);
 
     /**
-     * Returns the current connection status.
+     * @return true when the transport has an active connection
      */
     boolean isConnected();
 
     /**
-     * Sets the listener invoked when a complete TPack has been received (after reassembly: 8-byte header + Length bytes payload).
+     * @return true when this transport accepted a connection (server mode),
+     *         false when it initiated one (client mode)
+     */
+    boolean isServerMode();
+
+    /**
+     * Registers the listener that receives unhandled control frames.
+     *
+     * @param listener the callback, or null to clear
      */
     void setOnDataReceivedListener(OnDataReceivedListener listener);
 
     /**
-     * Listener for complete TPack reception.
+     * Callback for raw frames that were not handled by ConnectionContext dispatch.
      */
     @FunctionalInterface
     interface OnDataReceivedListener {
