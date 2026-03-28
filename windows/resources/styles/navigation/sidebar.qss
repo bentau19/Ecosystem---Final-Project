@@ -1,6 +1,6 @@
 Sidebar {
     border-right-width: 1px;
     border-right-style: solid;
-    border-right-color: {{SIDEBAR_BORDER}};
-    background: {{SIDEBAR_BACKGROUND}};
+    border-right-color: {{BORDER}};
+    background: {{BACKGROUND}};
 }

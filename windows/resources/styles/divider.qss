@@ -1,4 +1,4 @@
 Divider {
-    background: {{SIDEBAR_BORDER}};
+    background: {{BORDER_DEFAULT}};
     border: none;
 }

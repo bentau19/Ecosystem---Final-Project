@@ -3,6 +3,12 @@ import sys
 import os
 from pathlib import Path
 
+import pytest
+
+import resources_qrc  # noqa: F401
+
+START_FILE = "main.py"
+
 
 def compile_resources():
     print("🔄 Compiling resources...")
@@ -27,7 +33,7 @@ def compile_resources():
 
 def run_app():
     print("🚀 Launching Syncdose...")
-    subprocess.run([sys.executable, "main.py"])
+    subprocess.run([sys.executable, f"{START_FILE}"])
 
 
 if __name__ == "__main__":
