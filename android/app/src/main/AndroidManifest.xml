@@ -16,13 +16,14 @@
         android:theme="@style/Theme.Android">
 
         <activity
-            android:name=".TestTausyncActivity"
+            android:name=".testing.TestTauSyncActivity"
             android:exported="true"
             android:label="TauSync Test"
-            android:theme="@style/Theme.AppCompat.Light.DarkActionBar"> <intent-filter>
-            <action android:name="android.intent.action.MAIN" />
-            <category android:name="android.intent.category.LAUNCHER" />
-        </intent-filter>
+            android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
         </activity>
 
 
