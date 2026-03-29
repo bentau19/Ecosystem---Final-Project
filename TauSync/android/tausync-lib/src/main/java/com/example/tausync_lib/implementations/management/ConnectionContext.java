@@ -8,6 +8,7 @@ import com.google.gson.Gson;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
@@ -168,14 +169,14 @@ public final class ConnectionContext {
             throw new IllegalArgumentException("Word cannot be null or empty.");
         }
         if (callback == null) throw new IllegalArgumentException("callback must not be null");
-        String key = word.trim().toUpperCase();
+        String key = word.trim().toUpperCase(Locale.ROOT);
         serviceRegistry.put(key, callback);
         drainPendingDiscovery(key);
     }
 
     public void unregisterService(String word) {
         if (word == null || word.trim().isEmpty()) return;
-        String key = word.trim().toUpperCase();
+        String key = word.trim().toUpperCase(Locale.ROOT);
         serviceRegistry.remove(key);
         pendingDiscoveryByWord.remove(key);
     }
@@ -225,7 +226,7 @@ public final class ConnectionContext {
         if (request.getStatus() == null) return false;
         if (!request.getStatus().trim().equalsIgnoreCase("REQ")) return false;
 
-        String word = request.getType() != null ? request.getType().trim().toUpperCase() : null;
+        String word = request.getType() != null ? request.getType().trim().toUpperCase(Locale.ROOT) : null;
         if (word == null || word.isEmpty()) return false;
 
         TriConsumer<Integer, Integer, InputStream> callback = serviceRegistry.get(word);

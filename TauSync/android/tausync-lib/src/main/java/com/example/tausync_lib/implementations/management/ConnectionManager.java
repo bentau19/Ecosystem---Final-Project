@@ -10,6 +10,7 @@ import com.google.gson.Gson;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -85,7 +86,7 @@ public class ConnectionManager implements IConnectionManager {
     public CompletableFuture<TauSyncStream> connect(String word) {
         validateConnectState(word);
         String wordTrimmed = word.trim();
-        String wordKey = wordTrimmed.toUpperCase();
+        String wordKey = wordTrimmed.toUpperCase(Locale.ROOT);
 
         LinkedBlockingQueue<TauSyncStream> wordChannel = getOrCreateWordChannel(wordKey);
         registerWordListener(wordKey, wordChannel);
@@ -159,11 +160,19 @@ public class ConnectionManager implements IConnectionManager {
 
         CompletableFuture<TauSyncStream> peerPath = CompletableFuture.supplyAsync(() -> {
             try {
-                TauSyncStream stream = channel.poll(timeoutSec, TimeUnit.SECONDS);
-                if (stream == null) {
-                    throw new RuntimeException(new TimeoutException("Peer path timed out"));
+                long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSec);
+                while (!disposed) {
+                    long remainingNanos = deadlineNanos - System.nanoTime();
+                    if (remainingNanos <= 0) {
+                        throw new RuntimeException(new TimeoutException("Peer path timed out"));
+                    }
+                    long pollMs = Math.min(500, TimeUnit.NANOSECONDS.toMillis(remainingNanos));
+                    if (pollMs <= 0) pollMs = 1;
+                    TauSyncStream stream = channel.poll(pollMs, TimeUnit.MILLISECONDS);
+                    if (stream != null) return stream;
                 }
-                return stream;
+                throw new RuntimeException(
+                        new IllegalStateException("ConnectionManager disposed during handshake"));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException(e);

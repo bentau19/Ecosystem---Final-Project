@@ -2,6 +2,8 @@ package com.example.tausync_lib.models;
 
 import com.google.gson.annotations.SerializedName;
 
+import java.util.Locale;
+
 /**
  * Signaling message for TauSync v3 coordination.
  * Sent as the payload of a TPack with TargetID=0 and Flags=CONTROL.
@@ -67,7 +69,7 @@ public class TransferRequest {
         if (senderID < 0 || senderID > 0xFFFFFF) return false;
         if (status == null || status.trim().isEmpty()) return false;
 
-        String normalised = status.trim().toUpperCase();
+        String normalised = status.trim().toUpperCase(Locale.ROOT);
         if (!normalised.equals("REQ") && !normalised.equals("OK") && !normalised.equals("REJECT")) {
             return false;
         }

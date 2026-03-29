@@ -4,11 +4,9 @@ Listens for TauSync connections on a meeting-word, receives HTTP GET
 requests, and serves files from the ``files/`` directory.
 """
 
-import sys
 import os
 import threading
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from tausync_py import TauSync
 
 

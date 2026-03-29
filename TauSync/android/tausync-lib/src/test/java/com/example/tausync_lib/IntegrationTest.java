@@ -3,14 +3,22 @@ package com.example.tausync_lib;
 import com.example.tausync_lib.core.CoreConfig;
 import com.example.tausync_lib.implementations.management.BackBufferedInputStream;
 import com.example.tausync_lib.implementations.protocol.ProtocolHandler;
+import com.example.tausync_lib.implementations.transport.SocketTransport;
 import com.example.tausync_lib.interfaces.IProtocolHandler;
 import com.example.tausync_lib.models.TransferRequest;
 import com.google.gson.Gson;
 
 import org.junit.Test;
 
+import java.io.IOException;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.Assert.*;
 
@@ -404,5 +412,80 @@ public class IntegrationTest {
         assertEquals(64, CoreConfig.MAX_PENDING_DISCOVERY_PER_WORD);
         assertEquals(1, CoreConfig.MIN_ID);
         assertEquals(0xFFFFFF, CoreConfig.MAX_ID);
+    }
+
+    // ── Locale-safe toUpperCase (Fix 1) ──────────────────────────────
+
+    @Test
+    public void localeRoot_turkishI_uppercasesCorrectly() {
+        String word = "file_transfer";
+        String expected = "FILE_TRANSFER";
+        assertEquals(expected, word.toUpperCase(Locale.ROOT));
+
+        String turkishI = "i\u0131";
+        assertEquals("I\u0131", turkishI.toUpperCase(Locale.ROOT));
+    }
+
+    @Test
+    public void localeRoot_asciiWords_matchCaseInsensitive() {
+        String[] words = {"main", "test_msg", "CLIPBOARD", "Data_Channel_1"};
+        for (String w : words) {
+            String key = w.trim().toUpperCase(Locale.ROOT);
+            assertEquals(w.toUpperCase(Locale.ROOT), key);
+        }
+    }
+
+    @Test
+    public void localeRoot_mixedCase_normalizedConsistently() {
+        String a = "MyWord".toUpperCase(Locale.ROOT);
+        String b = "myword".toUpperCase(Locale.ROOT);
+        String c = "MYWORD".toUpperCase(Locale.ROOT);
+        assertEquals(a, b);
+        assertEquals(b, c);
+    }
+
+    // ── SocketTransport disconnect join (Fix 3) ──────────────────────
+
+    @Test
+    public void socketTransport_disconnect_receiveThreadStops() throws Exception {
+        int port = findFreePort();
+        ServerSocket serverSocket = new ServerSocket(port);
+        CountDownLatch clientConnected = new CountDownLatch(1);
+
+        Thread serverThread = new Thread(() -> {
+            try (Socket client = serverSocket.accept()) {
+                clientConnected.countDown();
+                Thread.sleep(5000);
+            } catch (Exception ignored) {}
+        });
+        serverThread.setDaemon(true);
+        serverThread.start();
+
+        SocketTransport transport = new SocketTransport();
+        transport.setPort(port);
+        transport.connect("127.0.0.1").get(5, TimeUnit.SECONDS);
+        assertTrue(transport.isConnected());
+
+        assertTrue("Server should have accepted", clientConnected.await(3, TimeUnit.SECONDS));
+
+        transport.disconnect();
+        assertFalse(transport.isConnected());
+
+        transport.close();
+        serverSocket.close();
+        serverThread.interrupt();
+    }
+
+    @Test
+    public void socketTransport_close_idempotent() throws Exception {
+        SocketTransport transport = new SocketTransport();
+        transport.close();
+        transport.close();
+    }
+
+    private static int findFreePort() throws IOException {
+        try (ServerSocket ss = new ServerSocket(0)) {
+            return ss.getLocalPort();
+        }
     }
 }

@@ -7,13 +7,7 @@ arrays behind a clean two-class API: **`TauSync`** and **`TauSyncStream`**.
 ## Installation
 
 ```
-pip install -e <path to the folder>\tausync_py
-e.g.
-PS C:\Users\User\Desktop\OneDrive\CS_BA\Third_Year\final_project\Ecosystem---Final-Project\windows\tests\ben_test\file_test> py -e pip install -e ..\..\..\tausync_py 
-
-Or if not working
-
-py -m pip install -e <path to the folder>\tausync_py --config-settings editable_mode=compat
+pip install -e /path/to/windows/
 ```
 
 Or, if published to PyPI:

@@ -3,11 +3,9 @@ Bserver: connects on "main" and "second" (same as client). When both sides Conne
 Run first, then run Bclient.
 """
 
-import sys
 import os
 import threading
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from tausync_py import TauSync
 
 

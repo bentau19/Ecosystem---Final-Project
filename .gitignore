@@ -13,7 +13,8 @@
 *.userosscache
 *.sln.docstates
 *.suo
-
+*.jpg
+*.png
 ### --- Python Specific --- ###
 __pycache__/
 *.py[cod]
@@ -23,7 +24,9 @@ env/
 # קבצי הגדרות של ספריות וסביבה
 .env
 .pytest_cache/
-
+CLAUDE.md
+settings.local.json
+results.json
 ### --- Android Specific --- ###
 # תוצרי בנייה של Gradle
 .gradle/

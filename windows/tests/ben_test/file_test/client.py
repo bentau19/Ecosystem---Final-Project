@@ -4,11 +4,9 @@ Connects to a TauSync server, sends HTTP GET requests for files,
 and saves responses to disk.
 """
 
-import sys
 import os
 import threading
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from tausync_py import TauSync
 
 

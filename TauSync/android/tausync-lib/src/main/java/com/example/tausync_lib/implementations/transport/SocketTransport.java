@@ -273,6 +273,15 @@ public class SocketTransport implements ITransport {
         closeQuietly(inputStream);
         closeQuietly(outputStream);
         closeQuietly(socket);
+
+        Thread rt = receiveThread;
+        if (rt != null && rt != Thread.currentThread()) {
+            rt.interrupt();
+            try { rt.join(2000); } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
         inputStream = null;
         outputStream = null;
         socket = null;
@@ -285,11 +294,12 @@ public class SocketTransport implements ITransport {
         disconnect();
         closeServerSocket();
 
-        if (acceptThread != null) {
-            acceptThread.interrupt();
-        }
-        if (receiveThread != null) {
-            receiveThread.interrupt();
+        Thread at = acceptThread;
+        if (at != null && at != Thread.currentThread()) {
+            at.interrupt();
+            try { at.join(2000); } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 

@@ -20,8 +20,6 @@ import threading
 import json
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(SCRIPT_DIR, "..", ".."))
-
 NUM_MANAGERS = 4
 CHANNELS_PER_MANAGER = 5
 NUM_CHANNELS = NUM_MANAGERS * CHANNELS_PER_MANAGER  # 20
