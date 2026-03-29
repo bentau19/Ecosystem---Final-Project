@@ -4,6 +4,8 @@ High-level Android library for real-time, bidirectional communication between An
 
 Built on top of the TauSync protocol (v3.1) — provides multiplexed named channels, automatic framing, and symmetric connect semantics.
 
+USING ANDROID YOU SHOULD BE ON CLIENT MODE
+
 ## Quick Start
 
 ### Server Mode (listen for connections)
@@ -77,15 +79,17 @@ lifecycleScope.launch(Dispatchers.IO) {
 
 ### `TauSync` — Main Entry Point
 
-| Method | Description |
-|--------|-------------|
-| `listen()` | Start server mode. Blocks until a peer connects. |
-| `connectTo(String ip)` | Connect to a server. Blocks until connected. |
-| `connect(String word)` | Open a named channel (30s timeout). Blocks until paired. |
-| `connect(String word, int timeoutSec)` | Open a channel with custom timeout. |
-| `isConnected()` | Returns `true` if the transport layer is active. |
-| `newManager()` | Creates another TauSync sharing the same socket. |
-| `dispose()` | Releases the underlying ConnectionManager. Idempotent. |
+
+| Method                                 | Description                                              |
+| -------------------------------------- | -------------------------------------------------------- |
+| `listen()`                             | Start server mode. Blocks until a peer connects.         |
+| `connectTo(String ip)`                 | Connect to a server. Blocks until connected.             |
+| `connect(String word)`                 | Open a named channel (30s timeout). Blocks until paired. |
+| `connect(String word, int timeoutSec)` | Open a channel with custom timeout.                      |
+| `isConnected()`                        | Returns `true` if the transport layer is active.         |
+| `newManager()`                         | Creates another TauSync sharing the same socket.         |
+| `dispose()`                            | Releases the underlying ConnectionManager. Idempotent.   |
+
 
 **Role protection**: Once `listen()` is called, `connectTo()` is forbidden (and vice versa). The underlying TCP transport is a process-wide singleton.
 
@@ -93,38 +97,46 @@ lifecycleScope.launch(Dispatchers.IO) {
 
 #### Read Operations
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `readLine()` | `String` or `null` | Reads until `\n`. Returns without the newline. `null` on EOF. |
-| `readLine(int maxLength)` | `String` or `null` | Same, with a custom safety limit. |
-| `readExactly(int count)` | `byte[]` | Blocks until exactly N bytes arrive. Throws `EOFException` if stream ends early. |
-| `readAll()` | `byte[]` | Reads all remaining data until EOF. |
-| `readAll(int chunkSize)` | `byte[]` | Same, with custom buffer size. |
-| `getInputStream()` | `InputStream` | Raw InputStream for advanced use. |
+
+| Method                    | Returns            | Description                                                                      |
+| ------------------------- | ------------------ | -------------------------------------------------------------------------------- |
+| `readLine()`              | `String` or `null` | Reads until `\n`. Returns without the newline. `null` on EOF.                    |
+| `readLine(int maxLength)` | `String` or `null` | Same, with a custom safety limit.                                                |
+| `readExactly(int count)`  | `byte[]`           | Blocks until exactly N bytes arrive. Throws `EOFException` if stream ends early. |
+| `readAll()`               | `byte[]`           | Reads all remaining data until EOF.                                              |
+| `readAll(int chunkSize)`  | `byte[]`           | Same, with custom buffer size.                                                   |
+| `getInputStream()`        | `InputStream`      | Raw InputStream for advanced use.                                                |
+
 
 #### Write Operations
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `write(byte[] data)` | `int` | Writes raw bytes. Returns count written. |
-| `writeString(String text)` | `int` | Encodes as UTF-8 and writes. Returns bytes written. |
-| `getOutputStream()` | `OutputStream` | Raw OutputStream for advanced use. |
+
+| Method                     | Returns        | Description                                         |
+| -------------------------- | -------------- | --------------------------------------------------- |
+| `write(byte[] data)`       | `int`          | Writes raw bytes. Returns count written.            |
+| `writeString(String text)` | `int`          | Encodes as UTF-8 and writes. Returns bytes written. |
+| `getOutputStream()`        | `OutputStream` | Raw OutputStream for advanced use.                  |
+
 
 #### File Transfer
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `writeFile(String path)` | `long` | Streams a file into the channel (64KB chunks). |
-| `writeFile(String path, int chunkSize)` | `long` | Same, with custom chunk size. |
-| `readToFile(String path, long length)` | `long` | Receives exactly `length` bytes and writes to a file. |
-| `readToFile(String path, long length, int chunkSize)` | `long` | Same, with custom chunk size. |
+
+| Method                                                | Returns | Description                                           |
+| ----------------------------------------------------- | ------- | ----------------------------------------------------- |
+| `writeFile(String path)`                              | `long`  | Streams a file into the channel (64KB chunks).        |
+| `writeFile(String path, int chunkSize)`               | `long`  | Same, with custom chunk size.                         |
+| `readToFile(String path, long length)`                | `long`  | Receives exactly `length` bytes and writes to a file. |
+| `readToFile(String path, long length, int chunkSize)` | `long`  | Same, with custom chunk size.                         |
+
 
 #### Lifecycle
 
-| Method | Description |
-|--------|-------------|
-| `close()` | Sends FIN to peer, releases the channel ID. Idempotent. |
-| `getLocalId()` | Returns the TPack ID assigned to this channel. |
+
+| Method         | Description                                             |
+| -------------- | ------------------------------------------------------- |
+| `close()`      | Sends FIN to peer, releases the channel ID. Idempotent. |
+| `getLocalId()` | Returns the TPack ID assigned to this channel.          |
+
 
 ## File Transfer Example
 
@@ -186,3 +198,4 @@ All methods throw standard Java exceptions:
 - **Min SDK**: 21 (Android 5.0)
 - **Dependencies**: Gson (for protocol handshake JSON)
 - **Permissions**: `android.permission.INTERNET`
+

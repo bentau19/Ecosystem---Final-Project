@@ -21,14 +21,17 @@ import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class TestTauSyncActivity extends AppCompatActivity {
 
     private TauSync tauSync;
     private TauSyncStream activeStream;
-    private final ExecutorService backgroundExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService backgroundExecutor = Executors.newCachedThreadPool();
 
     private EditText ipAddressInput;
     private EditText meetingWordInput;
@@ -294,8 +297,14 @@ public class TestTauSyncActivity extends AppCompatActivity {
         runAllTestsButton.setText("Running...");
 
         backgroundExecutor.execute(() -> {
-            runMessageExchangeTest();
-            runBinaryTransferTest();
+            runMessageEchoTest();
+            runBinaryRoundTripTest(25_600, "test_bin", "2");
+            runEmptyMessageTest();
+            runUnicodeRoundTripTest();
+            runBinaryRoundTripTest(1_048_576, "test_large_bin", "5");
+            runRapidBurstTest();
+            runConcurrentChannelsTest();
+            runStreamCloseTest();
             runOnUiThread(() -> {
                 runAllTestsButton.setEnabled(true);
                 runAllTestsButton.setText("Run All Tests");
@@ -303,67 +312,215 @@ public class TestTauSyncActivity extends AppCompatActivity {
         });
     }
 
-    private void runMessageExchangeTest() {
+    // ── Test 1: Message echo ─────────────────────────────────────────────
+
+    private void runMessageEchoTest() {
         long startTime = System.currentTimeMillis();
-        runOnUiThread(() -> appendLog("[Test 1] Message Exchange: opening channel 'test_msg'..."));
+        appendLog("[Test 1] Message Echo: opening channel...");
 
         try {
             TauSyncStream stream = tauSync.connect("test_msg");
-            runOnUiThread(() -> appendLog("[Test 1] Channel open, sending message..."));
-
             String sentMessage = "Hello from Android";
+
             stream.writeString(sentMessage + "\n");
-            runOnUiThread(() -> appendLog("[Test 1] Sent: " + sentMessage));
-
             String reply = stream.readLine();
-            runOnUiThread(() -> appendLog("[Test 1] Received: " + reply));
-
             stream.close();
 
             long elapsed = System.currentTimeMillis() - startTime;
             boolean passed = sentMessage.equals(reply);
-            String verdict = passed ? "PASS" : "FAIL";
-            runOnUiThread(() -> appendLog("[Test 1] " + verdict + " (" + elapsed + "ms)"));
+            appendLog("[Test 1] " + verdict(passed) + " (" + elapsed + "ms)"
+                    + (passed ? "" : "  expected=" + sentMessage + " got=" + reply));
         } catch (Exception exception) {
-            long elapsed = System.currentTimeMillis() - startTime;
-            runOnUiThread(() -> appendLog("[Test 1] FAIL: " + exception.getMessage() + " (" + elapsed + "ms)"));
+            appendLog("[Test 1] FAIL: " + exception.getMessage()
+                    + " (" + elapsed(startTime) + "ms)");
         }
     }
 
-    private void runBinaryTransferTest() {
+    // ── Test 2 / 5: Binary round-trip (parameterized) ────────────────────
+
+    private void runBinaryRoundTripTest(int expectedSize, String channelName, String testNumber) {
         long startTime = System.currentTimeMillis();
-        runOnUiThread(() -> appendLog("[Test 2] Binary Transfer: opening channel 'test_bin'..."));
+        appendLog("[Test " + testNumber + "] Binary (" + formatByteSize(expectedSize)
+                + "): opening channel '" + channelName + "'...");
 
         try {
-            TauSyncStream stream = tauSync.connect("test_bin");
-            runOnUiThread(() -> appendLog("[Test 2] Channel open, reading data size..."));
+            TauSyncStream stream = tauSync.connect(channelName);
 
             String sizeLine = stream.readLine();
-            if (sizeLine == null) throw new Exception("EOF before size line");
+            if (sizeLine == null) throw new Exception("EOF before size header");
             int dataSize = Integer.parseInt(sizeLine.trim());
-            runOnUiThread(() -> appendLog("[Test 2] Expecting " + dataSize + " bytes..."));
 
             byte[] data = stream.readExactly(dataSize);
-            runOnUiThread(() -> appendLog("[Test 2] Received " + data.length + " bytes, echoing back..."));
-
             String localSha = computeSha256Hex(data);
-            runOnUiThread(() -> appendLog("[Test 2] Local SHA-256: " + localSha));
+            appendLog("[Test " + testNumber + "] Received " + data.length
+                    + " bytes, SHA=" + localSha.substring(0, 16) + "...");
 
             stream.write(data);
-            runOnUiThread(() -> appendLog("[Test 2] Echo sent, reading server verdict..."));
 
-            String verdict = stream.readLine();
-            runOnUiThread(() -> appendLog("[Test 2] Server says: " + verdict));
-
+            String serverVerdict = stream.readLine();
             stream.close();
 
             long elapsed = System.currentTimeMillis() - startTime;
-            boolean passed = verdict != null && verdict.trim().equals("PASS");
-            String result = passed ? "PASS" : "FAIL";
-            runOnUiThread(() -> appendLog("[Test 2] " + result + " (" + elapsed + "ms)"));
+            boolean passed = serverVerdict != null && serverVerdict.trim().equals("PASS");
+            appendLog("[Test " + testNumber + "] " + verdict(passed) + " (" + elapsed + "ms)");
         } catch (Exception exception) {
+            appendLog("[Test " + testNumber + "] FAIL: " + exception.getMessage()
+                    + " (" + elapsed(startTime) + "ms)");
+        }
+    }
+
+    // ── Test 3: Empty message ────────────────────────────────────────────
+
+    private void runEmptyMessageTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[Test 3] Empty Message: opening channel...");
+
+        try {
+            TauSyncStream stream = tauSync.connect("test_empty_msg");
+
+            stream.writeString("\n");
+            String reply = stream.readLine();
+            stream.close();
+
             long elapsed = System.currentTimeMillis() - startTime;
-            runOnUiThread(() -> appendLog("[Test 2] FAIL: " + exception.getMessage() + " (" + elapsed + "ms)"));
+            boolean passed = "".equals(reply);
+            appendLog("[Test 3] " + verdict(passed) + " (" + elapsed + "ms)"
+                    + (passed ? "" : "  expected='' got='" + reply + "'"));
+        } catch (Exception exception) {
+            appendLog("[Test 3] FAIL: " + exception.getMessage()
+                    + " (" + elapsed(startTime) + "ms)");
+        }
+    }
+
+    // ── Test 4: Unicode round-trip ───────────────────────────────────────
+
+    private void runUnicodeRoundTripTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[Test 4] Unicode: opening channel...");
+
+        try {
+            TauSyncStream stream = tauSync.connect("test_unicode");
+
+            String unicodePayload = stream.readLine();
+            if (unicodePayload == null) throw new Exception("EOF before unicode payload");
+            appendLog("[Test 4] Received: " + unicodePayload);
+
+            stream.writeString(unicodePayload + "\n");
+
+            String serverVerdict = stream.readLine();
+            stream.close();
+
+            long elapsed = System.currentTimeMillis() - startTime;
+            boolean passed = serverVerdict != null && serverVerdict.trim().equals("PASS");
+            appendLog("[Test 4] " + verdict(passed) + " (" + elapsed + "ms)");
+        } catch (Exception exception) {
+            appendLog("[Test 4] FAIL: " + exception.getMessage()
+                    + " (" + elapsed(startTime) + "ms)");
+        }
+    }
+
+    // ── Test 6: Rapid burst ──────────────────────────────────────────────
+
+    private void runRapidBurstTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[Test 6] Rapid Burst: opening channel...");
+
+        try {
+            TauSyncStream stream = tauSync.connect("test_burst");
+
+            String countLine = stream.readLine();
+            if (countLine == null) throw new Exception("EOF before count header");
+            int expectedCount = Integer.parseInt(countLine.trim());
+            appendLog("[Test 6] Expecting " + expectedCount + " messages...");
+
+            int receivedCount = 0;
+            for (int i = 0; i < expectedCount; i++) {
+                String line = stream.readLine();
+                if (line == null) break;
+                receivedCount++;
+            }
+
+            stream.writeString(receivedCount + "\n");
+
+            String serverVerdict = stream.readLine();
+            stream.close();
+
+            long elapsed = System.currentTimeMillis() - startTime;
+            boolean passed = serverVerdict != null && serverVerdict.trim().equals("PASS");
+            appendLog("[Test 6] " + verdict(passed) + " (" + elapsed + "ms)"
+                    + "  received=" + receivedCount + "/" + expectedCount);
+        } catch (Exception exception) {
+            appendLog("[Test 6] FAIL: " + exception.getMessage()
+                    + " (" + elapsed(startTime) + "ms)");
+        }
+    }
+
+    // ── Test 7: Concurrent channels ──────────────────────────────────────
+
+    private void runConcurrentChannelsTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[Test 7] Concurrent Channels: opening A and B in parallel...");
+
+        AtomicBoolean channelAPassed = new AtomicBoolean(false);
+        AtomicBoolean channelBPassed = new AtomicBoolean(false);
+        CountDownLatch bothDone = new CountDownLatch(2);
+
+        backgroundExecutor.execute(() -> {
+            channelAPassed.set(runSingleChannelEcho("test_concurrent_a", "7a", "concurrent_A"));
+            bothDone.countDown();
+        });
+        backgroundExecutor.execute(() -> {
+            channelBPassed.set(runSingleChannelEcho("test_concurrent_b", "7b", "concurrent_B"));
+            bothDone.countDown();
+        });
+
+        try {
+            bothDone.await(30, TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {}
+
+        long elapsed = System.currentTimeMillis() - startTime;
+        boolean passed = channelAPassed.get() && channelBPassed.get();
+        appendLog("[Test 7] " + verdict(passed) + " (" + elapsed + "ms)");
+    }
+
+    private boolean runSingleChannelEcho(String channelName, String label, String payload) {
+        try {
+            TauSyncStream stream = tauSync.connect(channelName);
+            stream.writeString(payload + "\n");
+            String reply = stream.readLine();
+            stream.close();
+
+            boolean passed = payload.equals(reply);
+            appendLog("  [" + label + "] " + verdict(passed)
+                    + (passed ? "" : "  expected=" + payload + " got=" + reply));
+            return passed;
+        } catch (Exception exception) {
+            appendLog("  [" + label + "] FAIL: " + exception.getMessage());
+            return false;
+        }
+    }
+
+    // ── Test 8: Stream close / EOF detection ─────────────────────────────
+
+    private void runStreamCloseTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[Test 8] Stream Close: opening channel...");
+
+        try {
+            TauSyncStream stream = tauSync.connect("test_stream_close");
+
+            byte[] data = stream.readAll();
+            String content = new String(data, java.nio.charset.StandardCharsets.UTF_8);
+            stream.close();
+
+            long elapsed = System.currentTimeMillis() - startTime;
+            boolean passed = "CLOSE_TEST_DATA".equals(content);
+            appendLog("[Test 8] " + verdict(passed) + " (" + elapsed + "ms)"
+                    + (passed ? "  EOF detected correctly"
+                              : "  expected='CLOSE_TEST_DATA' got='" + content + "'"));
+        } catch (Exception exception) {
+            appendLog("[Test 8] FAIL: " + exception.getMessage()
+                    + " (" + elapsed(startTime) + "ms)");
         }
     }
 
@@ -442,6 +599,20 @@ public class TestTauSyncActivity extends AppCompatActivity {
         } catch (Exception exception) {
             return "error";
         }
+    }
+
+    private static String verdict(boolean passed) {
+        return passed ? "PASS" : "FAIL";
+    }
+
+    private static long elapsed(long startTime) {
+        return System.currentTimeMillis() - startTime;
+    }
+
+    private static String formatByteSize(int bytes) {
+        if (bytes >= 1_048_576) return (bytes / 1_048_576) + " MB";
+        if (bytes >= 1_024) return (bytes / 1_024) + " KB";
+        return bytes + " B";
     }
 
     private static String extractRootCauseMessage(Exception exception) {
