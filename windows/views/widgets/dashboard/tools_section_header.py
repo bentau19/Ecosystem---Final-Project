@@ -1,11 +1,13 @@
 from typing import Optional
 
+from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout
 
 from resources.colors import DashboardColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet
+from view_model.tool import ToolViewModel
 
 
 class ToolsSectionHeader(QWidget):
@@ -22,8 +24,12 @@ class ToolsSectionHeader(QWidget):
         self._title: QLabel
         self._tag: QLabel
 
+        self._tools_view_model: ToolViewModel = ToolViewModel()
+
         self._setup_ui()
         self._setup_style()
+        self._connect_signals()
+        self._tools_view_model.load_enabled_tools()
 
     def _setup_ui(self) -> None:
         """Set up the UI for the _tools section header."""
@@ -78,3 +84,20 @@ class ToolsSectionHeader(QWidget):
         """
         qss: str = load_stylesheet(DashboardStyles.TOOLS_SECTION_HEADER, [DashboardColors])
         self.setStyleSheet(qss)
+
+    def _connect_signals(self) -> None:
+        """Connect the signals for the _tools section header.
+
+        Connect the `tool_count_changed` signal of the `_tools_view_model`
+        to the `_update_tag` slot.
+        """
+        self._tools_view_model.tool_count_changed.connect(self._update_tag)
+
+    @Slot(int)
+    def _update_tag(self, count: int) -> None:
+        """Update the tag text with the tool count.
+
+        Args:
+            count (int): The count of tools.
+        """
+        self._tag.setText(f"{count} tools available")

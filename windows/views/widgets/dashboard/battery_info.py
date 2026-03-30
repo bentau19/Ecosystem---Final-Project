@@ -92,7 +92,7 @@ class BatteryInfo(QFrame):
         Returns:
             BatteryBar: A battery bar widget showing battery charge.
         """
-        bar = Bar(self._battery_percentage,QColor( BatteryBarColors.GRADIENT_START),QColor (
+        bar = Bar(self._battery_percentage,QColor(BatteryBarColors.GRADIENT_START),QColor (
             BatteryBarColors.GRADIENT_END))
         bar.setObjectName("batteryBar")
         return bar

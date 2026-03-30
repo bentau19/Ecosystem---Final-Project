@@ -1,6 +1,6 @@
 from typing import Optional
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel,
@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from resources.paths import Icons, Styles
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet
+from view_model.tool import ToolViewModel
 
 
 class Topbar(QWidget):
@@ -46,6 +47,7 @@ class Topbar(QWidget):
 
         self._setup_ui()
         self._setup_style()
+        self.setup_slots()
 
     def _setup_ui(self) -> None:
         """Configure the widget and build the UI."""
@@ -63,7 +65,7 @@ class Topbar(QWidget):
         """Arrange child widgets in the topbar layout."""
         layout: QHBoxLayout = QHBoxLayout(self)
         layout.setContentsMargins(Spacing.XXL, Spacing.NONE, Spacing.XXL, Spacing.NONE)
-        layout.setSpacing(Spacing.NONE)
+        layout.setSpacing(Spacing.MD)
         layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(self._title_block)
@@ -113,3 +115,12 @@ class Topbar(QWidget):
         """Load and apply the QSS stylesheet to the topbar."""
         qss: str = load_stylesheet(Styles.TOPBAR)
         self.setStyleSheet(qss)
+
+    def setup_slots(self):
+        self._disconnect_button.clicked.connect(self._disconnect_from_current_device)
+
+    @Slot()
+    def _disconnect_from_current_device(self):
+        print("Disconnecting from current phone...")
+        # TODO: navigate to login view using navigation stack, e.c need the login view first
+        pass

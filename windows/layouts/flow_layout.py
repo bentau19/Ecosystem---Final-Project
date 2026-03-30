@@ -83,7 +83,7 @@ class FlowLayout(QLayout):
         Returns:
             Qt.Orientation: The directions in which the layout expands.
         """
-        return Qt.Orientation.Horizontal
+        return Qt.Orientation(0)
 
     def hasHeightForWidth(self) -> bool:
         """
@@ -161,6 +161,9 @@ class FlowLayout(QLayout):
         Returns:
             int: The height of the layout.
         """
+        if not self._item_list:
+            return 0
+
         # Get the margins of the layout
         margins: QMargins = self.contentsMargins()
         # Calculate the effective layout rectangle (after subtracting margins)

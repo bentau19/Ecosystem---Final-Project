@@ -1,17 +1,15 @@
 from typing import List, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import QLabel, QWidget
 
-from controller.tool_detail import ToolDetailController
-from data_classes.tool_detail import ToolDetail
+from dto.tool import ToolDTO
 from layouts.flow_layout import FlowLayout
-from models.tool_detail import ToolDetailModel
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from utils.app_state import app_state
 from utils.styles import load_stylesheet
+from view_model.tool import ToolViewModel
 from views.widgets.dashboard.tool_card import ToolCard
 
 
@@ -40,35 +38,27 @@ class ToolsGrid(QWidget):
 
         self._active_tools: List[ToolCard] = []
 
-        self._tools_controller: ToolDetailController = ToolDetailController(view=self, model=ToolDetailModel(
-            app_state.tools_repository))
+        self._tool_view_model: ToolViewModel = ToolViewModel()
+        self._main_layout: FlowLayout
 
         self._setup_ui()
         self._setup_style()
+        self._connect_signals()
+        self._tool_view_model.load_enabled_tools()
 
     def _setup_ui(self) -> None:
         """
         Set up the user interface.
         """
-        self._create_widgets()
         self._create_layout()
-
-    def _create_widgets(self) -> None:
-        """
-        Create all child widgets for the tools grid.
-        """
-        self._tools_controller.load_active_tools()
 
     def _create_layout(self) -> None:
         """
         Create the layout for the tools grid.
         """
-        layout: FlowLayout = FlowLayout(min_width=self._card_width, parent=self)
-        layout.setContentsMargins(Spacing.NONE, Spacing.SM, Spacing.NONE, Spacing.NONE)
-        layout.setSpacing(Spacing.LG)
-
-        for tool in self._active_tools:
-            layout.addWidget(tool)
+        self._main_layout = FlowLayout(min_width=self._card_width, parent=self)
+        self._main_layout.setContentsMargins(Spacing.NONE, Spacing.SM, Spacing.NONE, Spacing.NONE)
+        self._main_layout.setSpacing(Spacing.LG)
 
     @staticmethod
     def _create_description_widget(text: str) -> QLabel:
@@ -94,7 +84,15 @@ class ToolsGrid(QWidget):
         qss: str = load_stylesheet(DashboardStyles.TOOLS_GRID)
         self.setStyleSheet(qss)
 
-    def update_tools_list(self, tools: List[ToolDetail]) -> None:
+    def _connect_signals(self):
+        # TODO: setup signals on changed tool,added deleted if needed
+        # self._tool_view_model.tool_updated.connect(self._on_tool_updated)
+        # self._tool_view_model.tool_added.connect(self._on_tool_added)
+        # self._tool_view_model.tool_deleted.connect(self._on_tool_deleted)
+        self._tool_view_model.tools_loaded.connect(self._load_tools)
+
+    @Slot(list)
+    def _load_tools(self, tools: List[ToolDTO]) -> None:
         """
         Update the list of active tools.
 
@@ -108,4 +106,4 @@ class ToolsGrid(QWidget):
             )
             tool_card.setMinimumWidth(self._card_width)
             tool_card.setFixedHeight(self._card_height)
-            self._active_tools.append(tool_card)
+            self._main_layout.addWidget(tool_card)

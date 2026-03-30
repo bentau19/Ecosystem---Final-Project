@@ -1,25 +1,18 @@
 from typing import List, Optional
 
+from PySide6.QtCore import Slot
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QLabel,
-    QSizePolicy,
     QVBoxLayout,
-    QWidget,
-)
+    QWidget, )
 
-from controller.phone_detail import PhoneDetailController
-from data_classes.phone_detail import (
-    BatteryDetail,
-    DeviceInfoDetail,
-    StorageDetail,
-)
+from dto.device_info import DeviceBatteryInfoDTO, DeviceGeneralInfoDTO, DeviceStorageInfoDTO, DeviceBaseInfoDTO
 from layouts.flow_layout import FlowLayout
-from models.phone_detail import PhoneDetailModel
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from utils.app_state import app_state
 from utils.styles import load_stylesheet
+from view_model.device_info import DeviceViewModel
 from views.widgets.dashboard.battery_info import BatteryInfo
 from views.widgets.dashboard.info_card import InfoCard
 from views.widgets.dashboard.storage_info import StorageInfo
@@ -44,13 +37,17 @@ class PhoneDetailsRow(QWidget):
         self._card_width: int = card_width
         self._card_height: int = card_height
 
-        self._controller: PhoneDetailController = PhoneDetailController(view=self, model=PhoneDetailModel(
-            app_state.phone_repository))
+        self._device_info_view_model: DeviceViewModel = DeviceViewModel()
+
+        self._main_layout: FlowLayout
 
         self._cards: List[InfoCard] = []
 
         self._setup_ui()
         self._setup_style()
+        self._setup_signals()
+
+        self._device_info_view_model.load_device_infos()
 
     def _setup_ui(self) -> None:
         """Set up the user interface."""
@@ -59,26 +56,12 @@ class PhoneDetailsRow(QWidget):
 
     def _create_widgets(self) -> None:
         """Create all child widgets for the device status row."""
-        for card in self._controller.fetch_phones_details():
-            if isinstance(card, BatteryDetail):
-                self._cards.append(self._create_battery(card))
-            elif isinstance(card, StorageDetail):
-                self._cards.append(self._create_storage(card))
-            elif isinstance(card, DeviceInfoDetail):
-                self._cards.append(self._create_device_info(card))
-
-        for card in self._cards:
-            card.setSizePolicy(
-                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-            )
+        pass
 
     def _create_layout(self) -> None:
         """Create and configure the horizontal layout."""
-        layout: FlowLayout = FlowLayout(min_width=self._card_width, parent=self)
-        layout.setSpacing(Spacing.LG)
-
-        for card in self._cards:
-            layout.addWidget(card)
+        self._main_layout = FlowLayout(min_width=self._card_width, parent=self)
+        self._main_layout.setSpacing(Spacing.LG)
 
     @staticmethod
     def _create_title_description_widget(
@@ -110,7 +93,7 @@ class PhoneDetailsRow(QWidget):
 
         return widget
 
-    def _create_device_info(self, info: DeviceInfoDetail) -> InfoCard:
+    def _create_general_device_info(self, info: DeviceGeneralInfoDTO) -> InfoCard:
         """Create the device name.
 
         Args:
@@ -129,7 +112,7 @@ class PhoneDetailsRow(QWidget):
         card.setFixedHeight(self._card_height)
         return card
 
-    def _create_battery(self, battery: BatteryDetail) -> InfoCard:
+    def _create_battery(self, battery: DeviceBatteryInfoDTO) -> InfoCard:
         """Create the battery.
 
         Args:
@@ -149,7 +132,7 @@ class PhoneDetailsRow(QWidget):
         card.setFixedHeight(self._card_height)
         return card
 
-    def _create_storage(self, storage: StorageDetail) -> InfoCard:
+    def _create_storage(self, storage: DeviceStorageInfoDTO) -> InfoCard:
         """Create the storage.
 
         Args:
@@ -172,3 +155,22 @@ class PhoneDetailsRow(QWidget):
         """Apply the stylesheet to the widget."""
         qss: str = load_stylesheet(DashboardStyles.DEVICE_STATUS_ROW)
         self.setStyleSheet(qss)
+
+    def _setup_signals(self):
+        # TODO: setup signals on changed device info,added deleted if needed
+        self._device_info_view_model.device_infos_loaded.connect(self._on_device_infos_loaded)
+
+    @Slot(list)
+    def _on_device_infos_loaded(self, device_infos: List[DeviceBaseInfoDTO]) -> None:
+        """Handle the signal when device infos are loaded.
+
+        Args:
+            device_infos (List[DeviceBaseInfoDTO]): The list of device base info DTOs.
+        """
+        for device_info in device_infos:
+            if isinstance(device_info, DeviceBatteryInfoDTO):
+                self._main_layout.addWidget(self._create_battery(device_info))
+            if isinstance(device_info, DeviceStorageInfoDTO):
+                self._main_layout.addWidget(self._create_storage(device_info))
+            if isinstance(device_info, DeviceGeneralInfoDTO):
+                self._main_layout.addWidget(self._create_general_device_info(device_info))

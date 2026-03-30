@@ -1,11 +1,19 @@
-from repositories.phone_detail import PhoneDetailRepository
-from repositories.tool_detail import ToolDetailRepository
+from typing import Final
+from repositories.device_info import DeviceInfoRepository
+from repositories.tool import ToolRepository
 
 
 class AppState:
-    def __init__(self):
-        self.tools_repository = ToolDetailRepository()
-        self.phone_repository = PhoneDetailRepository()
+    """
+    Class representing the application state.
+    """
+
+    def __init__(self) -> None:
+        """
+        Initialize an instance of the AppState class.
+        """
+        self.tools_repository: Final[ToolRepository] = ToolRepository()
+        self.device_repository: Final[DeviceInfoRepository] = DeviceInfoRepository()
 
 
-app_state = AppState()
+app_state: Final[AppState] = AppState()
