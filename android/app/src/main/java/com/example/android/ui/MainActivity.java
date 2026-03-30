@@ -1,11 +1,17 @@
-package com.example.android;
+package com.example.android.ui;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.view.Window;
+import android.view.WindowManager;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 
+import com.example.android.R;
+import com.example.android.ui.fragments.ActionsFragment;
+import com.example.android.ui.fragments.ConnectFragment;
 import com.google.zxing.integration.android.IntentIntegrator;
 import com.google.zxing.integration.android.IntentResult;
 
@@ -14,71 +20,65 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // --- התאמת צבע הסטטוס-בר לעיצוב הכהה ---
+        Window window = getWindow();
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+        window.setStatusBarColor(ContextCompat.getColor(this, R.color.background_main));
+
         setContentView(R.layout.activity_main);
 
         if (savedInstanceState == null) {
-            // טעינת מסך החיבור כברירת מחדל
+            // טעינת מסך החיבור כברירת מחדל עם הגנה מקריסה
             getSupportFragmentManager().beginTransaction()
                     .replace(R.id.fragment_container, new ConnectFragment())
-                    .commit();
+                    .commitAllowingStateLoss();
         }
     }
 
     public void processScannedData(String data) {
-        // מעבר למסך הפעולות
+        // מעבר למסך הפעולות (Dashboard) עם הנתונים שנסרקו
         getSupportFragmentManager().beginTransaction()
+                .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out) // אנימציה חלקה
                 .replace(R.id.fragment_container, ActionsFragment.newInstance(data))
                 .commitAllowingStateLoss();
     }
 
     public void disconnect() {
-        // חזרה למסך החיבור
+        // חזרה למסך החיבור (Welcome)
         getSupportFragmentManager().beginTransaction()
+                .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out) // אנימציה חלקה
                 .replace(R.id.fragment_container, new ConnectFragment())
                 .commitAllowingStateLoss();
+
+        Toast.makeText(this, "Disconnected from PC", Toast.LENGTH_SHORT).show();
     }
 
-    void handleConnection() {
-
+    public void handleConnection() {
         IntentIntegrator integrator = new IntentIntegrator(this);
-
-        integrator.setDesiredBarcodeFormats(IntentIntegrator.QR_CODE); // רק קודי QR
-
-        integrator.setPrompt("Scan the QR Code on your PC");
-
-        integrator.setCameraId(0); // מצלמה אחורית
-
+        integrator.setDesiredBarcodeFormats(IntentIntegrator.QR_CODE);
+        integrator.setPrompt("Scan the PC Dashboard QR Code");
+        integrator.setCameraId(0);
         integrator.setBeepEnabled(true);
-
         integrator.setBarcodeImageEnabled(true);
-
-        integrator.setOrientationLocked(true); // לא יסובב אוטומטית את המצלמה
-
+        integrator.setOrientationLocked(true);
         integrator.initiateScan();
-
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        // פענוח התוצאה שהגיעה מהסורק
         IntentResult result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
 
         if (result != null) {
             if (result.getContents() == null) {
-                // המשתמש יצא מהמצלמה בלי לסרוק
                 Toast.makeText(this, "Scan Cancelled", Toast.LENGTH_LONG).show();
             } else {
-                // הצלחה! כאן אנחנו מקבלים את הטקסט מה-QR
                 String scannedData = result.getContents();
-
-                // עכשיו אנחנו קוראים לפונקציה שכבר כתבת שעוברת לפרגמנט הפעולות
                 processScannedData(scannedData);
-
                 Toast.makeText(this, "Connected successfully!", Toast.LENGTH_SHORT).show();
             }
         } else {
             super.onActivityResult(requestCode, resultCode, data);
         }
     }
-
 }

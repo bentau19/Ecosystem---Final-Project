@@ -1,4 +1,4 @@
-package com.example.android;
+package com.example.android.ui.fragments;
 
 import android.os.Bundle;
 import android.view.LayoutInflater;
@@ -8,8 +8,8 @@ import android.widget.Button;
 
 import androidx.fragment.app.Fragment;
 
-import com.example.android.MainActivity;
 import com.example.android.R;
+import com.example.android.ui.MainActivity;
 
 public class ConnectFragment extends Fragment {
     @Override
