@@ -9,5 +9,6 @@
     <color name="status_green">#00E676</color>
 
     <color name="text_primary">#F0F2F8</color>
+    <color name="white">#FFFFFF</color>
     <color name="text_muted">#6B7280</color>
 </resources>

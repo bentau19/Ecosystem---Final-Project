@@ -5,18 +5,20 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/background_main"> <TextView
-    android:id="@+id/dashboardTitle"
-    android:layout_width="wrap_content"
-    android:layout_height="wrap_content"
-    android:layout_marginStart="24dp"
-    android:layout_marginTop="32dp"
-    android:text="Dashboard"
-    android:textColor="@color/text_primary"
-    android:textSize="28sp"
-    android:textStyle="bold"
-    app:layout_constraintStart_toStartOf="parent"
-    app:layout_constraintTop_toTopOf="parent" />
+    android:background="@color/background_main">
+
+    <TextView
+        android:id="@+id/dashboardTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="32dp"
+        android:text="Dashboard"
+        android:textColor="@color/text_primary"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
 
     <LinearLayout
         android:id="@+id/statusLayout"
@@ -40,7 +42,7 @@
             android:id="@+id/statusText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Connected via WiFi"
+            android:text="Connected"
             android:textColor="@color/status_green"
             android:textSize="14sp" />
 
@@ -51,7 +53,17 @@
             android:layout_marginStart="8dp"
             android:textColor="@color/text_muted"
             android:textSize="14sp"
-            tools:text="— Samsung Galaxy S23" />
+            tools:text="— Samsung Galaxy" />
+
+        <TextView
+            android:id="@+id/batteryText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:textColor="@color/accent_cyan"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            tools:text="85%" />
     </LinearLayout>
 
     <androidx.gridlayout.widget.GridLayout
@@ -70,28 +82,23 @@
             app:layout_columnWeight="1"
             app:cardBackgroundColor="@color/surface_dark"
             app:cardCornerRadius="16dp"
-            app:cardElevation="0dp"
+            app:cardElevation="2dp"
             android:layout_margin="8dp">
-
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:gravity="center"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-
+                android:orientation="vertical">
                 <ImageView
                     android:layout_width="40dp"
                     android:layout_height="40dp"
-                    android:src="@drawable/ic_camera"
+                    android:src="@drawable/ic_backup"
                     app:tint="@color/accent_cyan" />
-
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:text="File Transfer"
+                    android:text="Backup Files"
                     android:textColor="@color/text_primary"
                     android:textStyle="bold" />
             </LinearLayout>
@@ -104,27 +111,23 @@
             app:layout_columnWeight="1"
             app:cardBackgroundColor="@color/surface_dark"
             app:cardCornerRadius="16dp"
-            app:cardElevation="0dp"
+            app:cardElevation="2dp"
             android:layout_margin="8dp">
-
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:gravity="center"
-                android:orientation="vertical"
-                android:padding="16dp">
-
+                android:orientation="vertical">
                 <ImageView
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:src="@drawable/ic_camera"
                     app:tint="@color/accent_purple" />
-
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:text="Camera Mirror"
+                    android:text="Phone Camera on PC"
                     android:textColor="@color/text_primary"
                     android:textStyle="bold" />
             </LinearLayout>
@@ -137,24 +140,18 @@
             app:layout_columnWeight="1"
             app:cardBackgroundColor="@color/surface_dark"
             app:cardCornerRadius="16dp"
-            app:cardElevation="0dp"
+            app:cardElevation="2dp"
             android:layout_margin="8dp">
-            app:cardStrokeColor="@color/border_color"
-            app:cardStrokeWidth="1dp">
-
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:gravity="center"
-                android:orientation="vertical"
-                android:padding="16dp">
-
+                android:orientation="vertical">
                 <ImageView
                     android:layout_width="40dp"
                     android:layout_height="40dp"
-                    android:src="@drawable/ic_camera"
+                    android:src="@drawable/ic_security"
                     app:tint="@color/accent_pink" />
-
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -172,22 +169,18 @@
             app:layout_columnWeight="1"
             app:cardBackgroundColor="@color/surface_dark"
             app:cardCornerRadius="16dp"
-            app:cardElevation="0dp"
+            app:cardElevation="2dp"
             android:layout_margin="8dp">
-
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:gravity="center"
-                android:orientation="vertical"
-                android:padding="16dp">
-
+                android:orientation="vertical">
                 <ImageView
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:src="@drawable/ic_settings"
-                    app:tint="@color/text_muted" />
-
+                    app:tint="@color/white" />
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -206,7 +199,7 @@
         android:layout_height="wrap_content"
         android:layout_marginBottom="32dp"
         android:background="@drawable/red_button_shape"
-        android:paddingHorizontal="24dp"
+        android:paddingHorizontal="32dp"
         android:text="Disconnect"
         android:textAllCaps="false"
         android:textColor="#FFFFFF"

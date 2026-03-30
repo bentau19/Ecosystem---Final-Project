@@ -10,73 +10,89 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.cardview.widget.CardView; // ייבוא חדש וחשוב!
+import androidx.cardview.widget.CardView;
 import androidx.fragment.app.Fragment;
+import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.R;
 import com.example.android.ui.MainActivity;
+import com.example.android.ui.viewmodel.MainViewModel;
 
 public class ActionsFragment extends Fragment {
-    private String deviceName;
 
-    public static ActionsFragment newInstance(String deviceName) {
-        ActionsFragment fragment = new ActionsFragment();
-        Bundle args = new Bundle();
-        args.putString("device_name", deviceName);
-        fragment.setArguments(args);
-        return fragment;
-    }
-
-    @Override
-    public void onCreate(@Nullable Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        if (getArguments() != null) {
-            deviceName = getArguments().getString("device_name");
-        }
-    }
+    private MainViewModel viewModel;
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
-        // טעינת ה-XML המעודכן עם ה-Cards והצבעים הכהים
         View view = inflater.inflate(R.layout.fragment_actions, container, false);
 
-        // --- עדכון שם המכשיר בסטטוס ---
+        // 1. חיבור ל-ViewModel המשותף (Shared ViewModel)
+        // שימי לב לשימוש ב-requireActivity() - זה מה שמאפשר לכולם לראות את אותו מידע
+        viewModel = new ViewModelProvider(requireActivity()).get(MainViewModel.class);
+
+        // 2. הגדרת ה-Views
         TextView deviceNameText = view.findViewById(R.id.deviceNameText);
-        if (deviceName != null && !deviceName.isEmpty()) {
-            deviceNameText.setText("— " + deviceName);
-        }
+        TextView statusText = view.findViewById(R.id.statusText);
+        View statusDot = view.findViewById(R.id.statusDot);
+        TextView batteryText = view.findViewById(R.id.batteryText);
 
-        // --- הגדרת ה-CardViews (במקום Buttons) ---
+        // 3. ה-Observer: כאן קורה הקסם הדינמי!
+        viewModel.getDeviceInfo().observe(getViewLifecycleOwner(), info -> {
+            if (info != null) {
+                // עדכון שם המחשב המחובר
+                deviceNameText.setText("— " + info.getPcName());
 
-        CardView cardBackup = view.findViewById(R.id.cardBackup);
-        cardBackup.setOnClickListener(v -> {
-            Toast.makeText(getContext(), "Starting File Transfer...", Toast.LENGTH_SHORT).show();
-            // כאן תבוא הלוגיקה של שליחת קבצים למחשב
+                // עדכון סטטוס החיבור וה-IP
+                if (info.getIsConnected()) {
+                    statusText.setText("Connected via " + info.getConnectionType() + " (" + info.getIpAddress() + ")");
+                    statusDot.setBackgroundResource(R.drawable.green_dot);
+                    enableActions(view, true); // פונקציית עזר להפעלת הכפתורים
+                } else {
+                    statusText.setText("Disconnected");
+                    statusDot.setBackgroundResource(R.drawable.red_dot);
+                    enableActions(view, false); // כיבוי הכפתורים כשאין חיבור
+                }
+
+
+                // בונוס: אפשר להוסיף כאן לוגיקה לסוללה אם יש לך TextView מתאים
+                batteryText.setText(info.getBatteryLevel() + "%");
+            }
         });
 
-        CardView cardCamera = view.findViewById(R.id.cardCamera);
-        cardCamera.setOnClickListener(v -> {
-            Toast.makeText(getContext(), "Opening Camera Mirror...", Toast.LENGTH_SHORT).show();
-        });
+        // --- הגדרת ה-CardViews ---
+        setupClickListeners(view);
 
-        CardView cardAntivirus = view.findViewById(R.id.cardAntivirus);
-        cardAntivirus.setOnClickListener(v -> {
-            Toast.makeText(getContext(), "Scanning with PC Antivirus...", Toast.LENGTH_SHORT).show();
-        });
+        return view;
+    }
 
-        CardView cardSettings = view.findViewById(R.id.cardSettings);
-        cardSettings.setOnClickListener(v -> {
-            Toast.makeText(getContext(), "Opening Settings...", Toast.LENGTH_SHORT).show();
-        });
+    private void setupClickListeners(View view) {
+        view.findViewById(R.id.cardBackup).setOnClickListener(v ->
+                Toast.makeText(getContext(), "Starting File Transfer...", Toast.LENGTH_SHORT).show());
 
-        // --- כפתור הניתוק (נשאר Button רגיל ב-XML שלנו) ---
-        Button btnDisconnect = view.findViewById(R.id.btnDisconnect);
-        btnDisconnect.setOnClickListener(v -> {
+        view.findViewById(R.id.cardCamera).setOnClickListener(v ->
+                Toast.makeText(getContext(), "Opening Camera Mirror...", Toast.LENGTH_SHORT).show());
+
+        view.findViewById(R.id.cardAntivirus).setOnClickListener(v ->
+                Toast.makeText(getContext(), "Scanning with PC Antivirus...", Toast.LENGTH_SHORT).show());
+
+        view.findViewById(R.id.cardSettings).setOnClickListener(v ->
+                Toast.makeText(getContext(), "Opening Settings...", Toast.LENGTH_SHORT).show());
+
+        view.findViewById(R.id.btnDisconnect).setOnClickListener(v -> {
             if (getActivity() instanceof MainActivity) {
                 ((MainActivity) getActivity()).disconnect();
             }
         });
+    }
 
-        return view;
+    // פונקציית עזר שגורמת לאפליקציה להיראות מקצועית:
+    // כשהטלפון לא מחובר, הכפתורים הופכים לחצי שקופים ולא ניתנים ללחיצה
+    private void enableActions(View view, boolean enabled) {
+        float alpha = enabled ? 1.0f : 0.5f;
+        view.findViewById(R.id.cardBackup).setAlpha(alpha);
+        view.findViewById(R.id.cardBackup).setEnabled(enabled);
+        view.findViewById(R.id.cardAntivirus).setAlpha(alpha);
+        view.findViewById(R.id.cardAntivirus).setEnabled(enabled);
+        // ... וכן הלאה לשאר הכרטיסיות
     }
 }
