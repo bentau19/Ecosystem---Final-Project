@@ -29,7 +29,7 @@ _GCHandleType = None
 _ConnectionManagerCls = None
 
 _DEFAULT_DLL_RELATIVE = os.path.join(
-    "TauSync", "windows", "TauSync.Lib",
+    "TauSync", "Tausync_Windows", "TauSync.Lib",
     "bin", "Debug", "net8.0", "TauSync.Lib.dll",
 )
 

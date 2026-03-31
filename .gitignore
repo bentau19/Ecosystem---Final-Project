@@ -5,7 +5,7 @@
 
 # --- החרגה (Whitelist) של ה-DLL הספציפי למנוע ---
 # אנחנו מאפשרים ל-Git לעקוב אחרי הקובץ הזה למרות שהוא בתוך תיקיית bin
-!TauSync/windows/TauSync.Lib/bin/Debug/net8.0/TauSync.Lib.dll
+!TauSync/Tausync_Windows/TauSync.Lib/bin/Debug/net8.0/TauSync.Lib.dll
 
 # קבצי הגדרות אישיים של Visual Studio / Cursor
 .vs/
