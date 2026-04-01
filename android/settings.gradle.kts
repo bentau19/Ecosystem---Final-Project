@@ -22,4 +22,4 @@ dependencyResolutionManagement {
 rootProject.name = "android"
 include(":app")
 include(":tausync-lib")
-project(":tausync-lib").projectDir = File(settingsDir, "../TauSync/android/tausync-lib")
+project(":tausync-lib").projectDir = File(settingsDir, "../TauSync/Tausync_Android/tausync-lib")

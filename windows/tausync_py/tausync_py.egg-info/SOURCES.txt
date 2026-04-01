@@ -1,0 +1,9 @@
+pyproject.toml
+tausync_py/README.md
+tausync_py/__init__.py
+tausync_py/_core.py
+tausync_py.egg-info/PKG-INFO
+tausync_py.egg-info/SOURCES.txt
+tausync_py.egg-info/dependency_links.txt
+tausync_py.egg-info/requires.txt
+tausync_py.egg-info/top_level.txt

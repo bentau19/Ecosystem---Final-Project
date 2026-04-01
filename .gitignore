@@ -5,7 +5,7 @@
 
 # --- החרגה (Whitelist) של ה-DLL הספציפי למנוע ---
 # אנחנו מאפשרים ל-Git לעקוב אחרי הקובץ הזה למרות שהוא בתוך תיקיית bin
-!TauSync/windows/TauSync.Lib/bin/Debug/net8.0/TauSync.Lib.dll
+!TauSync/Tausync_Windows/TauSync.Lib/bin/Debug/net8.0/TauSync.Lib.dll
 
 # קבצי הגדרות אישיים של Visual Studio / Cursor
 .vs/
@@ -13,7 +13,8 @@
 *.userosscache
 *.sln.docstates
 *.suo
-
+*.jpg
+*.png
 ### --- Python Specific --- ###
 __pycache__/
 *.py[cod]
@@ -23,7 +24,9 @@ env/
 # קבצי הגדרות של ספריות וסביבה
 .env
 .pytest_cache/
-
+CLAUDE.md
+settings.local.json
+results.json
 ### --- Android Specific --- ###
 # תוצרי בנייה של Gradle
 .gradle/
@@ -35,7 +38,7 @@ local.properties
 *.apk
 *.jks
 *.aar
-
+*bat
 ### --- IDEs & OS Specific --- ###
 .idea/
 .vscode/
