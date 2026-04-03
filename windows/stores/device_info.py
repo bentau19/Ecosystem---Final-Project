@@ -46,7 +46,5 @@ class DeviceInfoStore(IStore[Dict[DeviceType, DeviceBaseInfoEntity], Dict[Device
             data: The device info data to save.
         """
         with open(self._json_path, "w") as f:
-            print("Saving device info data to JSON file...")
             serialized_data = self._serializer.serialize(data)
-            print(serialized_data)
             json.dump(serialized_data, f, indent=2)

@@ -12,7 +12,7 @@ from layouts.flow_layout import FlowLayout
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet
-from view_model.device_info import DeviceViewModel
+from viewmodels.device_info import DeviceInfoViewModel
 from views.widgets.dashboard.battery_info import BatteryInfo
 from views.widgets.dashboard.info_card import InfoCard
 from views.widgets.dashboard.storage_info import StorageInfo
@@ -37,7 +37,7 @@ class PhoneDetailsRow(QWidget):
         self._card_width: int = card_width
         self._card_height: int = card_height
 
-        self._device_info_view_model: DeviceViewModel = DeviceViewModel()
+        self._device_info_view_model: DeviceInfoViewModel = DeviceInfoViewModel()
 
         self._main_layout: FlowLayout
 

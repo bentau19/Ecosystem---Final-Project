@@ -44,6 +44,4 @@ class ToolStore(IStore[Dict[str, ToolEntity], Dict[str, ToolEntity]]):
             data: The tool information to save.
         """
         with open(self._json_path, "w") as f:
-            print("Saving tool information to JSON file...")
-            print(self._serializer.serialize(data))
             json.dump(self._serializer.serialize(data), f, indent=2)

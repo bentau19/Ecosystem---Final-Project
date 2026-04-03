@@ -9,7 +9,7 @@ from layouts.flow_layout import FlowLayout
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet
-from view_model.tool import ToolViewModel
+from viewmodels.tool import ToolViewModel
 from views.widgets.dashboard.tool_card import ToolCard
 
 

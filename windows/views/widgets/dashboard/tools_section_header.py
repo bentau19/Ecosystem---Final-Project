@@ -7,7 +7,7 @@ from resources.colors import DashboardColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet
-from view_model.tool import ToolViewModel
+from viewmodels.tool import ToolViewModel
 
 
 class ToolsSectionHeader(QWidget):

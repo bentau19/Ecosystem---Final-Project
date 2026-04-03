@@ -2,7 +2,9 @@ from typing import Dict, Optional
 
 from PySide6.QtCore import QObject, Signal
 
-from entities.device_info import DeviceBaseInfoEntity, DeviceType
+from dto.device_info import DeviceBaseInfoDTO, DeviceBatteryInfoDTO, DeviceStorageInfoDTO, DeviceGeneralInfoDTO
+from entities.device_info import DeviceBaseInfoEntity, DeviceType, DeviceBatteryInfoEntity, DeviceStorageInfoEntity, \
+    DeviceGeneralInfoEntity
 from repositories.interfaces.device_info import IDeviceInfoRepository
 from stores.device_info import DeviceInfoStore
 from stores.interfaces.base import IStore
@@ -54,7 +56,7 @@ class DeviceInfoRepository(IDeviceInfoRepository, QObject, metaclass=ABCQObjectM
         Returns:
             The device information with the given ID, or None if it does not exist.
         """
-        return self._data.get(id)
+        return self._data.get(id, None)
 
     def get_all(self) -> list[DeviceBaseInfoEntity]:
         """
@@ -74,8 +76,6 @@ class DeviceInfoRepository(IDeviceInfoRepository, QObject, metaclass=ABCQObjectM
         """
         if entity.type not in DeviceType:
             raise ValueError(f"Invalid device type: '{entity.type}'")
-        if entity.type in self._data:
-            raise ValueError(f"Device with title '{entity.title}' already exists.")
 
         self._data[entity.type] = entity
         self.device_info_saved.emit(entity)

@@ -96,7 +96,6 @@ class ToolViewModel(QObject):
         Args:
             id (str): The ID of the deleted tool.
         """
-        self.tool_deleted.emit(id)
         self._enabled_tools = [
             self._convert_to_dto(tool) for tool in self._repo.get_all_enabled()
         ]

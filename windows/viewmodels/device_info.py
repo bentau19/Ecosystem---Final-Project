@@ -7,7 +7,7 @@ from entities.device_info import DeviceBaseInfoEntity, DeviceBatteryInfoEntity, 
 from utils.app_state import app_state
 
 
-class DeviceViewModel(QObject):
+class DeviceInfoViewModel(QObject):
     """
     ViewModel for the DeviceView.
 
@@ -21,7 +21,7 @@ class DeviceViewModel(QObject):
 
     device_info_added: Signal = Signal(object)
 
-    device_info_deleted: Signal = Signal(DeviceType)
+    device_info_deleted: Signal = Signal(object)
 
     device_infos_loaded: Signal = Signal(list)
 
