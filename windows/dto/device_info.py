@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from enum import IntEnum
 
 from enums.device_type import DeviceType
 

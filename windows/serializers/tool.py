@@ -9,9 +9,6 @@ class ToolSerializer(ISerializer[Dict[str, ToolEntity], dict]):
     """
     Serializes and deserializes ToolEntity objects to and from dictionaries.
 
-    Attributes:
-        None
-
     Methods:
         serialize(data: Dict[str, ToolEntity]) -> dict:
             Serializes a dictionary of ToolEntity objects to a dictionary.

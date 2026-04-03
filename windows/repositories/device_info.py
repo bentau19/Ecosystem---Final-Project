@@ -2,9 +2,7 @@ from typing import Dict, Optional
 
 from PySide6.QtCore import QObject, Signal
 
-from dto.device_info import DeviceBaseInfoDTO, DeviceBatteryInfoDTO, DeviceStorageInfoDTO, DeviceGeneralInfoDTO
-from entities.device_info import DeviceBaseInfoEntity, DeviceType, DeviceBatteryInfoEntity, DeviceStorageInfoEntity, \
-    DeviceGeneralInfoEntity
+from entities.device_info import DeviceBaseInfoEntity, DeviceType
 from repositories.interfaces.device_info import IDeviceInfoRepository
 from stores.device_info import DeviceInfoStore
 from stores.interfaces.base import IStore
