@@ -1,4 +1,4 @@
-package com.example.android.models;
+package com.example.android.data.models;
 
 public class DeviceInfo {
     private String phoneName;       // שם הפלאפון שלך

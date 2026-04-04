@@ -4,19 +4,16 @@ import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
-import androidx.cardview.widget.CardView;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.R;
 import com.example.android.ui.MainActivity;
-import com.example.android.ui.viewmodel.MainViewModel;
+import com.example.android.viewmodel.MainViewModel;
 
 public class ActionsFragment extends Fragment {
 
@@ -40,7 +37,7 @@ public class ActionsFragment extends Fragment {
         viewModel.getDeviceInfo().observe(getViewLifecycleOwner(), info -> {
             if (info != null) {
                 // עדכון שם המחשב המחובר
-                deviceNameText.setText("— " + info.getPcName());
+                deviceNameText.setText(info.getPcName());
 
                 // עדכון סטטוס החיבור וה-IP
                 if (info.getIsConnected()) {

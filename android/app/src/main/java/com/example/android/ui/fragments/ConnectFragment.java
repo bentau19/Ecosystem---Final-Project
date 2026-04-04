@@ -8,13 +8,12 @@ import android.widget.Button;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.R;
 import com.example.android.ui.MainActivity;
-import com.example.android.ui.viewmodel.MainViewModel;
+import com.example.android.viewmodel.MainViewModel;
 
 public class ConnectFragment extends Fragment {
 
