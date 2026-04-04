@@ -11,7 +11,7 @@ from views.widgets.topbar import Topbar
 import resources_qrc  # noqa: F401
 
 
-class DashboardPage(QWidget):
+class DashboardScreen(QWidget):
     """Dashboard for the PhoneLink Dashboard."""
 
     def __init__(self) -> None:
@@ -53,6 +53,6 @@ class DashboardPage(QWidget):
 
 if __name__ == "__main__":
     app = QApplication([])
-    window = DashboardPage()
+    window = DashboardScreen()
     window.show()
     app.exec()
