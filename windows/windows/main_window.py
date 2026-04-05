@@ -1,6 +1,6 @@
-from PySide6.QtWidgets import QMainWindow, QWidget, QLabel
+from PySide6.QtWidgets import QMainWindow, QWidget
 
-from views.widgets.dashboard.dashboard_home import DashboardPage
+from views.screens.dashboard_screen import DashboardScreen
 
 
 class MainWindow(QMainWindow):
@@ -10,6 +10,6 @@ class MainWindow(QMainWindow):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.dashboard_page: DashboardPage = DashboardPage()
+        self.dashboard_page: DashboardScreen = DashboardScreen()
 
         self.setCentralWidget(self.dashboard_page)
