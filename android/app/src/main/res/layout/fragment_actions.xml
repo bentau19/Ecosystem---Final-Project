@@ -124,7 +124,7 @@
                     app:cardElevation="2dp">
                     <LinearLayout android:padding="16dp" android:gravity="center_vertical" android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent">
                         <TextView android:text="STORAGE" android:textColor="@color/text_muted" android:textSize="11sp" android:textStyle="bold" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-                        <TextView android:layout_marginTop="4dp" android:text="128/256 GB" android:textColor="@color/text_primary" android:textSize="18sp" android:textStyle="bold" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+                        <TextView android:id="@+id/storageText" android:layout_marginTop="4dp" android:text="128/256 GB" android:textColor="@color/text_primary" android:textSize="18sp" android:textStyle="bold" android:layout_width="wrap_content" android:layout_height="wrap_content" />
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
             </LinearLayout>

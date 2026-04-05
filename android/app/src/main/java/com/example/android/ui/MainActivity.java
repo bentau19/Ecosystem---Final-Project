@@ -26,44 +26,43 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // הגדרות תצוגה (סטטוס בר)
         setupStatusBar();
         setContentView(R.layout.activity_main);
 
-        // אתחול ה-ViewModel
+        // אתחול ה-ViewModel (שותף לכל הפרגמנטים)
         viewModel = new ViewModelProvider(this).get(MainViewModel.class);
 
-        // טעינת המסך הראשון
         if (savedInstanceState == null) {
             replaceFragment(new ConnectFragment());
         }
     }
 
-    // --- לוגיקת החיבור ---
-
     public void processScannedData(String qrData) {
-        // 1. ה-Activity רק מביאה את האחוז סוללה הנוכחי
-        int battery = getBatteryPercentage();
+        // פקודה אחת פשוטה - ה-ViewModel כבר יודע מה לעשות
+        boolean success = viewModel.handleConnectionFromQR(this, qrData);
 
-        // 2. במקום לבנות אובייקט DeviceInfo כאן, אנחנו רק שולחים ל-ViewModel פקודה: "תתחבר"
-        // ה-ViewModel יבנה את האובייקט בעצמו בתוך ה-Repository
-        viewModel.connectToDevice(qrData, battery);
-
-        // 3. ניווט
-        replaceFragment(new ActionsFragment());
+        if (success) {
+            // הצלחנו -> עוברים למסך הפעולות
+            replaceFragment(new ActionsFragment());
+            Toast.makeText(this, "Connected Successfully!", Toast.LENGTH_SHORT).show();
+        } else {
+            // נכשלנו -> נשארים במסך החיבור ומראים שגיאה
+            Toast.makeText(this, "Invalid QR Code. Please try again.", Toast.LENGTH_LONG).show();
+            // אין צורך ב-replaceFragment כי אנחנו כבר ב-ConnectFragment
+        }
     }
 
     public void disconnect() {
-        // ניווט חזרה
+        // ניווט חזרה למסך החיבור
         replaceFragment(new ConnectFragment());
 
-        // פקודת ניתוק ל-ViewModel
-        viewModel.disconnectFromDevice();
+        // פקודת ניתוק ב-ViewModel
+        viewModel.disconnectFromPc();
 
         Toast.makeText(this, "Disconnected from PC", Toast.LENGTH_SHORT).show();
     }
 
-    // --- פונקציות עזר (ניקיון קוד) ---
+    // --- פונקציות עזר (UI) ---
 
     private void replaceFragment(Fragment fragment) {
         getSupportFragmentManager().beginTransaction()
@@ -78,7 +77,7 @@ public class MainActivity extends AppCompatActivity {
         window.setStatusBarColor(ContextCompat.getColor(this, R.color.background_main));
     }
 
-    // --- QR Scanner (קוד של ספרייה חיצונית - נשאר כפי שהוא) ---
+    // --- QR Scanner (Zxing) ---
 
     public void handleConnection() {
         new IntentIntegrator(this)
@@ -97,10 +96,5 @@ public class MainActivity extends AppCompatActivity {
         } else {
             super.onActivityResult(requestCode, resultCode, data);
         }
-    }
-
-    private int getBatteryPercentage() {
-        android.os.BatteryManager bm = (android.os.BatteryManager) getSystemService(BATTERY_SERVICE);
-        return bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY);
     }
 }

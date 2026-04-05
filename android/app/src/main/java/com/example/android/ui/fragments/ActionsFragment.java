@@ -32,16 +32,18 @@ public class ActionsFragment extends Fragment {
         TextView statusText = view.findViewById(R.id.statusText);
         View statusDot = view.findViewById(R.id.statusDot);
         TextView batteryText = view.findViewById(R.id.batteryText);
+        TextView storageText = view.findViewById(R.id.storageText);
+
 
         // 3. ה-Observer: כאן קורה הקסם הדינמי!
         viewModel.getDeviceInfo().observe(getViewLifecycleOwner(), info -> {
             if (info != null) {
                 // עדכון שם המחשב המחובר
-                deviceNameText.setText(info.getPcName());
+                deviceNameText.setText(info.getRemoteInfo().getPcName());
 
                 // עדכון סטטוס החיבור וה-IP
-                if (info.getIsConnected()) {
-                    statusText.setText("Connected via " + info.getConnectionType() + " (" + info.getIpAddress() + ")");
+                if (info.isConnected()) {
+                    statusText.setText("Connected via " + info.getConnectionType() + " (" + info.getRemoteInfo().getPcIp() + ")");
                     statusDot.setBackgroundResource(R.drawable.green_dot);
                     enableActions(view, true); // פונקציית עזר להפעלת הכפתורים
                 } else {
@@ -52,7 +54,9 @@ public class ActionsFragment extends Fragment {
 
 
                 // בונוס: אפשר להוסיף כאן לוגיקה לסוללה אם יש לך TextView מתאים
-                batteryText.setText(info.getBatteryLevel() + "%");
+                batteryText.setText(info.getLocalStats().getBatteryLevel() + "%");
+                int storagePercent = info.getStoragePercent();
+                storageText.setText(storagePercent + "% Used");
             }
         });
 
@@ -90,6 +94,10 @@ public class ActionsFragment extends Fragment {
         view.findViewById(R.id.cardBackup).setEnabled(enabled);
         view.findViewById(R.id.cardAntivirus).setAlpha(alpha);
         view.findViewById(R.id.cardAntivirus).setEnabled(enabled);
+        view.findViewById(R.id.cardCamera).setAlpha(alpha);
+        view.findViewById(R.id.cardCamera).setEnabled(enabled);
+        view.findViewById(R.id.cardSettings).setAlpha(alpha);
+        view.findViewById(R.id.cardSettings).setEnabled(enabled);
         // ... וכן הלאה לשאר הכרטיסיות
     }
 }
