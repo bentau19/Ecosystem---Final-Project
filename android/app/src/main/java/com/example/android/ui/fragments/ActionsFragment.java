@@ -84,16 +84,20 @@ public class ActionsFragment extends Fragment {
         toolsRecyclerView = view.findViewById(R.id.toolsRecyclerView);
         toolsRecyclerView.setLayoutManager(new LinearLayoutManager(getContext()));
 
-        // יצירת רשימת הכלים (הנתונים)
         List<ToolItem> toolList = new ArrayList<>();
         toolList.add(new ToolItem("backup", "File Backup", R.drawable.ic_backup));
         toolList.add(new ToolItem("camera", "Camera Mirror", R.drawable.ic_camera));
         toolList.add(new ToolItem("security", "Antivirus Scan", R.drawable.ic_security));
 
-        // הגדרת האדפטר עם המאזין ללחיצות
         toolsAdapter = new ToolsAdapter(toolList, tool -> {
-            // טיפול בלחיצות לפי ה-ID של הכלי
-            handleToolClick(tool.getId());
+            // התיקון כאן: בודקים ב-ViewModel אם המכשיר באמת מחובר
+            if (viewModel.getDeviceInfo().getValue() != null &&
+                    viewModel.getDeviceInfo().getValue().isConnected()) {
+                handleToolClick(tool.getId());
+            } else {
+                // אפשר להוסיף הודעה קטנה אם רוצים
+                Toast.makeText(getContext(), "Connect to PC first", Toast.LENGTH_SHORT).show();
+            }
         });
 
         toolsRecyclerView.setAdapter(toolsAdapter);
