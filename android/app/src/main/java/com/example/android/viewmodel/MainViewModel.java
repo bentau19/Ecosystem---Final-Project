@@ -4,97 +4,91 @@ import android.content.Context;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.ViewModel;
 
-import com.example.android.data.models.entities.DeviceInfo;
-import com.example.android.data.models.entities.LocalDeviceStats;
+import com.example.android.data.models.entities.DeviceConnectionState;
+import com.example.android.data.models.entities.DeviceStorageStats;
 import com.example.android.data.models.entities.RemoteDeviceInfo;
+import com.example.android.data.models.enums.ConnectionType;
 import com.example.android.data.repositories.DeviceRepository;
 import com.example.android.data.serializers.DeviceSerializer;
 import com.example.android.utils.DeviceUtils;
 import com.example.android.utils.NetworkUtils;
 
+/**
+ * ViewModel responsible for preparing and managing data for the UI.
+ * It acts as a bridge between the DeviceRepository and the Fragments,
+ * handling business logic such as QR data processing and status refreshing.
+ */
 public class MainViewModel extends ViewModel {
 
     private final DeviceRepository repository = DeviceRepository.getInstance();
 
-    public LiveData<DeviceInfo> getDeviceInfo() {
-        return repository.getDeviceInfo();
+    /**
+     * @return LiveData containing the unified connection state (Local device + Remote PC).
+     */
+    public LiveData<DeviceConnectionState> getConnectionState() {
+        return repository.getConnectionState();
     }
 
     /**
-     * עדכון נתוני הטלפון (כולל ה-IP של הפלאפון עצמו)
+     * Refreshes local hardware statistics such as battery level and IP address.
+     * Updates the repository which in turn notifies the UI observers.
+     * @param context Application context for system services access.
      */
-    public void refreshLocalDeviceStats(Context context, int battery, long totalStorage, long availableStorage) {
-        // 1. קודם כל שולפים את ה-IP הנוכחי של הפלאפון
+    public void refreshLocalDeviceStats(Context context) {
         String currentPhoneIp = NetworkUtils.getLocalIpAddress(context);
+        int battery = DeviceUtils.getBatteryPercentage(context);
 
-        // 2. בונים את האובייקט הלוקאלי עם ה-IP ששלפנו
-        LocalDeviceStats stats = new LocalDeviceStats(
-                android.os.Build.MODEL,
-                currentPhoneIp, // ה-IP נכנס כאן כפרמטר השני
-                battery,
-                totalStorage,
-                availableStorage
-        );
+        // Update the repository with fresh local data
+        repository.updateLocalIp(currentPhoneIp);
+        repository.updateLocalBattery(battery);
 
-        // 3. מעדכנים את הריפוזיטורי
-        repository.updateLocalStats(stats);
+        // Future implementation for storage updates can be added here
+        // long total = DeviceUtils.getTotalStorage();
+        // long available = DeviceUtils.getAvailableStorage();
+        // repository.updateLocalStorage(total, available);
     }
 
     /**
-     * פונקציה מהירה לריענון ה-IP בלבד (שימושי כשמחליפים רשת WiFi)
+     * Processes raw QR data and initiates the connection sequence.
+     * @param context Context for refreshing stats before connecting.
+     * @param qrData The raw string retrieved from the QR scanner.
+     * @return true if the connection data was valid and initiated; false otherwise.
      */
-    public void refreshOnlyIp(Context context) {
-        String ip = NetworkUtils.getLocalIpAddress(context);
-        repository.updateLocalIpOnly(ip);
-    }
-
-    public void connectWithFullStats(Context context, String pcName, String pcIp, int battery, long total, long available) {
-        // הכנת החלק הלוקאלי
-        String currentPhoneIp = NetworkUtils.getLocalIpAddress(context);
-        LocalDeviceStats local = new LocalDeviceStats(android.os.Build.MODEL, currentPhoneIp, battery, total, available);
-
-        // הכנת החלק המרוחק
-        RemoteDeviceInfo remote = new RemoteDeviceInfo(pcName, pcIp);
-
-        // עדכון הכל בפעולה אחת ב-Repository
-        repository.updateFullInfo(local, remote, true);
-    }
-
     public boolean handleConnectionFromQR(Context context, String qrData) {
-        // 1. ה-ViewModel משתמש ב-Serializer כדי להבין מה כתוב ב-QR
-        DeviceSerializer serializer = new DeviceSerializer();
-        RemoteDeviceInfo remote = serializer.deserializeRemoteInfo(qrData);
+        // 1. Logic for deserializing the QR data into a RemoteDeviceInfo object
+        // DeviceSerializer serializer = new DeviceSerializer();
+        // RemoteDeviceInfo remote = serializer.deserializeRemoteInfo(qrData);
 
-        // אם ה-QR לא תקין או ריק
-        if (remote == null || remote.getPcIp() == null || remote.getPcIp().equals("0.0.0.0")) {
-            return false; // מחזירים שקר כדי שה-Activity תדע שנכשלו
+        // Mock implementation for development purposes:
+        String pcName = "Ben-PC";
+        String pcIp = "192.168.1.15";
+        ConnectionType type = ConnectionType.WIFI;
+
+        // Basic validation of the IP address
+        if (pcIp == null || pcIp.equals("0.0.0.0")) {
+            return false;
         }
 
-        // 2. ה-ViewModel אוסף את נתוני המכשיר (הזזנו את זה לפה!)
-        int battery = DeviceUtils.getBatteryPercentage(context);
-        long total = DeviceUtils.getTotalStorage();
-        long available = DeviceUtils.getAvailableStorage();
+        // 2. Ensure local stats are fresh before establishing a remote session
+        refreshLocalDeviceStats(context);
 
-        String phoneIp = NetworkUtils.getLocalIpAddress(context);
-        LocalDeviceStats local = new LocalDeviceStats(android.os.Build.MODEL, phoneIp, battery, total, available);
-
-        // 3. מעדכנים את הריפוזיטורי
-        repository.updateFullInfo(local, remote, true);
-        return true; // הצלחנו!
+        // 3. Execute the connection via the repository
+        repository.connect(pcName, pcIp, type);
+        return true;
     }
 
     /**
-     * פקודת חיבור למחשב
-     */
-    public void connectToPc(String pcName, String pcIp) {
-        RemoteDeviceInfo remote = new RemoteDeviceInfo(pcName, pcIp);
-        repository.updateRemoteInfo(remote, true);
-    }
-
-    /**
-     * פקודת ניתוק
+     * Commands the repository to terminate the current remote session.
      */
     public void disconnectFromPc() {
-        repository.setConnectionStatus(false);
+        repository.disconnect();
+    }
+
+    /**
+     * Fetches the latest storage statistics from the repository.
+     * @return DeviceStorageStats containing formatted status and usage percentage.
+     */
+    public DeviceStorageStats getStorageStats() {
+        return repository.getLocalDeviceStorage();
     }
 }

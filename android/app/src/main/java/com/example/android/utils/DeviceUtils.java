@@ -6,10 +6,16 @@ import android.os.Environment;
 import android.os.StatFs;
 import java.io.File;
 
+/**
+ * Utility class for fetching hardware-related data from the Android system.
+ * Provides methods for monitoring battery levels and storage capacity.
+ */
 public class DeviceUtils {
 
     /**
-     * מחזיר את אחוז הסוללה הנוכחי
+     * Retrieves the current battery charge level.
+     * @param context Application or Activity context to access system services.
+     * @return Current battery percentage (0-100).
      */
     public static int getBatteryPercentage(Context context) {
         BatteryManager bm = (BatteryManager) context.getSystemService(Context.BATTERY_SERVICE);
@@ -20,7 +26,8 @@ public class DeviceUtils {
     }
 
     /**
-     * מחזיר את סך כל האחסון בבייטים
+     * Calculates the total internal storage capacity of the device.
+     * @return Total storage size in bytes.
      */
     public static long getTotalStorage() {
         File path = Environment.getDataDirectory();
@@ -29,7 +36,8 @@ public class DeviceUtils {
     }
 
     /**
-     * מחזיר את האחסון הפנוי בבייטים
+     * Calculates the currently available (free) internal storage space.
+     * @return Available storage size in bytes.
      */
     public static long getAvailableStorage() {
         File path = Environment.getDataDirectory();

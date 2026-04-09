@@ -3,7 +3,7 @@ package com.example.android.ui.models;
 public class ToolItem {
     private String title;
     private int iconRes;
-    private String id; // מזהה כדי שנדע על מה לחצו
+    private String id;
 
     public ToolItem(String id, String title, int iconRes) {
         this.id = id;
@@ -11,7 +11,7 @@ public class ToolItem {
         this.iconRes = iconRes;
     }
 
-    // Getters...
+    // Getters
     public String getTitle() { return title; }
     public int getIconRes() { return iconRes; }
     public String getId() { return id; }

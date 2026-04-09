@@ -18,6 +18,10 @@ import com.example.android.viewmodel.MainViewModel;
 import com.google.zxing.integration.android.IntentIntegrator;
 import com.google.zxing.integration.android.IntentResult;
 
+/**
+ * Main Activity serves as the primary host for fragments and manages the QR scanning process.
+ * It handles the navigation logic between connection setup and the actions dashboard.
+ */
 public class MainActivity extends AppCompatActivity {
 
     private MainViewModel viewModel;
@@ -29,41 +33,75 @@ public class MainActivity extends AppCompatActivity {
         setupStatusBar();
         setContentView(R.layout.activity_main);
 
-        // אתחול ה-ViewModel (שותף לכל הפרגמנטים)
+        // 1. Initialize the shared ViewModel
         viewModel = new ViewModelProvider(this).get(MainViewModel.class);
 
+        // 2. Smart navigation logic: Check current connection state from the repository
         if (savedInstanceState == null) {
+            if (viewModel.getConnectionState().getValue() != null &&
+                    viewModel.getConnectionState().getValue().isConnected()) {
+                replaceFragment(new ActionsFragment());
+            } else {
+                replaceFragment(new ConnectFragment());
+            }
+        }
+    }
+
+    /**
+     * Processes raw QR data scanned from the PC client.
+     * @param qrData The string content extracted from the QR code.
+     */
+    public void processScannedData(String qrData) {
+        // ViewModel handles the data parsing and updates the Repository
+        boolean success = viewModel.handleConnectionFromQR(this, qrData);
+
+        if (success) {
+            // Success: Navigate to the actions dashboard with transition animations
+            navigateToActions();
+            Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(this, "Invalid QR Code. Please try again.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * Orchestrates the disconnection sequence.
+     * Updates the repository and reverts the UI to the connection screen.
+     */
+    public void disconnect() {
+        // Switch back to the connection setup screen
+        navigateToConnect();
+
+        // Update the state (this will trigger observers across the app)
+        viewModel.disconnectFromPc();
+
+        Toast.makeText(this, "Disconnected", Toast.LENGTH_SHORT).show();
+    }
+
+    // --- Fragment Navigation ---
+
+    /**
+     * Navigates to the Actions screen if not already present.
+     */
+    public void navigateToActions() {
+        if (!(getSupportFragmentManager().findFragmentById(R.id.fragment_container) instanceof ActionsFragment)) {
+            replaceFragment(new ActionsFragment());
+        }
+    }
+
+    /**
+     * Navigates to the Connection screen if not already present.
+     */
+    public void navigateToConnect() {
+        if (!(getSupportFragmentManager().findFragmentById(R.id.fragment_container) instanceof ConnectFragment)) {
             replaceFragment(new ConnectFragment());
         }
     }
 
-    public void processScannedData(String qrData) {
-        // פקודה אחת פשוטה - ה-ViewModel כבר יודע מה לעשות
-        boolean success = viewModel.handleConnectionFromQR(this, qrData);
-
-        if (success) {
-            // הצלחנו -> עוברים למסך הפעולות
-            replaceFragment(new ActionsFragment());
-            Toast.makeText(this, "Connected Successfully!", Toast.LENGTH_SHORT).show();
-        } else {
-            // נכשלנו -> נשארים במסך החיבור ומראים שגיאה
-            Toast.makeText(this, "Invalid QR Code. Please try again.", Toast.LENGTH_LONG).show();
-            // אין צורך ב-replaceFragment כי אנחנו כבר ב-ConnectFragment
-        }
-    }
-
-    public void disconnect() {
-        // ניווט חזרה למסך החיבור
-        replaceFragment(new ConnectFragment());
-
-        // פקודת ניתוק ב-ViewModel
-        viewModel.disconnectFromPc();
-
-        Toast.makeText(this, "Disconnected from PC", Toast.LENGTH_SHORT).show();
-    }
-
-    // --- פונקציות עזר (UI) ---
-
+    /**
+     * Performs a fragment replacement transaction with fade animations.
+     * @param fragment The destination fragment to display.
+     */
     private void replaceFragment(Fragment fragment) {
         getSupportFragmentManager().beginTransaction()
                 .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out)
@@ -71,29 +109,34 @@ public class MainActivity extends AppCompatActivity {
                 .commitAllowingStateLoss();
     }
 
-    // הפונקציה שהפרגמנט יקרא לה כשהחיבור מתנתק
-    public void navigateToConnectScreen() {
-        // כאן אנחנו קוראים לפונקציה הגנרית עם פרגמנט החיבור
-        replaceFragment(new ConnectFragment());
-    }
+    // --- UI Configurations ---
 
+    /**
+     * Configures the status bar color to match the application's dark theme.
+     */
     private void setupStatusBar() {
         Window window = getWindow();
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
         window.setStatusBarColor(ContextCompat.getColor(this, R.color.background_main));
     }
 
-    // --- QR Scanner (Zxing) ---
+    // --- QR Scanner (Zxing Integration) ---
 
+    /**
+     * Launches the QR scanner interface.
+     */
     public void handleConnection() {
         new IntentIntegrator(this)
                 .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-                .setPrompt("Scan the PC Dashboard QR Code")
+                .setPrompt("Scan Galaxy Bridge QR Code")
                 .setBeepEnabled(true)
                 .setOrientationLocked(true)
                 .initiateScan();
     }
 
+    /**
+     * Handles the result returned from the scanner activity.
+     */
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         IntentResult result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);

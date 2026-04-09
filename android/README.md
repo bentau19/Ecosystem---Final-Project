@@ -2,32 +2,34 @@
 This project follows the Clean Architecture principles and the MVVM (Model-View-ViewModel) design pattern. The architecture is designed to be modular, scalable, and easy to maintain, ensuring a strict separation between UI, business logic, and network communication.
 
 📂 Project Structure
-Plaintext
-app/src/main/java/com/example/app/
+app/src/main/java/com/example/android/
 │
 ├── 📂 ui/                         # Presentation Layer
-│   ├── fragments/                 # Individual screens (Connect, Dashboard, Backup, etc.)
-│   ├── adapters/                  # RecyclerView adapters for dynamic lists
-│   └── activities/                # Main Host Activity (MainActivity)
+│   ├── 📂 activities/             # Main Host Activity (MainActivity)
+│   ├── 📂 fragments/              # Screens (Connect, Actions Dashboard)
+│   ├── 📂 adapters/               # RecyclerView adapters (ToolsAdapter)
+│   └── 📂 models/                 # UI-specific models (ToolItem)
 │
 ├── 📂 viewmodel/                  # Logic Layer
 │   ├── MainViewModel.java         # Global state (Connection, PC Name, Battery)
 │   ├── BackupViewModel.java       # Specific logic for file transfer features
 │   └── AntivirusViewModel.java    # Logic for scanning and security features
 │
-├── 📂 network/                    # Communication Layer
-│   ├── ConnectionService.java     # Foreground Service for persistent background connection
+├── 📂 network/                    # Communication Layer (Remote Data)
+│   ├── ConnectionService.java     # Foreground Service for persistent connection
 │   ├── SocketManager.java         # TCP Socket handling (Send/Receive bytes)
 │   └── PacketParser.java          # Protocol parsing and data framing
 │
-├── 📂 data/                       # Data Layer (Models & Repositories)
-│   ├── models/                    # POJO classes and Entities (Device, File, Tool)
-│   ├── serializers/               # GSON-based translation between Java Objects and JSON
-│   └── repositories/              # Single source of truth for feature-specific data
+├── 📂 data/                       # Data Layer (Single Source of Truth)
+│   ├── 📂 models/                 # Core Entities
+│   │   ├── 📂 entities/           # DeviceConnectionState, LocalDeviceInfo
+│   │   └── 📂 enums/              # ConnectionType (WIFI, BLUETOOTH)
+│   ├── 📂 repositories/           # Feature logic (DeviceRepository)
+│   └── 📂 serializers/            # JSON mapping (DeviceSerializer)
 │
 └── 📂 utils/                      # Utilities & Helpers
-    ├── NetworkUtils.java          # Local IP and Network discovery helpers
-    └── NotificationHelper.java    # System notification management
+    ├── DeviceUtils.java           # Hardware access (Battery/Storage)
+    └── NetworkUtils.java          # IP and Connectivity helpers
 
 🏗️ Architectural Decisions
 1. Single Activity Architecture

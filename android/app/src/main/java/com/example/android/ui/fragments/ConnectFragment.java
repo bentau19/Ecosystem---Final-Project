@@ -16,6 +16,10 @@ import com.example.android.R;
 import com.example.android.ui.MainActivity;
 import com.example.android.viewmodel.MainViewModel;
 
+/**
+ * Fragment responsible for the initial connection setup.
+ * Displays the local device's IP address and provides an entry point to scan for PCs.
+ */
 public class ConnectFragment extends Fragment {
 
     private MainViewModel viewModel;
@@ -29,27 +33,23 @@ public class ConnectFragment extends Fragment {
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
 
-        // 1. חיבור ל-ViewModel המשותף (שימוש ב-requireActivity כדי שזה יהיה אותו מופע של ה-MainActivity)
+        // 1. Bind to the shared ViewModel (scoped to the Activity for synchronization)
         viewModel = new ViewModelProvider(requireActivity()).get(MainViewModel.class);
 
-        // 2. הגדרת ה-Views
+        // 2. Initialize UI components
         TextView ipDisplayText = view.findViewById(R.id.ipDisplayText);
         Button btnConnect = view.findViewById(R.id.btnConnect);
 
-        // 3. ריענון הנתונים הלוקאליים (כולל ה-IP) ברגע שהמסך עולה
-        refreshData();
-
-        // 4. Observer: מאזין לשינויים ב-DeviceInfo
-        viewModel.getDeviceInfo().observe(getViewLifecycleOwner(), info -> {
-            if (info != null && info.getLocalStats() != null && ipDisplayText != null) {
-                // שמי לב לשינוי: info.getLocalStats().getLocalIp()
-                // אנחנו ניגשים לשכבה הלוקאלית החדשה שיצרנו
-                String currentIp = info.getLocalStats().getLocalIp();
+        // 3. Observer: Monitors changes in the unified ConnectionState
+        viewModel.getConnectionState().observe(getViewLifecycleOwner(), state -> {
+            if (state != null && state.getLocalDevice() != null && ipDisplayText != null) {
+                // ניגשים ל-IP מתוך האובייקט הלוקאלי החדש
+                String currentIp = state.getLocalDevice().getIpAddress();
                 ipDisplayText.setText("Your IP: " + currentIp);
             }
         });
 
-        // 5. כפתור החיבור
+        // 4. Connection Button: Triggers the PC discovery/scan process in MainActivity
         if (btnConnect != null) {
             btnConnect.setOnClickListener(v -> {
                 if (getActivity() instanceof MainActivity) {
@@ -60,20 +60,18 @@ public class ConnectFragment extends Fragment {
     }
 
     /**
-     * פונקציית עזר לריענון הנתונים
+     * Utility function to refresh local hardware stats (e.g., IP address).
      */
     private void refreshData() {
-        if (viewModel != null) {
-            // כרגע אנחנו שולחים 0 בסוללה ואחסון כי עוד לא מימשנו את הסורקים שלהם,
-            // אבל ה-IP יתעדכן בזכות ה-context
-            viewModel.refreshLocalDeviceStats(requireContext(), 0, 0, 0);
+        if (viewModel != null && isAdded()) {
+            viewModel.refreshLocalDeviceStats(requireContext());
         }
     }
 
     @Override
     public void onResume() {
         super.onResume();
-        // בכל פעם שהמשתמש חוזר לאפליקציה (אולי הוא כיבה והדליק WiFi), נרענן
+        // Refresh local IP whenever the user returns to this screen (e.g., after switching Wi-Fi)
         refreshData();
     }
 }
