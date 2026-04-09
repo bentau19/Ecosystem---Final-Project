@@ -6,16 +6,28 @@ import androidx.lifecycle.MutableLiveData;
 import com.example.android.data.models.entities.DeviceInfo;
 import com.example.android.data.models.entities.LocalDeviceStats;
 import com.example.android.data.models.entities.RemoteDeviceInfo;
+import com.example.android.data.models.enums.ConnectionType;
 
 public class DeviceRepository {
+
+    // one instance of the repository
+    private static DeviceRepository instance;
     private final MutableLiveData<DeviceInfo> deviceInfo = new MutableLiveData<>();
 
-    public DeviceRepository() {
-        // נתוני דמה ראשוניים - הוספנו "0.0.0.0" ככתובת IP ראשונית ללוקאלי
+    private DeviceRepository() {
+        // נתוני דמה ראשוניים
         LocalDeviceStats initialLocal = new LocalDeviceStats("My Galaxy", "0.0.0.0", 0, 0, 0);
         RemoteDeviceInfo initialRemote = new RemoteDeviceInfo("None", "0.0.0.0");
 
-        deviceInfo.setValue(new DeviceInfo(initialLocal, initialRemote, false, "None"));
+        deviceInfo.setValue(new DeviceInfo(initialLocal, initialRemote, false, ConnectionType.NONE));
+    }
+
+    // get the one instance of the repository
+    public static synchronized DeviceRepository getInstance() {
+        if (instance == null) {
+            instance = new DeviceRepository();
+        }
+        return instance;
     }
 
     public LiveData<DeviceInfo> getDeviceInfo() {
@@ -23,7 +35,7 @@ public class DeviceRepository {
     }
 
     /**
-     * עדכון נתוני הטלפון המקומיים (כולל ה-IP של הפלאפון, סוללה ואחסון)
+     *update local stats
      */
     public void updateLocalStats(LocalDeviceStats newStats) {
         DeviceInfo current = deviceInfo.getValue();
@@ -38,7 +50,7 @@ public class DeviceRepository {
     }
 
     /**
-     * פונקציית עזר לעדכון ה-IP של הפלאפון בלבד מבלי לדרוס את שאר הנתונים הלוקאליים
+     *update the local ip only
      */
     public void updateLocalIpOnly(String newIp) {
         DeviceInfo current = deviceInfo.getValue();
@@ -60,12 +72,12 @@ public class DeviceRepository {
                 local,
                 remote,
                 isConnected,
-                isConnected ? "WiFi" : "None"
+                isConnected ? ConnectionType.WIFI : ConnectionType.NONE
         ));
     }
 
     /**
-     * עדכון נתוני המחשב המרוחק (מגיע מה-Serializer אחרי קבלת JSON)
+     *update the remote info only
      */
     public void updateRemoteInfo(RemoteDeviceInfo newRemote, boolean isConnected) {
         DeviceInfo current = deviceInfo.getValue();
@@ -74,13 +86,13 @@ public class DeviceRepository {
                     current.getLocalStats(),
                     newRemote,
                     isConnected,
-                    isConnected ? "WiFi" : "None"
+                    isConnected ? ConnectionType.WIFI : ConnectionType.NONE
             ));
         }
     }
 
     /**
-     * פונקציה לשינוי סטטוס חיבור בלבד
+     *change the connection status
      */
     public void setConnectionStatus(boolean connected) {
         DeviceInfo current = deviceInfo.getValue();
@@ -89,7 +101,7 @@ public class DeviceRepository {
                     current.getLocalStats(),
                     current.getRemoteInfo(),
                     connected,
-                    connected ? current.getConnectionType() : "None"
+                    connected ? current.getConnectionType() : ConnectionType.NONE
             ));
         }
     }

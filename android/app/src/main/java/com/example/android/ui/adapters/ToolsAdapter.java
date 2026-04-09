@@ -3,14 +3,13 @@ package com.example.android.ui.adapters;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageView;
-import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.example.android.R;
 import com.example.android.ui.models.ToolItem;
+import com.google.android.material.button.MaterialButton; // הוספנו את ה-Import הזה
 
 import java.util.List;
 
@@ -37,22 +36,26 @@ public class ToolsAdapter extends RecyclerView.Adapter<ToolsAdapter.ToolViewHold
     @Override
     public void onBindViewHolder(@NonNull ToolViewHolder holder, int position) {
         ToolItem tool = tools.get(position);
-        holder.title.setText(tool.getTitle());
-        holder.icon.setImageResource(tool.getIconRes());
-        holder.itemView.setOnClickListener(v -> listener.onToolClick(tool));
+
+        // מעדכנים את הטקסט והאייקון של הכפתור
+        holder.toolButton.setText(tool.getTitle());
+        holder.toolButton.setIconResource(tool.getIconRes());
+
+        // מאזין ללחיצה על הכפתור עצמו
+        holder.toolButton.setOnClickListener(v -> listener.onToolClick(tool));
     }
 
     @Override
     public int getItemCount() { return tools.size(); }
 
     static class ToolViewHolder extends RecyclerView.ViewHolder {
-        TextView title;
-        ImageView icon;
+        // הכפתור הוא עכשיו הרכיב המרכזי שלנו
+        MaterialButton toolButton;
 
         ToolViewHolder(View itemView) {
             super(itemView);
-            title = itemView.findViewById(R.id.toolTitle);
-            icon = itemView.findViewById(R.id.toolIcon);
+            // אנחנו משתמשים ב-ID שנתנו ב-XML לכפתור (btnTool)
+            toolButton = itemView.findViewById(R.id.btnTool);
         }
     }
 }

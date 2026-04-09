@@ -42,17 +42,22 @@ public class ActionsFragment extends Fragment {
         View statusDot = view.findViewById(R.id.statusDot);
         TextView batteryText = view.findViewById(R.id.batteryText);
         TextView storageText = view.findViewById(R.id.storageText);
-        View cardSettings = view.findViewById(R.id.cardSettings);
+        View cardSettings = view.findViewById(R.id.btnSettings);
 
         // 3. הגדרת ה-RecyclerView (סעיף 4 שלך)
         setupRecyclerView(view);
 
         // 4. ה-Observer לעדכונים חיים מהמחסן (Repository)
         viewModel.getDeviceInfo().observe(getViewLifecycleOwner(), info -> {
+
             if (info != null) {
-                deviceNameText.setText(info.getRemoteInfo().getPcName());
-                batteryText.setText(info.getLocalStats().getBatteryLevel() + "%");
-                storageText.setText(info.getStoragePercent() + "% Used");
+                if (info.getRemoteInfo() != null) {
+                    deviceNameText.setText(info.getRemoteInfo().getPcName());
+                }
+                if (info.getLocalStats() != null) {
+                    batteryText.setText(info.getLocalStats().getBatteryLevel() + "%");
+                    storageText.setText(info.getStoragePercent() + "% Used");
+                }
 
                 if (info.isConnected()) {
                     statusText.setText("Connected via " + info.getConnectionType() + " (" + info.getRemoteInfo().getPcIp() + ")");
@@ -132,7 +137,7 @@ public class ActionsFragment extends Fragment {
         }
 
         // עדכון כפתור ההגדרות
-        View settings = view.findViewById(R.id.cardSettings);
+        View settings = view.findViewById(R.id.btnSettings);
         settings.setAlpha(alpha);
         settings.setEnabled(enabled);
     }

@@ -71,6 +71,12 @@ public class MainActivity extends AppCompatActivity {
                 .commitAllowingStateLoss();
     }
 
+    // הפונקציה שהפרגמנט יקרא לה כשהחיבור מתנתק
+    public void navigateToConnectScreen() {
+        // כאן אנחנו קוראים לפונקציה הגנרית עם פרגמנט החיבור
+        replaceFragment(new ConnectFragment());
+    }
+
     private void setupStatusBar() {
         Window window = getWindow();
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);

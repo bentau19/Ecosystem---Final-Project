@@ -14,7 +14,7 @@ import com.example.android.utils.NetworkUtils;
 
 public class MainViewModel extends ViewModel {
 
-    private final DeviceRepository repository = new DeviceRepository();
+    private final DeviceRepository repository = DeviceRepository.getInstance();
 
     public LiveData<DeviceInfo> getDeviceInfo() {
         return repository.getDeviceInfo();
