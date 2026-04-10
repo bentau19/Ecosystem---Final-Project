@@ -1,6 +1,4 @@
-from typing import Optional
-
-from PySide6.QtCore import Qt, QPoint, Property, QPropertyAnimation
+from PySide6.QtCore import Qt, QPoint, Property, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import (
     QColor,
     QPainter,
@@ -14,20 +12,19 @@ from resources.colors import Colors
 class PulsingDot(QWidget):
     """An animated green pulsing dot widget for visual indicators.
 
-      This widget displays a green dot with a pulsing ring animation that expands
-      outward and fades. It's commonly used to indicate active status, connectivity,
-      or ongoing processes. The animation runs continuously with a 60-frame cycle.
-      """
+    Displays a green dot with a pulsing ring animation that expands
+    outward and fades. Commonly used to indicate active status, connectivity,
+    or ongoing processes. The animation runs continuously with a 2-second cycle.
+    """
 
     opacity = Property(float, lambda self: self._get_opacity(), lambda self, v: self._set_opacity(v))
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the pulsing dot widget.
 
         Args:
-            parent (Optional[QWidget]): Parent widget, defaults to None.
+            parent: Optional parent widget.
         """
-
         super().__init__(parent)
 
         self._opacity: float = 1.0
@@ -35,40 +32,42 @@ class PulsingDot(QWidget):
 
         self._setup_ui()
 
-    def _setup_ui(self):
-        """Sets up the widget with fixed size (30x30), initializes animation properties, and starts the animation timer."""
-
+    def _setup_ui(self) -> None:
+        """Set fixed size and start the looping opacity animation."""
         self.setFixedSize(30, 30)
 
         self.anim: QPropertyAnimation = QPropertyAnimation(self, b"opacity")
 
-        self.anim.setDuration(1200)
+        self.anim.setDuration(2000)
         self.anim.setKeyValueAt(0.0, 1.0)
-        self.anim.setKeyValueAt(0.5, 0.2)
+        self.anim.setKeyValueAt(0.5, 0.45)
         self.anim.setKeyValueAt(1.0, 1.0)
-        self.anim.setLoopCount(-1)
+        self.anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self.anim.setLoopCount(-1)  # -1 loops indefinitely
         self.anim.start()
 
     def _get_opacity(self) -> float:
-        """Getter for the opacity property."""
+        """Return the current opacity value used by the animation property.
+
+        Returns:
+            The current opacity as a float in [0.0, 1.0].
+        """
         return self._opacity
 
     def _set_opacity(self, value: float) -> None:
-        """Setter for the opacity property.
-
-        Updates the opacity value and repaints the widget.
+        """Set the opacity value and schedule a repaint.
 
         Args:
-            value (float): The new opacity value.
+            value: New opacity value in [0.0, 1.0].
         """
         self._opacity = value
         self.update()
 
     def paintEvent(self, event: QPaintEvent) -> None:
-        """Handle the paint event to draw the pulsing dot.
+        """Draw the pulsing dot and its glow ring.
 
         Args:
-            event: The paint event object.
+            event: The paint event.
         """
         painter: QPainter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -80,10 +79,10 @@ class PulsingDot(QWidget):
         cy: int = 15
         radius: int = 6
 
-        # Draw the pulsing rings
-        for i in range(2):
-            glow_size: int = radius + (i * 3)  # Each ring gets bigger
-            alpha: int = 60 - (i * 15)  # Each ring gets more transparent
+        # Draw the pulsing rings (one soft glow ring around the core)
+        for i in range(1):
+            glow_size: int = radius + (i + 1) * 4  # ring at +4 px from core
+            alpha: int = 55 - (i * 30)             # 55: soft fade
             color: QColor = QColor(Colors.GREEN)
             color.setAlpha(alpha)
             painter.setBrush(QBrush(color))

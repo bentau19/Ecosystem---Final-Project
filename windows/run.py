@@ -37,5 +37,6 @@ def run_app():
 
 
 if __name__ == "__main__":
+    print("Using Python:", sys.executable)
     compile_resources()
     run_app()

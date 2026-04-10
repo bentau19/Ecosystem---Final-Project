@@ -1,6 +1,5 @@
 #logoIcon {
     background-color: transparent;
-    border-color: red;
     border-radius: 10px;
     font-size: 30px;
 }

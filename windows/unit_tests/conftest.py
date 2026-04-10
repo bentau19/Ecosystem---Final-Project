@@ -1,6 +1,8 @@
 import pytest
 
 from entities.device_info import DeviceBatteryInfoEntity, DeviceStorageInfoEntity, DeviceGeneralInfoEntity
+from entities.previous_device import PreviousDeviceEntity
+from enums.device_status import DeviceStatus
 from enums.device_type import DeviceType
 
 
@@ -36,4 +38,43 @@ def device_name_entity() -> DeviceGeneralInfoEntity:
         title="General",
         type=DeviceType.DEVICE_NAME,
         description="my name is inigo"
+    )
+
+
+@pytest.fixture()
+def previous_device_online() -> PreviousDeviceEntity:
+    return PreviousDeviceEntity(
+        id="dev-001",
+        name="Pixel 8 Pro",
+        os_label="Android 14",
+        tag="Work",
+        icon_color="#4CAF50",
+        status=DeviceStatus.ONLINE,
+        last_seen="now",
+    )
+
+
+@pytest.fixture()
+def previous_device_recent() -> PreviousDeviceEntity:
+    return PreviousDeviceEntity(
+        id="dev-002",
+        name="Galaxy S24",
+        os_label="Android 14",
+        tag="Home",
+        icon_color="#2196F3",
+        status=DeviceStatus.RECENT,
+        last_seen="today",
+    )
+
+
+@pytest.fixture()
+def previous_device_idle() -> PreviousDeviceEntity:
+    return PreviousDeviceEntity(
+        id="dev-003",
+        name="OnePlus 12",
+        os_label="Android 13",
+        tag="Travel",
+        icon_color="#9C27B0",
+        status=DeviceStatus.IDLE,
+        last_seen="3 days ago",
     )

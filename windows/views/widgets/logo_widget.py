@@ -30,8 +30,8 @@ class LogoWidget(QFrame):
         super().__init__(parent)
         self._logo_size: int = logo_size
 
-        self._app_name_label: Optional[LogoWidget.AppNameLabel] = None
-        self._logo_icon: Optional[QLabel] = None
+        self._app_name_label: LogoNameLabel
+        self._logo_icon: QLabel
 
         self._setup_ui()
 
@@ -58,12 +58,73 @@ class LogoWidget(QFrame):
         layout.addStretch()
 
     def _create_logo_icon(self) -> QLabel:
+        return Logo(self._logo_size)
+
+    @staticmethod
+    def _create_name_label() -> LogoNameLabel:
         """
-        Create a QLabel displaying a circular SVG logo.
+        Create a label displaying the application name with gradient text.
 
         Returns:
-            QLabel: The logo icon label.
+            LogoNameLabel: The application name label.
         """
+        label: LogoNameLabel = LogoNameLabel()
+        label.setObjectName("logoText")
+        return label
+
+    def _apply_styles(self) -> None:
+        """Load and apply the QSS stylesheet for this widget."""
+        qss: str = load_stylesheet(Styles.LOGO_WIDGET)
+        self.setStyleSheet(qss)
+
+
+class LogoNameLabel(QLabel):
+    """
+    QLabel subclass for displaying the application name with gradient text.
+    """
+
+    def __init__(self, parent: Optional[QLabel] = None) -> None:
+        """
+        Initialize the gradient text label.
+
+        Args:
+            parent (Optional[QLabel], optional): Optional parent widget.
+        """
+        super().__init__(parent)
+        self._init_ui()
+
+    def _init_ui(self) -> None:
+        """Set the application name text."""
+        self.setText(self.tr("SyncDose"))
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        """
+        Paint the label text using a linear gradient.
+
+        Args:
+            event: The paint event.
+        """
+        super().paintEvent(event)
+        painter: QPainter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        gradient: QLinearGradient = QLinearGradient(0, 0, self.width(), self.height())
+        gradient.setColorAt(0.0, QColor(LogoColors.GRADIENT_START))
+        gradient.setColorAt(1.0, QColor(LogoColors.GRADIENT_END))
+
+        painter.setPen(QPen(QBrush(gradient), 0))
+        painter.setFont(self.font())
+        painter.drawText(self.rect(), self.alignment(), self.text())
+
+
+class Logo(QLabel):
+    def __init__(self, logo_size: int = 70, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._logo_size = logo_size
+        self._setup_logo()
+        self._apply_style()
+
+    def _setup_logo(self):
         pixmap: QPixmap = QPixmap(self._logo_size, self._logo_size)
         pixmap.fill(Qt.GlobalColor.transparent)
 
@@ -80,61 +141,11 @@ class LogoWidget(QFrame):
         painter.end()
 
         logo_icon: QLabel = QLabel()
-        logo_icon.setPixmap(pixmap)
-        logo_icon.setFixedSize(self._logo_size, self._logo_size)
-        logo_icon.setObjectName("logoIcon")
-        return logo_icon
+        self.setPixmap(pixmap)
+        self.setFixedSize(self._logo_size, self._logo_size)
+        self.setObjectName("logoIcon")
 
-    def _create_name_label(self) -> AppNameLabel:
-        """
-        Create a label displaying the application name with gradient text.
-
-        Returns:
-            AppNameLabel: The application name label.
-        """
-        label: LogoWidget.AppNameLabel = self.AppNameLabel()
-        label.setObjectName("logoText")
-        return label
-
-    def _apply_styles(self) -> None:
+    def _apply_style(self) -> None:
         """Load and apply the QSS stylesheet for this widget."""
         qss: str = load_stylesheet(Styles.LOGO_WIDGET)
         self.setStyleSheet(qss)
-
-    class AppNameLabel(QLabel):
-        """
-        QLabel subclass for displaying the application name with gradient text.
-        """
-
-        def __init__(self, parent: Optional[QLabel] = None) -> None:
-            """
-            Initialize the gradient text label.
-
-            Args:
-                parent (Optional[QLabel], optional): Optional parent widget.
-            """
-            super().__init__(parent)
-            self._init_ui()
-
-        def _init_ui(self) -> None:
-            """Set the application name text."""
-            self.setText(self.tr("SyncDose"))
-
-        def paintEvent(self, event: QPaintEvent) -> None:
-            """
-            Paint the label text using a linear gradient.
-
-            Args:
-                event: The paint event.
-            """
-            super().paintEvent(event)
-            painter: QPainter = QPainter(self)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-            gradient: QLinearGradient = QLinearGradient(0, 0, self.width(), self.height())
-            gradient.setColorAt(0.0, QColor(LogoColors.GRADIENT_START))
-            gradient.setColorAt(1.0, QColor(LogoColors.GRADIENT_END))
-
-            painter.setPen(QPen(QBrush(gradient), 0))
-            painter.setFont(self.font())
-            painter.drawText(self.rect(), self.alignment(), self.text())

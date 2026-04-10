@@ -8,6 +8,7 @@
         <file alias="storage.svg">icons/storage.svg</file>
         <file alias="smartphone.svg">icons/smartphone.svg</file>
         <file alias="disconnect.svg">icons/disconnect.svg</file>
+        <file alias="refresh.svg">icons/refresh.svg</file>
     </qresource>
 
 
@@ -17,6 +18,10 @@
         <file alias="container.qss">styles/navigation/container.qss</file>
     </qresource>
 
+    <qresource prefix="/styles/login">
+        <file alias="left-panel.qss">styles/login/left-panel.qss</file>
+        <file alias="right-panel.qss">styles/login/right-panel.qss</file>
+    </qresource>
     <qresource prefix="/styles/dashboard">
         <file alias="battery_info.qss">styles/dashboard/battery_info.qss</file>
         <file alias="storage_info.qss">styles/dashboard/storage_info.qss</file>

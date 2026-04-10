@@ -26,6 +26,8 @@ class Palette(ColorsEnum):
     GREEN_400 = "#00E676"  # Primary green color
     GREEN_200 = "#00C853"  # Secondary green color
 
+    ORANGE_500 = "#FF9800"  # Orange accent color
+
     SILVER_300 = "#D4D7DD"  # Start color for the gradient
     SILVER_500 = "#6E7583"  # End color for the gradient
 

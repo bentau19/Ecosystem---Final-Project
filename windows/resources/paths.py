@@ -16,6 +16,7 @@ class Icons(PathsEnum):
     STORAGE = ":/icons/storage.svg"
     SMARTPHONE = ":/icons/smartphone.svg"
     DISCONNECT = ":/icons/disconnect.svg"
+    REFRESH = ":/icons/refresh.svg"
 
 
 # Styles
@@ -42,6 +43,11 @@ class DashboardStyles(PathsEnum):
     DEVICE_STATUS_ROW = ":/styles/dashboard/device_status_row.qss"
     TOOLS_GRID = ":/styles/dashboard/tools_grid.qss"
     TOOLS_SECTION_HEADER = ":/styles/dashboard/tools_section_header.qss"
+
+
+class LoginStyles(PathsEnum):
+    LEFT_PANEL = ":/styles/login/left-panel.qss"
+    RIGHT_PANEL = ":/styles/login/right-panel.qss"
 
 
 # Indicators
