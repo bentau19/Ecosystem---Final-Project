@@ -12,6 +12,24 @@ public class DeviceStorageStats {
         this.total = total;
     }
 
+    // --- Getters ---
+
+    /**
+     * @return The amount of used storage in GB.
+     */
+    public long getUsed() {
+        return used;
+    }
+
+    /**
+     * @return The total storage capacity in GB.
+     */
+    public long getTotal() {
+        return total;
+    }
+
+    // --- Helper Methods ---
+
     /**
      * Formats the storage info into a human-readable string.
      * @return A string in the format "used/total GB" (e.g., "160/256 GB").

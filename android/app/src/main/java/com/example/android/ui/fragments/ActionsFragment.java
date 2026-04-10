@@ -92,6 +92,7 @@ public class ActionsFragment extends Fragment {
                     ((MainActivity) getActivity()).navigateToConnect();
                 }
             }
+            viewModel.startBatteryMonitoring(requireContext());
         });
 
         // 5. Disconnect Button: Requests termination of the active session

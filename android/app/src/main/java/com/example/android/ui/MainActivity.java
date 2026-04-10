@@ -128,7 +128,7 @@ public class MainActivity extends AppCompatActivity {
     public void handleConnection() {
         new IntentIntegrator(this)
                 .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-                .setPrompt("Scan Galaxy Bridge QR Code")
+                .setPrompt("Scan SyncApp QR Code")
                 .setBeepEnabled(true)
                 .setOrientationLocked(true)
                 .initiateScan();
