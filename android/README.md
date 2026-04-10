@@ -37,16 +37,16 @@ app/src/main/java/com/example/android/
     └── NetworkUtils.java          # IP and Connectivity helpers
 ```
 
-# #🏗️ Architectural Decisions
+## 🏗️ Architectural Decisions
 
-1. Single Activity Architecture
+### 1. Single Activity Architecture
 The application uses a single MainActivity as a container, switching between various Fragments. This approach provides a smoother user experience, optimized memory management, and simplified shared element transitions.
 
-2. MVVM Pattern
+### 2. MVVM Pattern
 By separating the UI (Fragments) from the logic (ViewModels), the app ensures that the business logic survives configuration changes (like screen rotations). The UI "observes" data changes via LiveData, making the interface reactive and stable.
 
-3. Foreground Service Strategy
+### 3. Foreground Service Strategy
 To maintain a stable ecosystem connection between the Phone and the PC, we utilize a Foreground Service. This ensures the Socket connection remains active even when the user is not actively interacting with the app.
 
-4. Repository Pattern
+### 4. Repository Pattern
 Each feature (Backup, Antivirus, etc.) has its own Repository. This layer abstracts the data source, allowing the ViewModel to request data without knowing whether it's coming from a local scan or a network response from the PC.
