@@ -1,5 +1,4 @@
 from abc import abstractmethod
-from typing import List, Optional
 
 from PySide6.QtCore import Signal
 
@@ -8,20 +7,20 @@ from repositories.interfaces.base import IRepository
 
 
 class IPreviousDeviceRepository(IRepository[PreviousDeviceEntity, str]):
-    """Interface for the previous-device repository.
+    """Abstract interface for the previous-device repository.
 
-    Attributes:
-        device_saved (Signal): Emitted with the saved PreviousDeviceEntity after
-            a successful ``save`` call.
-        device_deleted (Signal): Emitted with the deleted device ID after a
-            successful ``delete`` call.
+    Signals:
+        device_saved: Emitted with the saved PreviousDeviceEntity after a
+            successful ``save`` call.
+        device_deleted: Emitted with the deleted device ID after a
+            ``delete`` call.
     """
 
     device_saved: Signal
     device_deleted: Signal
 
     @abstractmethod
-    def get_by_id(self, id: str) -> Optional[PreviousDeviceEntity]:
+    def get_by_id(self, id: str) -> PreviousDeviceEntity | None:
         """Return the device with the given ID, or ``None`` if absent.
 
         Args:
@@ -33,7 +32,7 @@ class IPreviousDeviceRepository(IRepository[PreviousDeviceEntity, str]):
         ...
 
     @abstractmethod
-    def get_all(self) -> List[PreviousDeviceEntity]:
+    def get_all(self) -> list[PreviousDeviceEntity]:
         """Return all stored previous devices.
 
         Returns:

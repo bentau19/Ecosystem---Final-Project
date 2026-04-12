@@ -3,6 +3,7 @@ from PySide6.QtWidgets import (
 )
 
 from resources.spacing import Spacing
+from utils.app_state import app_state
 from views.widgets.dashboard.dashboard_content import DashboardContent
 from views.widgets.divider import Divider
 from views.widgets.navigation.sidebar import Sidebar
@@ -17,9 +18,12 @@ class DashboardScreen(QWidget):
     def __init__(self) -> None:
         """Initialize the Dashboard."""
         super().__init__()
+        self._connect_signals()
         self._set_up_ui()
         self.setWindowTitle("Dashboard")
         self.resize(1100, 720)
+
+
 
     def _set_up_ui(self) -> None:
         """Set up the UI of the Dashboard."""
@@ -49,6 +53,10 @@ class DashboardScreen(QWidget):
         root_layout.setSpacing(Spacing.NONE)
         root_layout.addWidget(self._sidebar)
         root_layout.addWidget(right_panel)
+
+    def _connect_signals(self):
+        app_state.service.device_connected.connect(self._dashboard_content.set_device)
+        app_state.service.device_disconnected.connect(self._dashboard_content.clear_device)
 
 
 if __name__ == "__main__":

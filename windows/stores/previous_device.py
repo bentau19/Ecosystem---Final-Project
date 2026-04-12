@@ -17,7 +17,7 @@ class PreviousDeviceStore(IStore[dict[str, PreviousDeviceEntity], dict[str, Prev
     def __init__(
         self,
         serializer: ISerializer = PreviousDeviceSerializer(),
-        json_path: str = "data/previous_devices.json",
+        json_path: str = "windows/data/previous_devices.json",
     ) -> None:
         """Initialize the store.
 

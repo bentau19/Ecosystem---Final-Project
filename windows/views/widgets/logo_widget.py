@@ -61,7 +61,7 @@ class LogoWidget(QFrame):
         return Logo(self._logo_size)
 
     @staticmethod
-    def _create_name_label() -> LogoNameLabel:
+    def _create_name_label() -> "LogoNameLabel":
         """
         Create a label displaying the application name with gradient text.
 

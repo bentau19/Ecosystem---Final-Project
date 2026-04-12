@@ -4,7 +4,7 @@ Shows name, OS/tag meta, status badge, and last-seen time.
 On hover the status column is replaced by a 'Connect →' button.
 """
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QEnterEvent
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton,
@@ -20,7 +20,7 @@ from views.widgets.login.device_icon import DeviceIcon
 _BADGE_CONFIG: dict[DeviceStatus, tuple[str, str]] = {
     DeviceStatus.ONLINE: ("BadgeOnline", "online"),
     DeviceStatus.RECENT: ("BadgeRecent", "2m ago"),
-    DeviceStatus.IDLE:   ("BadgeIdle",   "idle"),
+    DeviceStatus.IDLE: ("BadgeIdle", "idle"),
 }
 
 
@@ -31,12 +31,10 @@ class DeviceCard(QWidget):
     Emits :attr:`connect_requested` (with the entity) when 'Connect →' is clicked.
     """
 
-    connect_requested: Signal = Signal(object)
-
     def __init__(
-        self,
-        device: PreviousDeviceDTO,
-        parent: QWidget | None = None,
+            self,
+            device: PreviousDeviceDTO,
+            parent: QWidget | None = None,
     ) -> None:
         """
         Args:
@@ -142,9 +140,7 @@ class DeviceCard(QWidget):
 
     def _connect_signals(self) -> None:
         """Wire the Connect button to emit connect_requested."""
-        self._connect_btn.clicked.connect(
-            lambda: self.connect_requested.emit(self._device)
-        )
+        pass
 
     # ── Hover events ──────────────────────────────────────────────────────────
 

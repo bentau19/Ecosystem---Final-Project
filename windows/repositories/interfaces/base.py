@@ -6,29 +6,28 @@ K = TypeVar('K')
 
 
 class IRepository(ABC, Generic[T, K]):
-    """
-    Interface for a repository.
+    """Abstract base interface for all repositories.
 
-    Repositories are responsible for storing and retrieving entities.
+    Repositories are responsible for storing and retrieving domain entities.
+    Concrete implementations manage both an in-memory cache and a persistent
+    backing store.
     """
 
     @abstractmethod
     def get_by_id(self, id: K) -> T | None:
-        """
-        Get an entity by its ID.
+        """Return the entity with the given ID, or ``None`` if absent.
 
         Args:
-            id: The ID of the entity.
+            id: The unique identifier of the entity.
 
         Returns:
-            The entity with the given ID, or None if it does not exist.
+            The entity with the given ID, or ``None`` if it does not exist.
         """
         ...
 
     @abstractmethod
     def get_all(self) -> list[T]:
-        """
-        Get all entities stored in the repository.
+        """Return all entities stored in the repository.
 
         Returns:
             A list of all entities.
@@ -37,20 +36,18 @@ class IRepository(ABC, Generic[T, K]):
 
     @abstractmethod
     def save(self, entity: T) -> None:
-        """
-       save entity to the repository.
+        """Persist an entity to the repository.
 
         Args:
-            entity: The entity to add.
+            entity: The entity to save (insert or update).
         """
         ...
 
     @abstractmethod
     def delete(self, id: K) -> None:
-        """
-        Delete an entity from the repository.
+        """Remove an entity from the repository.
 
         Args:
-            id: The ID of the entity to delete.
+            id: The unique identifier of the entity to delete.
         """
         ...

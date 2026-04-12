@@ -7,7 +7,7 @@ import pytest
 
 import resources_qrc  # noqa: F401
 
-START_FILE = "main.py"
+START_FILE = "./windows/main.py"
 
 
 def compile_resources():

@@ -1,5 +1,3 @@
-from typing import Dict, List, Optional
-
 from PySide6.QtCore import QObject, Signal
 
 from entities.tool import ToolEntity
@@ -10,48 +8,58 @@ from utils.meta import ABCQObjectMeta
 
 
 class ToolRepository(IToolRepository, QObject, metaclass=ABCQObjectMeta):
-    """Repository for tools.
+    """Repository for tool entities.
 
-    Attributes:
-        tool_saved (Signal): Emitted when a tool is added.
-        tool_deleted (Signal): Emitted when a tool is deleted.
+    Implements the singleton pattern so that a single shared instance is used
+    throughout the application.  Data is eagerly loaded from the backing store
+    on first construction and kept in an in-memory cache; save mutations flush
+    the full cache back to disk.
+
+    Signals:
+        tool_saved: Emitted with the saved ToolEntity after a successful
+            ``save`` call.
+        tool_deleted: Emitted with the tool ID string after a ``delete`` call.
     """
 
-    tool_saved: Signal = Signal(object)
 
+    tool_saved: Signal = Signal(object)
     tool_deleted: Signal = Signal(str)
 
     def __init__(self, store: IStore = ToolStore(), parent: QObject | None = None) -> None:
-        """
-        Initialize the tool repository.
+        """Initialize the tool repository.
+
+        Guarded by ``_initialized`` so that the singleton body only runs once
+        even if the constructor is called multiple times.
 
         Args:
-            parent: The parent QObject.
+            store: Backing store used for file I/O.  Defaults to a fresh
+                ``ToolStore`` instance.
+            parent: Optional Qt parent object.
         """
         super().__init__(parent)
-
         self._store: IStore = store
-        self._tools: Dict[str, ToolEntity] = self.load()
+        self._tools: dict[str, ToolEntity] = self.load()
+        self._initialized = True
 
-
-    def load(self) -> Dict[str, ToolEntity]:
-        """
-        Load the tools from the repository.
+    def load(self) -> dict[str, ToolEntity]:
+        """Load tools from the backing store.
 
         Returns:
-            Dict[str, ToolEntity]: A dictionary mapping tool names to ToolEntity objects.
+            A dictionary mapping tool titles to ToolEntity objects.
         """
         return self._store.load()
 
     def save(self, entity: ToolEntity) -> None:
-        """
-        Save a tool to the repository and emit the tool_saved signal if successful.
+        """Insert a new tool and flush to disk.
 
         Args:
-            entity (ToolEntity): The tool to save.
+            entity: The tool to save.
 
         Raises:
             ValueError: If a tool with the same title already exists.
+
+        Emits:
+            tool_saved: With the saved entity after the store write.
         """
         if entity.title in self._tools:
             raise ValueError(f"Tool with title '{entity.title}' already exists.")
@@ -59,46 +67,45 @@ class ToolRepository(IToolRepository, QObject, metaclass=ABCQObjectMeta):
         self.tool_saved.emit(entity)
         self._store.save(self._tools)
 
-    def get_by_id(self, id: str) -> Optional[ToolEntity]:
-        """
-        Get a tool by its ID.
+    def get_by_id(self, id: str) -> ToolEntity | None:
+        """Return the tool with the given ID, or ``None`` if absent.
 
         Args:
-            id: The ID of the tool.
+            id: The tool title used as the dictionary key.
 
         Returns:
-            The tool with the given ID, or None if it does not exist.
+            The matching ToolEntity, or ``None`` if not found.
         """
         if id not in self._tools:
             return None
         return self._tools[id]
 
-    def get_all(self) -> List[ToolEntity]:
-        """
-        Get all tools.
+    def get_all(self) -> list[ToolEntity]:
+        """Return all stored tools.
 
         Returns:
-            A list of all tools.
+            A list of all ToolEntity objects.
         """
         return list(self._tools.values())
 
-    def get_all_enabled(self) -> List[ToolEntity]:
-        """
-        Get all enabled tools.
+    def get_all_enabled(self) -> list[ToolEntity]:
+        """Return only tools that are currently enabled.
 
         Returns:
-            A list of all enabled tools.
+            A list of ToolEntity objects where ``is_enabled`` is ``True``.
         """
         return [tool for tool in self._tools.values() if tool.is_enabled]
 
     def delete(self, id: str) -> None:
-        """
-        Delete a tool from the repository.
+        """Remove a tool by ID and emit the deleted signal.
 
         Args:
-            id: The ID of the tool to delete.
+            id: The tool title to remove.
+
+        Emits:
+            tool_deleted: With the tool ID regardless of whether it was
+                present in the cache.
         """
         if id in self._tools:
             del self._tools[id]
         self.tool_deleted.emit(id)
-

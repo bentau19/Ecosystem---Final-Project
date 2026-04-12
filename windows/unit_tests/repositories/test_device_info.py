@@ -13,6 +13,21 @@ from stores.interfaces.base import IStore
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
+@pytest.fixture(autouse=True)
+def reset_singleton() -> None:
+    """Reset the DeviceInfoRepository singleton before and after every test.
+
+    Without this, the first test's instance leaks into every subsequent
+    test — __init__ is guarded by _initialized so new mock stores would
+    never be injected.
+    """
+    DeviceInfoRepository._instance = None
+    DeviceInfoRepository._initialized = False
+    yield
+    DeviceInfoRepository._instance = None
+    DeviceInfoRepository._initialized = False
+
 @pytest.fixture()
 def mock_store_empty() -> MagicMock:
     store: MagicMock = MagicMock(spec=IStore)
@@ -53,7 +68,6 @@ def all_stores(mock_store_empty: MagicMock, mock_store_one_item: MagicMock,
 # ---------------------------------------------------------------------------
 
 # --- load ---
-
 def test_load_returns_store_data(all_stores: List[MagicMock]):
     for mock in all_stores:
         repo = DeviceInfoRepository(store=mock)

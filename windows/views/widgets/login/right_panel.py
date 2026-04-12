@@ -163,9 +163,9 @@ class RightPanel(QWidget):
             card.deleteLater()
         self._cards.clear()
 
+        print(dtos)
         # Populate with fresh cards
         for dto in dtos:
             card = DeviceCard(dto, parent=self._device_list)
-            card.connect_requested.connect(self.device_connect_requested)
             self._cards.append(card)
             self._device_list_layout.addWidget(card)

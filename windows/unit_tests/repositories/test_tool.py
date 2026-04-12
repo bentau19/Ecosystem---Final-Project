@@ -11,6 +11,21 @@ from stores.interfaces.base import IStore
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
+@pytest.fixture(autouse=True)
+def reset_singleton() -> None:
+    """Reset the ToolRepository singleton before and after every test.
+
+    Without this, the first test's instance leaks into every subsequent
+    test — __init__ is guarded by _initialized so new mock stores would
+    never be injected.
+    """
+    ToolRepository._instance = None
+    ToolRepository._initialized = False
+    yield
+    ToolRepository._instance = None
+    ToolRepository._initialized = False
+
 @pytest.fixture()
 def tool_enabled() -> ToolEntity:
     return ToolEntity(

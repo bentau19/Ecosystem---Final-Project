@@ -14,6 +14,21 @@ from stores.interfaces.base import IStore
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def reset_singleton() -> None:
+    """Reset the PreviousDeviceRepository singleton before and after every test.
+
+    Without this, the first test's instance leaks into every subsequent
+    test — __init__ is guarded by _initialized so new mock stores would
+    never be injected.
+    """
+    PreviousDeviceRepository._instance = None
+    PreviousDeviceRepository._initialized = False
+    yield
+    PreviousDeviceRepository._instance = None
+    PreviousDeviceRepository._initialized = False
+
+
 @pytest.fixture()
 def mock_store_empty() -> MagicMock:
     store: MagicMock = MagicMock(spec=IStore)
@@ -43,41 +58,6 @@ def mock_store_mult_items(
     return store
 
 
-# ---------------------------------------------------------------------------
-# load
-# ---------------------------------------------------------------------------
-
-
-def test_load_on_empty_store_returns_empty_dict(mock_store_empty: MagicMock) -> None:
-    repo = PreviousDeviceRepository(store=mock_store_empty)
-
-    assert repo.load() == {}
-
-
-def test_load_returns_all_devices_from_store(
-    mock_store_mult_items: MagicMock,
-    previous_device_online: PreviousDeviceEntity,
-    previous_device_recent: PreviousDeviceEntity,
-    previous_device_idle: PreviousDeviceEntity,
-) -> None:
-    repo = PreviousDeviceRepository(store=mock_store_mult_items)
-
-    result = repo.load()
-
-    assert result == {
-        "dev-001": previous_device_online,
-        "dev-002": previous_device_recent,
-        "dev-003": previous_device_idle,
-    }
-
-
-def test_load_reloads_fresh_data_from_store(mock_store_empty: MagicMock) -> None:
-    repo = PreviousDeviceRepository(store=mock_store_empty)
-    repo.load()
-    repo.load()
-
-    # store.load called once on construction + twice explicitly
-    assert mock_store_empty.load.call_count == 3
 
 
 def test_constructor_eagerly_loads_from_store(mock_store_mult_items: MagicMock) -> None:

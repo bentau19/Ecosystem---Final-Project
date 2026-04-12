@@ -41,7 +41,6 @@ class PreviousDeviceViewModel(QObject):
     def get_devices(self) -> list[PreviousDeviceDTO]:
         return list(self._previous_device.values())
 
-    # ── Public API ────────────────────────────────────────────────────────────
 
     def load_devices(self) -> None:
         """Emit ``devices_loaded`` with all current previous devices as DTOs."""

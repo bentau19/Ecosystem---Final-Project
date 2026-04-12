@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional
 
 from PySide6.QtCore import Signal
 
@@ -8,57 +7,51 @@ from repositories.interfaces.base import IRepository
 
 
 class IDeviceInfoRepository(IRepository[DeviceBaseInfoEntity, DeviceType], ABC):
-    """
-    Interface for a device repository.
+    """Abstract interface for the device-information repository.
 
-    Attributes:
-        device_info_saved (Signal): Emitted when a device info is added.
-        device_info_deleted (Signal): Emitted when a device info is deleted.
+    Signals:
+        device_info_saved: Emitted when a device info is added or updated.
+        device_info_deleted: Emitted when a device info is deleted.
     """
 
     device_info_saved: Signal
     device_info_deleted: Signal
 
     @abstractmethod
-    def get_by_id(self, id: DeviceType) -> Optional[DeviceBaseInfoEntity]:
-        """
-        Get a device info by its ID.
+    def get_by_id(self, id: DeviceType) -> DeviceBaseInfoEntity | None:
+        """Return the device info for the given DeviceType, or ``None``.
 
         Args:
-            id: The ID of the device info.
+            id: The DeviceType key to look up.
 
         Returns:
-            The device info with the given ID, or None if it does not exist.
+            The DeviceBaseInfoEntity for the given type, or ``None`` if not found.
         """
         ...
 
     @abstractmethod
-    def get_all(self) -> List[DeviceBaseInfoEntity]:
-        """
-        Get all device infos.
+    def get_all(self) -> list[DeviceBaseInfoEntity]:
+        """Return all stored device-information entities.
 
         Returns:
-            A list of all device infos.
+            A list of all DeviceBaseInfoEntity objects.
         """
         ...
-
 
     @abstractmethod
     def save(self, entity: DeviceBaseInfoEntity) -> None:
-        """
-        save a device info in the repository.
+        """Persist a device-information entity to the repository.
 
         Args:
-            entity: The updated device info.
+            entity: The device information to save (insert or update).
         """
         ...
 
     @abstractmethod
     def delete(self, id: DeviceType) -> None:
-        """
-        Delete a device info from the repository.
+        """Remove a device-information entity by DeviceType key.
 
         Args:
-            id: The ID of the device info to delete.
+            id: The DeviceType key of the entity to delete.
         """
         ...

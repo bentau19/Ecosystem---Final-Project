@@ -10,25 +10,30 @@ from utils.meta import ABCQObjectMeta
 class PreviousDeviceRepository(IPreviousDeviceRepository, QObject, metaclass=ABCQObjectMeta):
     """Repository for previously connected devices shown on the login screen.
 
-    Loads device data from a JSON-backed store on construction and keeps an
-    in-memory cache that is flushed to disk on every mutation.
+    Implements the singleton pattern so that a single shared instance is used
+    throughout the application.  Data is eagerly loaded from the backing store
+    on first construction and kept in an in-memory cache; every mutation
+    flushes the full cache back to disk.
 
-    Attributes:
-        device_saved (Signal): Emitted with the saved PreviousDeviceEntity after
-            ``save`` completes successfully.
-        device_deleted (Signal): Emitted with the deleted device ID after
-            ``delete`` completes.
+    Signals:
+        device_saved: Emitted with the saved PreviousDeviceEntity after a
+            successful ``save`` call.
+        device_deleted: Emitted with the deleted device ID after ``delete``
+            completes (regardless of whether the ID was present in the cache).
     """
 
     device_saved: Signal = Signal(object)
     device_deleted: Signal = Signal(str)
 
     def __init__(
-        self,
-        store: IStore = PreviousDeviceStore(),
-        parent: QObject | None = None,
+            self,
+            store: IStore = PreviousDeviceStore(),
+            parent: QObject | None = None,
     ) -> None:
         """Initialize the repository and eagerly load data from the store.
+
+        Guarded by ``_initialized`` so that the singleton body only runs once
+        even if the constructor is called multiple times.
 
         Args:
             store: The backing store used for file I/O.
@@ -36,9 +41,10 @@ class PreviousDeviceRepository(IPreviousDeviceRepository, QObject, metaclass=ABC
         """
         super().__init__(parent)
         self._store: IStore = store
-        self._devices: dict[str, PreviousDeviceEntity] = self._store.load()
+        self._devices: dict[str, PreviousDeviceEntity] = {}
+        self._load()
 
-    def load(self) -> dict[str, PreviousDeviceEntity]:
+    def _load(self) -> dict[str, PreviousDeviceEntity]:
         """Reload all devices from the backing store.
 
         Returns:
@@ -69,23 +75,28 @@ class PreviousDeviceRepository(IPreviousDeviceRepository, QObject, metaclass=ABC
     def save(self, entity: PreviousDeviceEntity) -> None:
         """Insert or update a device and flush to disk.
 
-        Emits ``device_saved`` with the entity after the store write.
-
         Args:
             entity: The device to persist.
+
+        Emits:
+            device_saved: With the entity after the store write.
         """
         self._devices[entity.id] = entity
         self._store.save(self._devices)
         self.device_saved.emit(entity)
 
     def delete(self, id: str) -> None:
-        """Remove a device by ID and flush to disk.
+        """Remove a device by ID and flush to disk if the ID was present.
 
-        Emits ``device_deleted`` with the device ID regardless of whether the
-        ID was present in the cache.
+        The store is only written when the ID existed in the cache — if nothing
+        changed in memory there is nothing new to persist.
 
         Args:
             id: The unique device identifier to remove.
+
+        Emits:
+            device_deleted: With the device ID regardless of whether it was
+                present in the cache.
         """
         if id in self._devices:
             del self._devices[id]

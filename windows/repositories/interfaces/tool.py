@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional
 
 from PySide6.QtCore import Signal
 
@@ -8,65 +7,60 @@ from repositories.interfaces.base import IRepository
 
 
 class IToolRepository(IRepository[ToolEntity, str], ABC):
-    """Interface for a tool repository.
+    """Abstract interface for the tool repository.
 
-    Attributes:
-        tool_saved (Signal): Emitted when a tool is saved.
-        tool_deleted (Signal): Emitted when a tool is deleted.
+    Signals:
+        tool_saved: Emitted when a tool is saved.
+        tool_deleted: Emitted when a tool is deleted.
     """
 
     tool_saved: Signal
     tool_deleted: Signal
 
     @abstractmethod
-    def get_by_id(self, id: str) -> Optional[ToolEntity]:
-        """
-        Get a tool by its ID.
+    def get_by_id(self, id: str) -> ToolEntity | None:
+        """Return the tool with the given ID, or ``None`` if absent.
 
         Args:
-            id: The ID of the tool.
+            id: The unique identifier of the tool.
 
         Returns:
-            The tool with the given ID, or None if it does not exist.
+            The ToolEntity with the given ID, or ``None`` if not found.
         """
         ...
 
     @abstractmethod
-    def get_all_enabled(self) -> List[ToolEntity]:
-        """
-        Get all enabled tools.
+    def get_all_enabled(self) -> list[ToolEntity]:
+        """Return all enabled tools.
 
         Returns:
-            A list of all enabled tools.
+            A list of ToolEntity objects where ``is_enabled`` is ``True``.
         """
         ...
 
     @abstractmethod
-    def get_all(self) -> List[ToolEntity]:
-        """
-        Get all tools.
+    def get_all(self) -> list[ToolEntity]:
+        """Return all stored tools.
 
         Returns:
-            A list of all tools.
+            A list of all ToolEntity objects.
         """
         ...
 
     @abstractmethod
     def save(self, entity: ToolEntity) -> None:
-        """
-        save a tool to the repository.
+        """Persist a tool to the repository.
 
         Args:
-            entity: The tool to add.
+            entity: The tool to save.
         """
         ...
 
     @abstractmethod
     def delete(self, id: str) -> None:
-        """
-        Delete a tool from the repository.
+        """Remove a tool from the repository.
 
         Args:
-            id: The ID of the tool to delete.
+            id: The unique identifier of the tool to delete.
         """
         ...
