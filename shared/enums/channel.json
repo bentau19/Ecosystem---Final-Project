@@ -1,0 +1,31 @@
+{
+  "name": "Channel",
+  "description": "TauSync named-stream identifiers. Both PC and Android must call tau.connect() with the exact same string — define it here once and generate both sides.",
+  "type": "string",
+  "members": [
+    {
+      "name": "DEVICE_INFO",
+      "value": "device_info",
+      "description": "Stream for exchanging static device metadata (name, model, OS version)."
+    },
+    {
+      "name": "BATTERY",
+      "value": "battery",
+      "description": "Stream for real-time battery level and charging-state updates."
+    },
+    {
+      "name": "STORAGE",
+      "value": "storage",
+      "description": "Stream for storage usage statistics (total, used, free)."
+    },
+    {
+      "name": "TOOLS",
+      "value": "tools",
+      "description": "Stream for syncing the available tools/actions list."
+    }
+  ],
+  "outputs": {
+    "python": "desktop/enums/channel.py",
+    "java": "android/app/src/main/java/com/example/android/enums/Channel.java"
+  }
+}

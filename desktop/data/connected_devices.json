@@ -1,0 +1,32 @@
+{
+  "dev-001": {
+    "id": "dev-001",
+    "name": "Pixel 8 Pro",
+    "os_label": "Android 14",
+    "tag": "Work",
+    "icon_path": ":/icons/smartphone.svg",
+    "status": "online",
+    "last_seen": "now",
+    "ip": ""
+  },
+  "dev-002": {
+    "id": "dev-002",
+    "name": "Samsung Galaxy S24",
+    "os_label": "Android 13",
+    "tag": "Home",
+    "icon_path": ":/icons/smartphone.svg",
+    "status": "recent",
+    "last_seen": "today",
+    "ip": ""
+  },
+  "dev-003": {
+    "id": "dev-003",
+    "name": "OnePlus 11",
+    "os_label": "Android 13",
+    "tag": "Personal",
+    "icon_path": ":/icons/smartphone.svg",
+    "status": "idle",
+    "last_seen": "3 days ago",
+    "ip": ""
+  }
+}
