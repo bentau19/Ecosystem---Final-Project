@@ -7,9 +7,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QVBoxLayout
 )
 
+from enums.screen import Screen
 from resources.paths import Icons, Styles
 from resources.spacing import Spacing
+from utils import viewmodel_manager
+from utils.navigation_manager import navigation_manager
 from utils.styles import load_stylesheet
+from viewmodels.device import DeviceViewModel
 
 
 class Topbar(QWidget):
@@ -40,13 +44,14 @@ class Topbar(QWidget):
         self._title: str = title
         self._subtitle: str = subtitle
         self._topbar_height: int = topbar_height
+        self._device_viewmodel: DeviceViewModel = viewmodel_manager.device_viewmodel
 
         self._title_block: QWidget
         self._disconnect_button: QPushButton
 
         self._setup_ui()
         self._setup_style()
-        self.setup_slots()
+        self.setup_signals()
 
     def _setup_ui(self) -> None:
         """Configure the widget and build the UI."""
@@ -115,11 +120,14 @@ class Topbar(QWidget):
         qss: str = load_stylesheet(Styles.TOPBAR)
         self.setStyleSheet(qss)
 
-    def setup_slots(self):
+    def setup_signals(self):
         self._disconnect_button.clicked.connect(self._disconnect_from_current_device)
+        self._device_viewmodel.device_disconnected.connect(self._move_to_login)
 
     @Slot()
     def _disconnect_from_current_device(self):
-        print("Disconnecting from current phone...")
-        # TODO: navigate to login view using navigation stack, e.c need the login view first
-        pass
+        self._device_viewmodel.disconnect_device()
+
+    @Slot()
+    def _move_to_login(self):
+        navigation_manager.go_to_screen(Screen.LOGIN)

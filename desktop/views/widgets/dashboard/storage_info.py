@@ -29,10 +29,8 @@ class StorageInfo(QFrame):
         self._available_space: int = total_space
         self._used_space: int = used_space
 
-        print(f"Available space: {self._available_space} GB, Used space: {self._used_space} GB")
 
         self._percentage: int = int((self._used_space / self._available_space) * 100)
-        print(f"Percentage: {self._percentage}")
 
         self._value_label: QLabel
         self._bar: Bar

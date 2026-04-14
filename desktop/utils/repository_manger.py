@@ -1,7 +1,6 @@
 from typing import Final
 
-from repositories.device_info import DeviceInfoRepository
-from repositories.connected_device import PreviousDeviceRepository
+from repositories.device import DeviceRepository
 from repositories.tool import ToolRepository
 
 
@@ -15,7 +14,6 @@ class RepositoryManager:
     def __init__(self) -> None:
         """Initialize all repository instances."""
         self.tools_repository: Final[ToolRepository] = ToolRepository()
-        self.device_repository: Final[DeviceInfoRepository] = DeviceInfoRepository()
-        self.previous_device_repository: Final[PreviousDeviceRepository] = PreviousDeviceRepository()
+        self.current_device_info_repository: Final[DeviceRepository] = DeviceRepository()
 
 repository_manager: Final[RepositoryManager] = RepositoryManager()

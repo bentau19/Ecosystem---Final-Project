@@ -18,21 +18,42 @@ from pathlib import Path
 from typing import Any
 
 # Resolve the project root (two levels up from this file: shared/codegen/generate.py)
-PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent.parent
-
+_PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent.parent
+_ANDROID_PATH: Path = _PROJECT_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "example" / "android" / "enums"
+_DESKTOP_PATH: Path = _PROJECT_ROOT / "desktop" / "enums"
 # All JSON enum definitions live here.
-ENUMS_DIR: Path = PROJECT_ROOT / "shared" / "enums"
+_ENUMS_DIR: Path = _PROJECT_ROOT / "shared" / "enums"
+
+_OUTPUTS: dict[str, list[Path]] = {
+    "python": [_DESKTOP_PATH],
+    "java": [_ANDROID_PATH],
+}
+
+_SUFFIXES: dict[str, str] = {
+    "python": ".py",
+    "java": ".java",
+}
 
 # Add the codegen package to sys.path so the generators import cleanly.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from generators import python_gen, java_gen
 
-
 _GENERATORS: dict[str, Callable[[dict[str, Any]], str]] = {
     "python": python_gen.generate,
     "java": java_gen.generate,
 }
+
+
+def _save_enum(lang, paths, source, enum_name: str):
+    suffix = _SUFFIXES[lang]
+    for path in paths:
+        # parents=True creates any missing intermediate dirs; exist_ok=True avoids
+        # a race condition if another process creates the directory concurrently.
+        file_path = path / f"{enum_name}{suffix}"
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(source, encoding="utf-8")
+        print(f"  [OK]   {lang:8s} → {path}")
 
 
 def process_definition(json_path: Path) -> None:
@@ -50,22 +71,17 @@ def process_definition(json_path: Path) -> None:
 
     with json_path.open(encoding="utf-8") as f:
         definition: dict[str, Any] = json.load(f)
+    name = definition["name"]
 
-    outputs: dict[str, str] = definition.get("outputs", {})
-
-    for lang, rel_path in outputs.items():
+    for lang, paths in _OUTPUTS.items():
         generator: Callable[[dict[str, Any]], str] | None = _GENERATORS.get(lang)
         if generator is None:
-            print(f"  [SKIP] No generator registered for language '{lang}'")
+            print(f"[SKIP] No generator registered for language '{lang}'")
             continue
-
+        print(definition)
         source: str = generator(definition)
-        out_path: Path = PROJECT_ROOT / rel_path
-        # parents=True creates any missing intermediate dirs; exist_ok=True avoids
-        # a race condition if another process creates the directory concurrently.
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(source, encoding="utf-8")
-        print(f"  [OK]   {lang:8s} → {rel_path}")
+
+        _save_enum(lang, paths, source, name)
 
 
 def main() -> None:
@@ -81,7 +97,7 @@ def main() -> None:
         targets: list[Path] = [Path(arg).resolve() for arg in sys.argv[1:]]
     else:
         # Default: process every definition found in the enums directory.
-        targets = sorted(ENUMS_DIR.glob("*.json"))
+        targets = sorted(_ENUMS_DIR.glob("*.json"))
 
     if not targets:
         print("No JSON enum definitions found in shared/enums/")

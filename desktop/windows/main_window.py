@@ -6,10 +6,12 @@ from PySide6.QtWidgets import (
 )
 
 import utils.styles
+from enums.screen import Screen
 from resources.paths import Icons, Styles
 from utils.services_manager import services_manager
 from views.screens.dashboard import DashboardScreen
 from views.screens.login import LoginScreen
+from utils.navigation_manager import navigation_manager
 
 
 class MainWindow(QMainWindow):
@@ -22,6 +24,9 @@ class MainWindow(QMainWindow):
         self._dashboard_screen: DashboardScreen
         self._tray_icon: QSystemTrayIcon
 
+        self._navigation_manager: NavigationManager = navigation_manager
+        self._screens: list[QWidget]
+
         self._setup_ui()
         self._connect_signals()
 
@@ -31,14 +36,17 @@ class MainWindow(QMainWindow):
         """Build the stacked widget, register both screens, and set up the tray."""
         self._stack = QStackedWidget(self)
 
-        self._login_screen = LoginScreen(self)
-        self._dashboard_screen = DashboardScreen()
+        self._screens: dict[Screen, list[QWidget]] = {
+            Screen.LOGIN: LoginScreen(),
+            Screen.DASHBOARD: DashboardScreen()
+        }
 
-        self._stack.addWidget(self._login_screen)  # index 0 — shown on launch
-        self._stack.addWidget(self._dashboard_screen)  # index 1
+        for screen in self._screens.values():
+            self._stack.addWidget(screen)
 
         self.setCentralWidget(self._stack)
         self._setup_tray()
+        self._connect_signals()
 
     def _setup_tray(self) -> None:
         """Create the system tray icon with a context menu."""
@@ -61,8 +69,7 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         """Wire connectivity service signals to navigation slots."""
-        services_manager.connectivity_service.device_connected.connect(self._show_dashboard)
-        services_manager.connectivity_service.device_disconnected.connect(self._show_login)
+        self._navigation_manager.navigate.connect(self._change_page)
 
     # ── Close → tray ──────────────────────────────────────────────────────────
 
@@ -80,15 +87,10 @@ class MainWindow(QMainWindow):
 
     # ── Slots ──────────────────────────────────────────────────────────────────
 
-    @Slot()
-    def _show_dashboard(self) -> None:
-        """Switch to the dashboard screen."""
-        self._stack.setCurrentWidget(self._dashboard_screen)
-
-    @Slot()
-    def _show_login(self) -> None:
-        """Switch back to the login screen."""
-        self._stack.setCurrentWidget(self._login_screen)
+    @Slot(int)
+    def _change_page(self, index: int) -> None:
+        """Switch the stacked widget to the screen at the given index."""
+        self._stack.setCurrentIndex(index)
 
     @Slot()
     def _restore_window(self) -> None:

@@ -2,9 +2,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QScrollArea, QFrame, QVBoxLayout
 )
-from views.widgets.dashboard.phone_details_row import PhoneDetailsRow
 
 from resources.spacing import Spacing
+from views.widgets.dashboard.phone_details_row import PhoneDetailsRow
 from views.widgets.dashboard.tools_grid import ToolsGrid
 from views.widgets.dashboard.tools_section_header import ToolsSectionHeader
 

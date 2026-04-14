@@ -1,8 +1,7 @@
-import json
 import platform
 import socket
 
-from tausync_py import TauSyncStream
+from tausync_py import TauSync
 
 
 def get_ip() -> str:
@@ -29,15 +28,38 @@ def get_pc_name() -> str:
     return platform.node()
 
 
-def get_battery_status():
-    """Return the device's current battery status as a percentage.
+def read_from_channel(tau: TauSync, channel: str) -> str:
+    """Open a named TauSync channel, read all incoming data, and return it as a string.
+
+    Opens the stream via a meeting-word handshake, reads until the remote peer
+    closes its end (EOF), decodes the bytes as UTF-8, and closes the stream.
+
+    Args:
+        tau: An already-connected ``TauSync`` instance (``listen()`` or
+            ``connect_to()`` must have been called beforehand).
+        channel: The meeting-word that identifies the channel
+            (e.g. ``Channel.DEVICE_INFO``).  Both sides must use the same word.
 
     Returns:
-        An integer from 0 to 100 representing the battery level, or None if
-        the battery status cannot be determined.
+        The full payload decoded as a UTF-8 string.
     """
-    pass
+    with tau.connect(str(channel)) as stream:
+        return stream.read_all().decode("utf-8")
 
 
-def get_storage_status():
-    pass
+def write_to_channel(tau: TauSync, channel: str, data: str) -> None:
+    """Open a named TauSync channel, write *data*, flush, and close.
+
+    Encodes *data* as UTF-8, writes the full payload into the channel, flushes
+    the underlying stream, then closes it so the remote peer receives EOF.
+
+    Args:
+        tau: An already-connected ``TauSync`` instance (``listen()`` or
+            ``connect_to()`` must have been called beforehand).
+        channel: The meeting-word that identifies the channel
+            (e.g. ``Channel.DEVICE_INFO``).  Both sides must use the same word.
+        data: UTF-8 string payload to send (e.g. a serialized JSON object).
+    """
+    with tau.connect(str(channel)) as stream:
+        stream.write_string(data)
+        stream.flush()

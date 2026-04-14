@@ -1,156 +1,158 @@
+"""Unit tests for DeviceInfoViewModel."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dto.device_info import DeviceBatteryDTO, DeviceStorageDTO, DeviceNameDTO
-from entities.device_info import DeviceBatteryEntity, DeviceStorageEntity, DeviceNameEntity
-from enums.device_type import DeviceType
-from viewmodels.device_info import DeviceInfoViewModel
+from dto.device_info import (
+    DeviceBatteryDTO,
+    DeviceNameDTO,
+    DeviceOSDTO,
+    DeviceStorageDTO,
+)
+from entities.device_info import DeviceInfoEntity
+from viewmodels.device import DeviceViewModel
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
+@pytest.fixture()
+def entity() -> DeviceInfoEntity:
+    return DeviceInfoEntity(
+        id="dev-001",
+        name="Pixel 8 Pro",
+        os="Android 14",
+        tag="Work",
+        last_seen="now",
+        battery_level=82,
+        battery_charging=True,
+        storage_used=64,
+        storage_total=128,
+        ip="192.168.1.10",
+    )
+
+
 @pytest.fixture()
 def mock_repo() -> MagicMock:
-    repo = MagicMock()
+    repo: MagicMock = MagicMock()
     repo.entity_saved.connect = MagicMock()
-    repo.entity_deleted.connect = MagicMock()
     return repo
 
 
 @pytest.fixture()
-def view_model(mock_repo: MagicMock) -> DeviceInfoViewModel:
-    with patch("viewmodels.device_info.repository_manager") as mock_app_state:
-        mock_app_state.device_repository = mock_repo
-        vm = DeviceInfoViewModel()
+def view_model(mock_repo: MagicMock) -> DeviceViewModel:
+    with (
+        patch("viewmodels.current_device_info.repository_manager") as mock_rm,
+        patch("viewmodels.current_device_info.services_manager"),
+    ):
+        mock_rm.current_device_info_repository = mock_repo
+        vm = DeviceViewModel()
     return vm
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# load_device_infos
 # ---------------------------------------------------------------------------
 
 
-# --- load_device_infos ---
-
-def test_load_device_infos_emits_device_infos_loaded_signal(
-        view_model: DeviceInfoViewModel,
-        mock_repo: MagicMock,
-        battery_entity: DeviceBatteryEntity,
-        storage_entity: DeviceStorageEntity,
-):
-    mock_repo.get_all.return_value = [battery_entity, storage_entity]
-    received = []
-    view_model.device_infos_loaded.connect(lambda dtos: received.extend(dtos))
-
-    view_model.load_device_infos()
-
-    assert len(received) == 2
 
 
-def test_load_device_infos_when_repo_empty_emits_empty_list(
-        view_model: DeviceInfoViewModel,
-        mock_repo: MagicMock,
-):
-    mock_repo.get_all.return_value = []
-    received = []
-    view_model.device_infos_loaded.connect(lambda dtos: received.extend(dtos))
-
-    view_model.load_device_infos()
-
-    assert received == []
 
 
-def test_load_device_infos_converts_entities_to_dtos(
-        view_model: DeviceInfoViewModel,
-        mock_repo: MagicMock,
-        battery_entity: DeviceBatteryEntity,
-):
-    mock_repo.get_all.return_value = [battery_entity]
-    received = []
-    view_model.device_infos_loaded.connect(lambda dtos: received.extend(dtos))
-
-    view_model.load_device_infos()
-
-    dto = received[0]
-    assert isinstance(dto, DeviceBatteryDTO)
-    assert dto.title == battery_entity.title
+# ---------------------------------------------------------------------------
+# _on_entity_saved
+# ---------------------------------------------------------------------------
 
 
-# --- _on_entity_saved ---
+def test_on_entity_saved_emits_device_infos_updated(
+    view_model: DeviceViewModel,
+    entity: DeviceInfoEntity,
+) -> None:
+    received: list = []
+    view_model.device_infos_updated.connect(lambda dtos: received.append(dtos))
 
-def test_on_entity_saved_emits_device_info_added_signal(
-        view_model: DeviceInfoViewModel,
-        battery_entity: DeviceBatteryEntity,
-):
-    received = []
-    view_model.device_info_added.connect(lambda dto: received.append(dto))
-
-    view_model._on_entity_saved(battery_entity)
+    view_model._on_entity_saved(entity)
 
     assert len(received) == 1
-    assert isinstance(received[0], DeviceBatteryDTO)
 
 
-def test_on_entity_saved_converts_entity_to_dto(
-        view_model: DeviceInfoViewModel,
-        battery_entity: DeviceBatteryEntity,
-):
-    received = []
-    view_model.device_info_added.connect(lambda obj: received.append(obj))
+def test_on_entity_saved_emits_four_dtos(
+    view_model: DeviceViewModel,
+    entity: DeviceInfoEntity,
+) -> None:
+    received: list = []
+    view_model.device_infos_updated.connect(lambda dtos: received.extend(dtos))
 
-    view_model._on_entity_saved(battery_entity)
+    view_model._on_entity_saved(entity)
 
-    dto = received[0]
-    assert dto.title == battery_entity.title
-    assert dto.level == battery_entity.level
-    assert dto.is_charging == battery_entity.is_charging
+    assert len(received) == 4
 
 
-# --- _on_entity_deleted ---
+def test_on_entity_saved_battery_dto_fields_match_entity(
+    view_model: DeviceViewModel,
+    entity: DeviceInfoEntity,
+) -> None:
+    received: list = []
+    view_model.device_infos_updated.connect(lambda dtos: received.extend(dtos))
 
-def test_on_entity_deleted_emits_device_info_deleted_signal(
-        view_model: DeviceInfoViewModel,
-):
-    received = []
-    view_model.device_info_deleted.connect(lambda id: received.append(id))
+    view_model._on_entity_saved(entity)
 
-    view_model._on_entity_deleted(DeviceType.BATTERY)
-
-    assert received == [DeviceType.BATTERY]
-
-
-# --- _to_dto ---
-
-def test_to_dto_battery_entity_returns_battery_dto(
-        battery_entity: DeviceBatteryEntity,
-):
-    result = DeviceInfoViewModel._to_dto(battery_entity)
-    assert isinstance(result, DeviceBatteryDTO)
-    assert result.level == battery_entity.level
-    assert result.is_charging == battery_entity.is_charging
+    battery_dto = next(dto for dto in received if isinstance(dto, DeviceBatteryDTO))
+    assert battery_dto.level == entity.battery_level
+    assert battery_dto.is_charging == entity.battery_charging
 
 
-def test_to_dto_storage_entity_returns_storage_dto(
-        storage_entity: DeviceStorageEntity,
-):
-    result = DeviceInfoViewModel._to_dto(storage_entity)
-    assert isinstance(result, DeviceStorageDTO)
-    assert result.used == storage_entity.used
-    assert result.total == storage_entity.total
+def test_on_entity_saved_storage_dto_fields_match_entity(
+    view_model: DeviceViewModel,
+    entity: DeviceInfoEntity,
+) -> None:
+    received: list = []
+    view_model.device_infos_updated.connect(lambda dtos: received.extend(dtos))
+
+    view_model._on_entity_saved(entity)
+
+    storage_dto = next(dto for dto in received if isinstance(dto, DeviceStorageDTO))
+    assert storage_dto.used == entity.storage_used
+    assert storage_dto.total == entity.storage_total
 
 
-def test_to_dto_name_entity_returns_name_dto(
-        device_name_entity: DeviceNameEntity,
-):
-    result = DeviceInfoViewModel._to_dto(device_name_entity)
-    assert isinstance(result, DeviceNameDTO)
-    assert result.name == device_name_entity.name
+# ---------------------------------------------------------------------------
+# _to_dtos (static helper)
+# ---------------------------------------------------------------------------
 
 
-def test_to_dto_unknown_entity_raises_value_error():
-    unknown_entity = MagicMock(spec=[])
-    with pytest.raises(ValueError, match="Unknown DeviceInfoEntity subclass"):
-        DeviceInfoViewModel._to_dto(unknown_entity)
+def test_to_dtos_returns_four_items(entity: DeviceInfoEntity) -> None:
+    assert len(DeviceViewModel._to_dtos(entity)) == 4
+
+
+def test_to_dtos_first_item_is_name_dto(entity: DeviceInfoEntity) -> None:
+    result = DeviceViewModel._to_dtos(entity)
+
+    assert isinstance(result[0], DeviceNameDTO)
+    assert result[0].name == entity.name
+
+
+def test_to_dtos_second_item_is_os_dto(entity: DeviceInfoEntity) -> None:
+    result = DeviceViewModel._to_dtos(entity)
+
+    assert isinstance(result[1], DeviceOSDTO)
+    assert result[1].os == entity.os
+
+
+def test_to_dtos_third_item_is_battery_dto(entity: DeviceInfoEntity) -> None:
+    result = DeviceViewModel._to_dtos(entity)
+
+    assert isinstance(result[2], DeviceBatteryDTO)
+    assert result[2].level == entity.battery_level
+    assert result[2].is_charging == entity.battery_charging
+
+
+def test_to_dtos_fourth_item_is_storage_dto(entity: DeviceInfoEntity) -> None:
+    result = DeviceViewModel._to_dtos(entity)
+
+    assert isinstance(result[3], DeviceStorageDTO)
+    assert result[3].used == entity.storage_used
+    assert result[3].total == entity.storage_total

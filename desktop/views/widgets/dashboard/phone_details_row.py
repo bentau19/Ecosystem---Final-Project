@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Type
 
 from PySide6.QtCore import Slot
 from PySide6.QtGui import QColor, QIcon
@@ -15,12 +15,14 @@ from dto.device_info import (
     DeviceBatteryDTO,
     DeviceStorageDTO,
 )
+from enums.device_type import DeviceType
 from layouts.flow_layout import FlowLayout
+from resources.colors import Palette
 from resources.paths import DashboardStyles
-from utils.icon_color import icon_color_for_device_type
 from resources.spacing import Spacing
+from utils import viewmodel_manager
 from utils.styles import load_stylesheet
-from viewmodels.device_info import DeviceInfoViewModel
+from viewmodels.device import DeviceViewModel
 from views.widgets.dashboard.battery_info import BatteryInfo
 from views.widgets.dashboard.info_card import InfoCard
 from views.widgets.dashboard.storage_info import StorageInfo
@@ -32,6 +34,13 @@ class PhoneDetailsRow(QWidget):
     On construction, it loads all device-info entities via the
     ``DeviceInfoViewModel`` and renders one ``InfoCard`` per entity.
     """
+
+    _DEVICE_TYPE_COLORS: dict[DeviceType, str] = {
+        DeviceType.NAME: Palette.CYAN_800,  # identity → mid-cyan tint
+        DeviceType.OS: Palette.CYAN_800,  # system   → mid-cyan tint
+        DeviceType.STORAGE: Palette.CYAN_800,  # storage  → mid-cyan tint
+        DeviceType.BATTERY: Palette.CYAN_800,  # energy   → mid-cyan tint
+    }
 
     def __init__(
             self,
@@ -51,7 +60,7 @@ class PhoneDetailsRow(QWidget):
         self._card_width: int = card_width
         self._card_height: int = card_height
 
-        self._device_info_view_model: DeviceInfoViewModel = DeviceInfoViewModel()
+        self._device_viewmodel: DeviceViewModel = viewmodel_manager.device_viewmodel
 
         self._main_layout: FlowLayout
         self._cards: List[InfoCard] = []
@@ -60,7 +69,7 @@ class PhoneDetailsRow(QWidget):
         self._setup_style()
         self._setup_signals()
 
-        self._device_info_view_model.load_device_infos()
+        self._device_viewmodel.load_device_info()
 
     def _setup_ui(self) -> None:
         """Set up the user interface."""
@@ -77,17 +86,14 @@ class PhoneDetailsRow(QWidget):
         self._main_layout.setSpacing(Spacing.LG)
 
     @staticmethod
-    def _create_description_widget(
-            first_description: str
-    ) -> QWidget:
-        """Create a two-line label widget.
+    def _create_description_widget(first_description: str) -> QWidget:
+        """Create a single-line label widget.
 
         Args:
-            first_description:  Primary (top) line of text.
-            second_description: Secondary (bottom) line of text.
+            first_description: Primary line of text to display.
 
         Returns:
-            QWidget containing the two stacked labels.
+            QWidget containing the label.
         """
         widget: QWidget = QWidget()
         layout: QVBoxLayout = QVBoxLayout(widget)
@@ -106,20 +112,29 @@ class PhoneDetailsRow(QWidget):
         """Create a generic text-value card (name, OS, or IP).
 
         Args:
-            dto:   The base DTO supplying title, icon, and color.
+            dto: The DTO supplying title, icon, color, and text value.
 
         Returns:
             A configured ``InfoCard`` widget.
         """
+        card: InfoCard
         descr = ""
+        color: str
         if isinstance(dto, DeviceNameDTO):
             descr = dto.name
+            color = self._DEVICE_TYPE_COLORS[DeviceType.NAME]
         elif isinstance(dto, DeviceOSDTO):
             descr = dto.os
+            color = self._DEVICE_TYPE_COLORS[DeviceType.OS]
+        else:
+            raise ValueError(f"Unknown device info type: {type(dto)}")
 
         content: QWidget = self._create_description_widget(descr)
         card: InfoCard = InfoCard(
-            QIcon(dto.icon_path), QColor(icon_color_for_device_type(dto.type)), dto.title, content
+            QIcon(dto.icon_path),
+            QColor(color),
+            dto.title,
+            content,
         )
         card.setMinimumWidth(self._card_width)
         card.setFixedHeight(self._card_height)
@@ -136,7 +151,7 @@ class PhoneDetailsRow(QWidget):
         """
         card: InfoCard = InfoCard(
             QIcon(battery.icon_path),
-            QColor(icon_color_for_device_type(battery.type)),
+            QColor(self._DEVICE_TYPE_COLORS[DeviceType.BATTERY]),
             battery.title,
             BatteryInfo(battery.level, battery.is_charging),
         )
@@ -155,7 +170,7 @@ class PhoneDetailsRow(QWidget):
         """
         card: InfoCard = InfoCard(
             QIcon(storage.icon_path),
-            QColor(icon_color_for_device_type(storage.type)),
+            QColor(self._DEVICE_TYPE_COLORS[DeviceType.STORAGE]),
             storage.title,
             StorageInfo(storage.total, storage.used),
         )
@@ -170,10 +185,10 @@ class PhoneDetailsRow(QWidget):
 
     def _setup_signals(self) -> None:
         """Connect ViewModel signals to view slots."""
-        self._device_info_view_model.device_infos_loaded.connect(self._on_device_infos_loaded)
+        self._device_viewmodel.device_infos_updated.connect(self._set_device_infos)
 
     @Slot(list)
-    def _on_device_infos_loaded(self, device_infos: List[DeviceInfoDTO]) -> None:
+    def _set_device_infos(self, device_infos: List[DeviceInfoDTO]) -> None:
         """Render an ``InfoCard`` for every loaded device-info DTO.
 
         Args:

@@ -10,6 +10,7 @@ gives clear error messages instead of leaking raw .NET exceptions.
 from __future__ import annotations
 
 import ctypes
+import ipaddress
 import os
 import sys
 import threading
@@ -603,6 +604,7 @@ class TauSync:
                 the opposite role, or already connected to a different
                 address.
         """
+        ipaddress.IPv4Address(ip)
         self._check_not_disposed()
         ip = ip.strip() if ip else ""
 
@@ -629,6 +631,7 @@ class TauSync:
             TauSync._global_role = _ROLE_CLIENT
             TauSync._global_target = ip
         try:
+            print(f"hey i am nothing")
             self._manager.ConnectTransport(ip).GetAwaiter().GetResult()
         except Exception:
             with TauSync._global_role_lock:
@@ -639,7 +642,7 @@ class TauSync:
     @property
     def is_connected(self) -> bool:
         """Whether the underlying TCP transport is up."""
-        if self._disposed:
+        if self._manager.IsConnected():
             return False
         return TauSync._global_role != _ROLE_NONE
 

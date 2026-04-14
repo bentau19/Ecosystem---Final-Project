@@ -4,29 +4,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from entities.connected_device import PreviousDeviceEntity
-from repositories.connected_device import PreviousDeviceRepository
+from entities.device_info import DeviceInfoEntity
+from repositories.previous_device import PreviousDeviceRepository
 from stores.interfaces.base import IStore
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def reset_singleton() -> None:
-    """Reset the PreviousDeviceRepository singleton before and after every test.
-
-    Without this, the first test's instance leaks into every subsequent
-    test — __init__ is guarded by _initialized so new mock stores would
-    never be injected.
-    """
-    PreviousDeviceRepository._instance = None
-    PreviousDeviceRepository._initialized = False
-    yield
-    PreviousDeviceRepository._instance = None
-    PreviousDeviceRepository._initialized = False
 
 
 @pytest.fixture()
@@ -37,7 +22,7 @@ def mock_store_empty() -> MagicMock:
 
 
 @pytest.fixture()
-def mock_store_one_item(previous_device_online: PreviousDeviceEntity) -> MagicMock:
+def mock_store_one_item(previous_device_online: DeviceInfoEntity) -> MagicMock:
     store: MagicMock = MagicMock(spec=IStore)
     store.load.return_value = {"dev-001": previous_device_online}
     return store
@@ -45,9 +30,9 @@ def mock_store_one_item(previous_device_online: PreviousDeviceEntity) -> MagicMo
 
 @pytest.fixture()
 def mock_store_mult_items(
-    previous_device_online: PreviousDeviceEntity,
-    previous_device_recent: PreviousDeviceEntity,
-    previous_device_idle: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
+    previous_device_recent: DeviceInfoEntity,
+    previous_device_idle: DeviceInfoEntity,
 ) -> MagicMock:
     store: MagicMock = MagicMock(spec=IStore)
     store.load.return_value = {
@@ -73,9 +58,9 @@ def test_constructor_eagerly_loads_from_store(mock_store_mult_items: MagicMock) 
 
 def test_get_by_id_returns_correct_entity_when_id_exists(
     mock_store_mult_items: MagicMock,
-    previous_device_online: PreviousDeviceEntity,
-    previous_device_recent: PreviousDeviceEntity,
-    previous_device_idle: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
+    previous_device_recent: DeviceInfoEntity,
+    previous_device_idle: DeviceInfoEntity,
 ) -> None:
     repo = PreviousDeviceRepository(store=mock_store_mult_items)
 
@@ -117,9 +102,9 @@ def test_get_all_on_empty_store_returns_empty_list(mock_store_empty: MagicMock) 
 
 def test_get_all_returns_list_of_all_entities(
     mock_store_mult_items: MagicMock,
-    previous_device_online: PreviousDeviceEntity,
-    previous_device_recent: PreviousDeviceEntity,
-    previous_device_idle: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
+    previous_device_recent: DeviceInfoEntity,
+    previous_device_idle: DeviceInfoEntity,
 ) -> None:
     repo = PreviousDeviceRepository(store=mock_store_mult_items)
 
@@ -133,7 +118,7 @@ def test_get_all_returns_list_of_all_entities(
 
 def test_get_all_returns_single_entity_list(
     mock_store_one_item: MagicMock,
-    previous_device_online: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
 ) -> None:
     repo = PreviousDeviceRepository(store=mock_store_one_item)
 
@@ -149,7 +134,7 @@ def test_get_all_returns_single_entity_list(
 
 def test_save_new_entity_makes_it_retrievable_by_id(
     mock_store_empty: MagicMock,
-    previous_device_online: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
 ) -> None:
     repo = PreviousDeviceRepository(store=mock_store_empty)
 
@@ -160,8 +145,8 @@ def test_save_new_entity_makes_it_retrievable_by_id(
 
 def test_save_new_entity_appears_in_get_all(
     mock_store_empty: MagicMock,
-    previous_device_online: PreviousDeviceEntity,
-    previous_device_recent: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
+    previous_device_recent: DeviceInfoEntity,
 ) -> None:
     repo = PreviousDeviceRepository(store=mock_store_empty)
 
@@ -175,7 +160,7 @@ def test_save_new_entity_appears_in_get_all(
 
 def test_save_existing_entity_overwrites_previous_value(
     mock_store_empty: MagicMock,
-    previous_device_online: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
 ) -> None:
     repo = PreviousDeviceRepository(store=mock_store_empty)
     repo.save(previous_device_online)
@@ -188,7 +173,7 @@ def test_save_existing_entity_overwrites_previous_value(
 
 def test_save_calls_store_save(
     mock_store_empty: MagicMock,
-    previous_device_online: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
 ) -> None:
     repo = PreviousDeviceRepository(store=mock_store_empty)
 
@@ -199,10 +184,10 @@ def test_save_calls_store_save(
 
 def test_save_emits_entity_saved_signal(
     mock_store_empty: MagicMock,
-    previous_device_online: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
 ) -> None:
     repo = PreviousDeviceRepository(store=mock_store_empty)
-    received: list[PreviousDeviceEntity] = []
+    received: list[DeviceInfoEntity] = []
     repo.entity_saved.connect(lambda entity: received.append(entity))
 
     repo.save(previous_device_online)
@@ -213,11 +198,11 @@ def test_save_emits_entity_saved_signal(
 
 def test_save_emits_entity_saved_signal_with_correct_entity(
     mock_store_empty: MagicMock,
-    previous_device_online: PreviousDeviceEntity,
-    previous_device_recent: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
+    previous_device_recent: DeviceInfoEntity,
 ) -> None:
     repo = PreviousDeviceRepository(store=mock_store_empty)
-    received: list[PreviousDeviceEntity] = []
+    received: list[DeviceInfoEntity] = []
     repo.entity_saved.connect(lambda entity: received.append(entity))
 
     repo.save(previous_device_online)
@@ -244,7 +229,7 @@ def test_delete_existing_entity_makes_it_unretrievable(
 
 def test_delete_existing_entity_removes_it_from_get_all(
     mock_store_mult_items: MagicMock,
-    previous_device_online: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
 ) -> None:
     repo = PreviousDeviceRepository(store=mock_store_mult_items)
 

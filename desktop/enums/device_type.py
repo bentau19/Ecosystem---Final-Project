@@ -6,7 +6,5 @@ class DeviceType(IntEnum):
 
     NAME = 0
     OS = 1
-    IP = 2
-    BATTERY = 3
-    STORAGE = 4
-    DEVICE_ID = 5
+    BATTERY = 2
+    STORAGE = 3

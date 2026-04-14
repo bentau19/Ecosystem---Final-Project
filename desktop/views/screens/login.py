@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import QHBoxLayout, QWidget
 
+from resources.spacing import Spacing
 from views.widgets.login.left_panel import LeftPanel
 from views.widgets.login.right_panel import RightPanel
 
@@ -41,12 +42,12 @@ class LoginScreen(QWidget):
     def _setup_layout(self) -> None:
         """Place panels side by side with no margins or gap."""
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.NONE)
+        layout.setSpacing(Spacing.NONE)
 
         # Left panel slightly narrower; right panel gets more space for card list
-        layout.addWidget(self._left_panel, stretch=5)
-        layout.addWidget(self._right_panel, stretch=6)
+        layout.addWidget(self._left_panel, stretch=2)
+        layout.addWidget(self._right_panel, stretch=1)
 
     def _apply_style(self) -> None:
         """No screen-level stylesheet — panels handle their own styling."""

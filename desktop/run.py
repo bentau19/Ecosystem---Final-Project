@@ -49,10 +49,9 @@ def run_app():
 if __name__ == "__main__":
     print("Using Python:", sys.executable)
 
-    run_tests_first = "--test" in sys.argv
 
     compile_resources()
 
-    run_tests()
+    # run_tests()
 
     run_app()

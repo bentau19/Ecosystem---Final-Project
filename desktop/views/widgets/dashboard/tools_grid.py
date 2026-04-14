@@ -8,7 +8,6 @@ from dto.tool import ToolDTO
 from layouts.flow_layout import FlowLayout
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from utils.icon_color import icon_color_for_id
 from utils.styles import load_stylesheet
 from viewmodels.tool import ToolViewModel
 from views.widgets.dashboard.tool_card import ToolCard
@@ -103,7 +102,7 @@ class ToolsGrid(QWidget):
         for tool in tools:
             description_label: QLabel = self._create_description_widget(tool.description)
             tool_card: ToolCard = ToolCard(
-                QIcon(tool.icon_path), QColor(icon_color_for_id(tool.title)), tool.title, description_label
+                QIcon(tool.icon_path), QColor("#FFFFF"), tool.title, description_label
             )
             tool_card.setMinimumWidth(self._card_width)
             tool_card.setFixedHeight(self._card_height)

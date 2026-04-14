@@ -4,8 +4,7 @@ from dataclasses import asdict
 
 import pytest
 
-from entities.connected_device import PreviousDeviceEntity
-from enums.device_status import DeviceStatus
+from entities.device_info import DeviceInfoEntity
 from serializers.previous_device import PreviousDeviceSerializer
 
 
@@ -30,7 +29,7 @@ def test_serialize_empty_dict_returns_empty_dict(serializer: PreviousDeviceSeria
 
 def test_serialize_single_entity_returns_correct_dict(
     serializer: PreviousDeviceSerializer,
-    previous_device_online: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
 ) -> None:
     result = serializer.serialize({"dev-001": previous_device_online})
 
@@ -39,9 +38,9 @@ def test_serialize_single_entity_returns_correct_dict(
 
 def test_serialize_multiple_entities_returns_all_entries(
     serializer: PreviousDeviceSerializer,
-    previous_device_online: PreviousDeviceEntity,
-    previous_device_recent: PreviousDeviceEntity,
-    previous_device_idle: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
+    previous_device_recent: DeviceInfoEntity,
+    previous_device_idle: DeviceInfoEntity,
 ) -> None:
     data = {
         "dev-001": previous_device_online,
@@ -58,13 +57,18 @@ def test_serialize_multiple_entities_returns_all_entries(
     }
 
 
-def test_serialize_status_stored_as_string(
+def test_serialize_preserves_all_entity_fields(
     serializer: PreviousDeviceSerializer,
-    previous_device_online: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
 ) -> None:
     result = serializer.serialize({"dev-001": previous_device_online})
 
-    assert result["dev-001"]["status"] == "online"
+    entry = result["dev-001"]
+    assert entry["id"] == previous_device_online.id
+    assert entry["name"] == previous_device_online.name
+    assert entry["os"] == previous_device_online.os
+    assert entry["battery_level"] == previous_device_online.battery_level
+    assert entry["storage_used"] == previous_device_online.storage_used
 
 
 # ---------------------------------------------------------------------------
@@ -78,32 +82,21 @@ def test_deserialize_empty_dict_returns_empty_dict(serializer: PreviousDeviceSer
 
 def test_deserialize_single_entry_returns_correct_entity(
     serializer: PreviousDeviceSerializer,
-    previous_device_online: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
 ) -> None:
     raw = {"dev-001": asdict(previous_device_online)}
 
     result = serializer.deserialize(raw)
 
     assert result == {"dev-001": previous_device_online}
-    assert isinstance(result["dev-001"], PreviousDeviceEntity)
-
-
-def test_deserialize_status_converted_to_enum(
-    serializer: PreviousDeviceSerializer,
-    previous_device_online: PreviousDeviceEntity,
-) -> None:
-    raw = {"dev-001": asdict(previous_device_online)}
-
-    result = serializer.deserialize(raw)
-
-    assert result["dev-001"].status is DeviceStatus.ONLINE
+    assert isinstance(result["dev-001"], DeviceInfoEntity)
 
 
 def test_deserialize_multiple_entries_returns_all_entities(
     serializer: PreviousDeviceSerializer,
-    previous_device_online: PreviousDeviceEntity,
-    previous_device_recent: PreviousDeviceEntity,
-    previous_device_idle: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
+    previous_device_recent: DeviceInfoEntity,
+    previous_device_idle: DeviceInfoEntity,
 ) -> None:
     raw = {
         "dev-001": asdict(previous_device_online),
@@ -120,23 +113,16 @@ def test_deserialize_multiple_entries_returns_all_entities(
     }
 
 
-def test_deserialize_all_statuses_reconstruct_correctly(
+def test_deserialize_drops_icon_path_if_present(
     serializer: PreviousDeviceSerializer,
-    previous_device_online: PreviousDeviceEntity,
-    previous_device_recent: PreviousDeviceEntity,
-    previous_device_idle: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
 ) -> None:
-    raw = {
-        "dev-001": asdict(previous_device_online),
-        "dev-002": asdict(previous_device_recent),
-        "dev-003": asdict(previous_device_idle),
-    }
+    raw = {"dev-001": asdict(previous_device_online)}
+    raw["dev-001"]["icon_path"] = "legacy/icon.png"
 
     result = serializer.deserialize(raw)
 
-    assert result["dev-001"].status is DeviceStatus.ONLINE
-    assert result["dev-002"].status is DeviceStatus.RECENT
-    assert result["dev-003"].status is DeviceStatus.IDLE
+    assert result == {"dev-001": previous_device_online}
 
 
 # ---------------------------------------------------------------------------
@@ -146,9 +132,9 @@ def test_deserialize_all_statuses_reconstruct_correctly(
 
 def test_serialize_then_deserialize_returns_original_data(
     serializer: PreviousDeviceSerializer,
-    previous_device_online: PreviousDeviceEntity,
-    previous_device_recent: PreviousDeviceEntity,
-    previous_device_idle: PreviousDeviceEntity,
+    previous_device_online: DeviceInfoEntity,
+    previous_device_recent: DeviceInfoEntity,
+    previous_device_idle: DeviceInfoEntity,
 ) -> None:
     original = {
         "dev-001": previous_device_online,

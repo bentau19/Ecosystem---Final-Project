@@ -35,7 +35,7 @@ def manager(
 ) -> RepositoryManager:
     with (
         patch("utils.repository_manger.ToolRepository", return_value=mock_tool_repo),
-        patch("utils.repository_manger.DeviceInfoRepository", return_value=mock_device_repo),
+        patch("utils.repository_manger.CurrentDeviceInfoRepository", return_value=mock_device_repo),
         patch("utils.repository_manger.PreviousDeviceRepository", return_value=mock_prev_repo),
     ):
         return RepositoryManager()
@@ -55,7 +55,7 @@ def test_manager_exposes_tools_repository(
 def test_manager_exposes_device_repository(
     manager: RepositoryManager, mock_device_repo: MagicMock
 ) -> None:
-    assert manager.device_repository is mock_device_repo
+    assert manager.current_device_info_repository is mock_device_repo
 
 
 def test_manager_exposes_previous_device_repository(
@@ -72,7 +72,7 @@ def test_manager_exposes_previous_device_repository(
 def test_manager_instantiates_tool_repository() -> None:
     with (
         patch("utils.repository_manger.ToolRepository") as mock_tool_cls,
-        patch("utils.repository_manger.DeviceInfoRepository"),
+        patch("utils.repository_manger.CurrentDeviceInfoRepository"),
         patch("utils.repository_manger.PreviousDeviceRepository"),
     ):
         RepositoryManager()
@@ -83,7 +83,7 @@ def test_manager_instantiates_tool_repository() -> None:
 def test_manager_instantiates_device_info_repository() -> None:
     with (
         patch("utils.repository_manger.ToolRepository"),
-        patch("utils.repository_manger.DeviceInfoRepository") as mock_device_cls,
+        patch("utils.repository_manger.CurrentDeviceInfoRepository") as mock_device_cls,
         patch("utils.repository_manger.PreviousDeviceRepository"),
     ):
         RepositoryManager()
@@ -94,7 +94,7 @@ def test_manager_instantiates_device_info_repository() -> None:
 def test_manager_instantiates_previous_device_repository() -> None:
     with (
         patch("utils.repository_manger.ToolRepository"),
-        patch("utils.repository_manger.DeviceInfoRepository"),
+        patch("utils.repository_manger.CurrentDeviceInfoRepository"),
         patch("utils.repository_manger.PreviousDeviceRepository") as mock_prev_cls,
     ):
         RepositoryManager()
@@ -103,6 +103,6 @@ def test_manager_instantiates_previous_device_repository() -> None:
 
 
 def test_manager_repositories_are_distinct_objects(manager: RepositoryManager) -> None:
-    assert manager.tools_repository is not manager.device_repository
-    assert manager.device_repository is not manager.previous_device_repository
+    assert manager.tools_repository is not manager.current_device_info_repository
+    assert manager.current_device_info_repository is not manager.previous_device_repository
     assert manager.tools_repository is not manager.previous_device_repository

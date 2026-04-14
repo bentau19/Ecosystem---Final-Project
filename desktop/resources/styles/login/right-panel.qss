@@ -58,17 +58,6 @@
 }
 
 /* ── Status badges ─────────────────────────────────── */
-#BadgeOnline {
-    color: #00E676;
-    background-color: rgba(0, 230, 118, 20);
-    border: 1px solid rgba(0, 230, 118, 70);
-    border-radius: 6px;
-    padding: 2px 8px;
-    font-family: "SF Pro Text", "Segoe UI", sans-serif;
-    font-size: 11px;
-    font-weight: 600;
-}
-
 #BadgeRecent {
     color: #22D3EE;
     background-color: rgba(34, 211, 238, 20);
@@ -112,6 +101,21 @@
 
 #ConnectBtn:pressed {
     background-color: rgba(34, 211, 238, 50);
+}
+
+/* ── Empty state ───────────────────────────────────── */
+#EmptyStateTitle {
+    color: #64748B;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+#EmptyStateSubtitle {
+    color: #374151;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 400;
 }
 
 /* ── Footer ────────────────────────────────────────── */

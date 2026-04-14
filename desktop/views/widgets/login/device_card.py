@@ -3,26 +3,30 @@ Device card for the login screen's right panel.
 Shows name, OS/tag meta, status badge, and last-seen time.
 On hover the status column is replaced by a 'Connect →' button.
 """
+from datetime import datetime, timedelta
 
-from PySide6.QtCore import QEvent, QRectF, Qt, Slot
+from PySide6.QtCore import QEvent, QRectF, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QEnterEvent, QPainter, QPainterPath, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton,
-    QSizePolicy, QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget,
 )
 
-from dto.connected_device import PreviousDeviceDTO
+from dto.previous_device import PreviousDeviceDTO
 from enums.device_status import DeviceStatus
+from enums.screen import Screen
+from resources.colors import LoginColors
+from resources.paths import Icons
 from resources.spacing import Spacing
-from utils.icon_color import icon_color_for_id
-from utils.services_manager import services_manager
+from utils import viewmodel_manager
+from utils.navigation_manager import navigation_manager
+from viewmodels.device import DeviceViewModel
 
 # Maps DeviceStatus → (QSS object name for badge, badge display text)
-_BADGE_CONFIG: dict[DeviceStatus, tuple[str, str]] = {
-    DeviceStatus.ONLINE: ("BadgeOnline", "online"),
-    DeviceStatus.RECENT: ("BadgeRecent", "2m ago"),
-    DeviceStatus.IDLE: ("BadgeIdle", "idle"),
+_BADGE_CONFIG: dict[DeviceStatus, str] = {
+    DeviceStatus.RECENT: "BadgeRecent",
+    DeviceStatus.IDLE: "BadgeIdle",
 }
 
 _ICON_SIZE: int = 48
@@ -60,6 +64,8 @@ class DeviceCard(QWidget):
         self._status_widget: QWidget
         self._connect_btn: QPushButton
 
+        self._device_viewmodel: DeviceViewModel = viewmodel_manager.device_viewmodel
+
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setObjectName("DeviceCard")
@@ -88,16 +94,22 @@ class DeviceCard(QWidget):
         self._name_lbl = QLabel(self._device.name)
         self._name_lbl.setObjectName("DeviceName")
 
-        self._meta_lbl = QLabel(f"{self._device.os_label}  ·  {self._device.tag}")
+        self._meta_lbl = QLabel(f"{self._device.os}  ·  {self._device.tag}")
         self._meta_lbl.setObjectName("DeviceMeta")
 
-        obj_name, badge_text = _BADGE_CONFIG[self._device.status]
-        self._badge = QLabel(badge_text)
-        self._badge.setObjectName(obj_name)
-        self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        time = datetime.strptime(self._device.last_connected, "%d-%m-%Y")
 
-        self._time_lbl = QLabel(self._device.last_seen)
+        obj_name = "BadgeRecent" if datetime.now() - time < timedelta(days=14) else "BadgeIdle"
+        text = "recent" if datetime.now() - time < timedelta(days=14) else "idle"
+
+        self._badge = QLabel(text)
+        self._badge.setFixedWidth(50)
+        self._badge.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.NONE)
+        self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self._badge.setObjectName(obj_name)
+
+        self._time_lbl = QLabel(self._device.last_connected)
         self._time_lbl.setObjectName("DeviceTime")
         self._time_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
 
@@ -108,16 +120,15 @@ class DeviceCard(QWidget):
         self._connect_btn.setVisible(False)
 
     def _create_icon_label(self) -> QLabel:
-        """Render the device icon as a tinted rounded-square pixmap.
+        """Render the device icon as a tinted rounded-square Pixmap.
 
         Derives the background color from the device ID so the same device
         always gets the same color, with no color stored in the data layer.
 
         Returns:
-            A fixed-size QLabel containing the rendered pixmap.
+            A fixed-size QLabel containing the rendered Pixmap.
         """
-        color = QColor(icon_color_for_id(self._device.id))
-        color.setAlpha(200)
+        color = QColor(LoginColors.ICON_BG)
 
         pixmap = QPixmap(_ICON_SIZE, _ICON_SIZE)
         pixmap.fill(Qt.GlobalColor.transparent)
@@ -130,8 +141,8 @@ class DeviceCard(QWidget):
         bg_path.addRoundedRect(0, 0, _ICON_SIZE, _ICON_SIZE, _ICON_RADIUS, _ICON_RADIUS)
         painter.fillPath(bg_path, color)
 
-        # SVG icon overlay
-        renderer = QSvgRenderer(self._device.icon_path)
+        # SVG icon overlay — all device cards use the smartphone icon
+        renderer = QSvgRenderer(Icons.SMARTPHONE)
         m = _ICON_MARGIN
         renderer.render(painter, QRectF(m, m, _ICON_SIZE - m * 2, _ICON_SIZE - m * 2))
 
@@ -152,10 +163,9 @@ class DeviceCard(QWidget):
         container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         col = QVBoxLayout(container)
         col.setSpacing(Spacing.XS)
-        col.setContentsMargins(0, 0, 0, 0)
-        col.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        col.addWidget(self._badge)
-        col.addWidget(self._time_lbl)
+        col.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.NONE)
+        col.addWidget(self._badge, alignment=Qt.AlignmentFlag.AlignRight)
+        col.addWidget(self._time_lbl, alignment=Qt.AlignmentFlag.AlignRight)
         return container
 
     def _setup_layout(self) -> None:
@@ -183,7 +193,9 @@ class DeviceCard(QWidget):
 
     def _connect_signals(self) -> None:
         """Wire the Connect button to the connection handler."""
-        self._connect_btn.clicked.connect(self._on_connect_clicked)
+        self._connect_btn.clicked.connect(self._on_button_clicked)
+        self._device_viewmodel.device_connected.connect(self._on_device_connected)
+        pass
 
     # ── Hover events ──────────────────────────────────────────────────────────
 
@@ -207,6 +219,18 @@ class DeviceCard(QWidget):
         self._status_widget.setVisible(True)
         super().leaveEvent(event)
 
+    @Slot(object)
+    def _on_device_connected(self, prev: PreviousDeviceDTO) -> None:
+        """Forward a card's connection request as a panel-level signal.
+
+        Args:
+            prev: The DTO of the device the user wishes to connect to.
+
+        Emits:
+            device_connect_requested: Re-emits the same DTO upstream.
+        """
+        navigation_manager.go_to_screen(Screen.DASHBOARD)
+
     @Slot()
-    def _on_connect_clicked(self) -> None:
-        services_manager.connectivity_service.connect_to_device(self._device.id)
+    def _on_button_clicked(self):
+        self._device_viewmodel.connect_device(self._device.ip)

@@ -40,12 +40,22 @@ class Palette(ColorsEnum):
 
     ORANGE_500 = "#FF9800"  # Orange accent color
 
+    BLUE_700 = "#0369a1"  # Steel blue — device icon container background
+
     SILVER_300 = "#D4D7DD"  # Start color for the gradient
     SILVER_500 = "#6E7583"  # End color for the gradient
     SILVER_600 = "#6e7681"  # Warm muted text (slightly cooler than SILVER_500)
 
     PURPLE_500 = "#7B61FF"  # Primary purple color
     PURPLE_400 = "#6959F0"  # Secondary purple color
+
+    # Muted deep-tint backgrounds for icon containers (dark-UI accent pits)
+    CYAN_900   = "#0d2d36"  # deep cyan tint
+    CYAN_800   = "#0f3d4f"  # mid cyan tint
+    VIOLET_900 = "#1c1642"  # deep violet tint
+    VIOLET_800 = "#221450"  # mid violet tint
+    PINK_900   = "#2e1225"  # deep pink tint
+    GREEN_900  = "#0d2c1a"  # deep green tint
 
 
 # What a color means. References layer 1. No component names here.
@@ -122,6 +132,7 @@ class LoginColors(ColorsEnum):
     CARD_BG = Palette.DARK_750  # Device card resting background
     CARD_BORDER = Palette.GRAY_640  # Device card resting border
     CARD_HOVER_BG = Palette.DARK_720  # Device card hover background
+    ICON_BG = Palette.BLUE_700  # Device icon rounded-square background
 
 
 # Misc / special

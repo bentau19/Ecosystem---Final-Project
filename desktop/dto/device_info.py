@@ -1,21 +1,17 @@
 from dataclasses import dataclass
 
-from enums.device_type import DeviceType
-
 
 @dataclass
 class DeviceInfoDTO:
     """Base DTO shared by all device info card views.
 
     Attributes:
-        title:                Display label shown on the card.
-        icon_path:            Qt virtual path to the card's icon.
-        type:                 The DeviceType key this card represents.
+        title:     Display label shown on the card.
+        icon_path: Qt virtual path to the card's icon.
     """
 
     title: str
     icon_path: str
-    type: DeviceType
 
 
 @dataclass
