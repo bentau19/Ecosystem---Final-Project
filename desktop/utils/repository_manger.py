@@ -14,6 +14,6 @@ class RepositoryManager:
     def __init__(self) -> None:
         """Initialize all repository instances."""
         self.tools_repository: Final[ToolRepository] = ToolRepository()
-        self.current_device_info_repository: Final[DeviceRepository] = DeviceRepository()
+        self.device_repository: Final[DeviceRepository] = DeviceRepository()
 
 repository_manager: Final[RepositoryManager] = RepositoryManager()

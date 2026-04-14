@@ -1,5 +1,5 @@
 from PySide6.QtCore import Slot
-from PySide6.QtGui import QCloseEvent, QIcon, Qt
+from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QMenu, QStackedWidget,
     QSystemTrayIcon, QWidget,
@@ -8,10 +8,9 @@ from PySide6.QtWidgets import (
 import utils.styles
 from enums.screen import Screen
 from resources.paths import Icons, Styles
-from utils.services_manager import services_manager
+from utils.navigation_manager import navigation_manager, NavigationManager
 from views.screens.dashboard import DashboardScreen
 from views.screens.login import LoginScreen
-from utils.navigation_manager import navigation_manager
 
 
 class MainWindow(QMainWindow):
@@ -36,7 +35,7 @@ class MainWindow(QMainWindow):
         """Build the stacked widget, register both screens, and set up the tray."""
         self._stack = QStackedWidget(self)
 
-        self._screens: dict[Screen, list[QWidget]] = {
+        self._screens: dict[Screen, QWidget] = {
             Screen.LOGIN: LoginScreen(),
             Screen.DASHBOARD: DashboardScreen()
         }

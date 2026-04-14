@@ -20,7 +20,7 @@ from layouts.flow_layout import FlowLayout
 from resources.colors import Palette
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from utils import viewmodel_manager
+from utils.viewmodel_manager import viewmodel_manager
 from utils.styles import load_stylesheet
 from viewmodels.device import DeviceViewModel
 from views.widgets.dashboard.battery_info import BatteryInfo

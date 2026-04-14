@@ -55,7 +55,7 @@ def test_manager_exposes_tools_repository(
 def test_manager_exposes_device_repository(
     manager: RepositoryManager, mock_device_repo: MagicMock
 ) -> None:
-    assert manager.current_device_info_repository is mock_device_repo
+    assert manager.device_repository is mock_device_repo
 
 
 def test_manager_exposes_previous_device_repository(
@@ -103,6 +103,6 @@ def test_manager_instantiates_previous_device_repository() -> None:
 
 
 def test_manager_repositories_are_distinct_objects(manager: RepositoryManager) -> None:
-    assert manager.tools_repository is not manager.current_device_info_repository
-    assert manager.current_device_info_repository is not manager.previous_device_repository
+    assert manager.tools_repository is not manager.device_repository
+    assert manager.device_repository is not manager.previous_device_repository
     assert manager.tools_repository is not manager.previous_device_repository

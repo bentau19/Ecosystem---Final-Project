@@ -11,6 +11,7 @@ from dto.previous_device import PreviousDeviceDTO
 from enums.screen import Screen
 from resources.paths import Icons, LoginStyles
 from resources.spacing import Spacing
+from utils.viewmodel_manager import viewmodel_manager
 from utils.navigation_manager import NavigationManager, navigation_manager
 from viewmodels.device import DeviceViewModel
 from views.widgets.login.device_card import DeviceCard
@@ -46,7 +47,7 @@ class RightPanel(QWidget):
         self._privacy_lbl: QLabel
         self._help_lbl: QLabel
 
-        self._device_viewmodel: DeviceViewModel = DeviceViewModel()
+        self._device_viewmodel: DeviceViewModel = viewmodel_manager.device_viewmodel
         self._navigation_manager: NavigationManager = navigation_manager
         self._device_viewmodel.connect_device("1232")
 
@@ -240,4 +241,3 @@ class RightPanel(QWidget):
         # Show the appropriate middle section
         self._device_list.setVisible(has_devices)
         self._empty_state.setVisible(not has_devices)
-

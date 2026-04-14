@@ -3,7 +3,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from dto.tool import ToolDTO
 from entities.tool import ToolEntity
-from utils.repository_manger import repository_manager
+from repositories.tool import ToolRepository
 
 
 class ToolViewModel(QObject):
@@ -24,7 +24,7 @@ class ToolViewModel(QObject):
     tools_loaded: Signal = Signal(list)
     tool_count_changed: Signal = Signal(int)
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(self, tool_repository: ToolRepository, parent: QObject | None = None) -> None:
         """
         Initialize the ToolViewModel.
 
@@ -33,7 +33,7 @@ class ToolViewModel(QObject):
         """
         super().__init__(parent)
 
-        self._repo = repository_manager.tools_repository
+        self._repo = tool_repository
         self._enabled_tools: List[ToolDTO] = [
             self._convert_to_dto(tool) for tool in self._repo.get_all_enabled()
         ]

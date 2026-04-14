@@ -19,7 +19,7 @@ from enums.screen import Screen
 from resources.colors import LoginColors
 from resources.paths import Icons
 from resources.spacing import Spacing
-from utils import viewmodel_manager
+from utils.viewmodel_manager import viewmodel_manager
 from utils.navigation_manager import navigation_manager
 from viewmodels.device import DeviceViewModel
 

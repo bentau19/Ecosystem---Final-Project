@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 from enums.screen import Screen
 from resources.paths import Icons, Styles
 from resources.spacing import Spacing
-from utils import viewmodel_manager
+from utils.viewmodel_manager import viewmodel_manager
 from utils.navigation_manager import navigation_manager
 from utils.styles import load_stylesheet
 from viewmodels.device import DeviceViewModel

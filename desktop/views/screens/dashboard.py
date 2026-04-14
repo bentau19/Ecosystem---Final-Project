@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
 
 import resources_qrc  # noqa: F401
 from resources.spacing import Spacing
-from utils.navigation_manager import navigation_manager, NavigationManager
+from utils import viewmodel_manager
 from viewmodels.device import DeviceViewModel
 from views.widgets.dashboard.dashboard_content import DashboardContent
 from views.widgets.divider import Divider
@@ -18,7 +18,7 @@ class DashboardScreen(QWidget):
     def __init__(self) -> None:
         """Initialize the Dashboard."""
         super().__init__()
-        self._device_viewmodel: DeviceViewModel = DeviceViewModel()
+        self._device_viewmodel: DeviceViewModel = viewmodel_manager.viewmodel_manager
 
         self._set_up_ui()
         self.setWindowTitle("Dashboard")

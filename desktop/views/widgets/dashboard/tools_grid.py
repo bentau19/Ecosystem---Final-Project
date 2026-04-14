@@ -8,6 +8,7 @@ from dto.tool import ToolDTO
 from layouts.flow_layout import FlowLayout
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
+from utils.repository_manger import repository_manager
 from utils.styles import load_stylesheet
 from viewmodels.tool import ToolViewModel
 from views.widgets.dashboard.tool_card import ToolCard
@@ -38,7 +39,7 @@ class ToolsGrid(QWidget):
 
         self._active_tools: List[ToolCard] = []
 
-        self._tool_view_model: ToolViewModel = ToolViewModel()
+        self._tool_view_model: ToolViewModel = ToolViewModel(repository_manager.tools_repository)
         self._main_layout: FlowLayout
 
         self._setup_ui()

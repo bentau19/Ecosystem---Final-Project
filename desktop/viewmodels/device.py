@@ -16,8 +16,6 @@ from entities.device_info import DeviceEntity
 from repositories.device import DeviceRepository
 from resources.paths import Icons
 from services.connectivity import ConnectivityService
-from utils.repository_manger import repository_manager
-from utils.services_manager import services_manager
 
 
 class DeviceViewModel(QObject):
@@ -42,8 +40,7 @@ class DeviceViewModel(QObject):
     device_connected: Signal = Signal()
     device_disconnected: Signal = Signal()
 
-    def __init__(self, repository: DeviceRepository = repository_manager.current_device_info_repository,
-                 connectivity_service: ConnectivityService = services_manager.connectivity_service,
+    def __init__(self, repository: DeviceRepository, connectivity_service: ConnectivityService,
                  parent: Optional[QObject] = None) -> None:
         """Initialize the ViewModel and wire up repository signals.
 
