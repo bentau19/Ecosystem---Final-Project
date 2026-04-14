@@ -1,9 +1,12 @@
 package com.example.android.utils;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.os.BatteryManager;
 import android.os.Environment;
 import android.os.StatFs;
+import android.provider.Settings;
+
 import java.io.File;
 
 /**
@@ -11,6 +14,18 @@ import java.io.File;
  * Provides methods for monitoring battery levels and storage capacity.
  */
 public class DeviceUtils {
+
+    @SuppressLint("HardwareIds")
+    public static String getDeviceId(Context context) {
+        return Settings.Secure.getString(
+                context.getContentResolver(),
+                Settings.Secure.ANDROID_ID
+        );
+    }
+
+    public static String getDeviceModel() {
+        return android.os.Build.MODEL;
+    }
 
     /**
      * Retrieves the current battery charge level.

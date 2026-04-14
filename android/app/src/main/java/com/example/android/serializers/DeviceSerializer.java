@@ -1,6 +1,6 @@
-package com.example.android.data.serializers;
+package com.example.android.serializers;
 
-import com.example.android.data.models.entities.RemoteDeviceInfo;
+import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.google.gson.Gson;
 
 /**
@@ -29,7 +29,7 @@ public class DeviceSerializer {
      * @param stats The data object (e.g., LocalDeviceInfo or stats map) to serialize.
      * @return A JSON formatted string.
      */
-    public String serializeLocalStats(Object stats) {
+    public String serializeLocalInfo(Object stats) {
         return gson.toJson(stats);
     }
 }

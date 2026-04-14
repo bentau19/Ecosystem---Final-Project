@@ -1,15 +1,15 @@
 package com.example.android.viewmodel;
 
 import android.content.Context;
-import androidx.lifecycle.LiveData;
-import androidx.lifecycle.ViewModel;
 
-import com.example.android.data.models.entities.DeviceConnectionState;
-import com.example.android.data.models.entities.DeviceStorageStats;
-import com.example.android.data.models.entities.RemoteDeviceInfo;
-import com.example.android.data.models.enums.ConnectionType;
+import androidx.annotation.NonNull;
+import androidx.lifecycle.AndroidViewModel;
+import androidx.lifecycle.LiveData;
+
+import com.example.android.domain.entities.DeviceConnectionState;
+import com.example.android.domain.entities.DeviceStorageStats;
+import com.example.android.domain.enums.ConnectionType;
 import com.example.android.data.repositories.DeviceRepository;
-import com.example.android.data.serializers.DeviceSerializer;
 import com.example.android.utils.DeviceUtils;
 import com.example.android.utils.NetworkUtils;
 
@@ -18,10 +18,20 @@ import com.example.android.utils.NetworkUtils;
  * It acts as a bridge between the DeviceRepository and the Fragments,
  * handling business logic such as QR data processing and status refreshing.
  */
-public class MainViewModel extends ViewModel {
+public class MainViewModel extends AndroidViewModel {
 
-    private final DeviceRepository repository = DeviceRepository.getInstance();
+    private final DeviceRepository repository;
     private android.content.BroadcastReceiver batteryReceiver;
+
+    public MainViewModel(@NonNull android.app.Application application) {
+        super(application);
+
+        String deviceId = DeviceUtils.getDeviceId(application);
+        String modelName = DeviceUtils.getDeviceModel();
+
+        // initial repository setup with device data
+        this.repository = DeviceRepository.getInstance(deviceId, modelName);
+    }
 
     /**
      * @return LiveData containing the unified connection state (Local device + Remote PC).

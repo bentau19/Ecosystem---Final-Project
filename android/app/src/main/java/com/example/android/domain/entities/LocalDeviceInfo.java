@@ -1,4 +1,4 @@
-package com.example.android.data.models.entities;
+package com.example.android.domain.entities;
 
 /**
  * Entity representing the local Android device (this phone).

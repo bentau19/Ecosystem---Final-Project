@@ -1,4 +1,4 @@
-package com.example.android.data.models.entities;
+package com.example.android.domain.entities;
 
 public class DeviceConnectionState {
     private final LocalDeviceInfo localDevice;

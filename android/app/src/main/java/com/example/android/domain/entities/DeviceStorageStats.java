@@ -1,4 +1,4 @@
-package com.example.android.data.models.entities;
+package com.example.android.domain.entities;
 
 /**
  * Data model for representing device storage statistics.

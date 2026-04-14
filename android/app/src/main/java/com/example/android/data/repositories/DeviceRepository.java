@@ -3,11 +3,11 @@ package com.example.android.data.repositories;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
-import com.example.android.data.models.entities.DeviceConnectionState;
-import com.example.android.data.models.entities.DeviceStorageStats;
-import com.example.android.data.models.entities.LocalDeviceInfo;
-import com.example.android.data.models.entities.RemoteDeviceInfo;
-import com.example.android.data.models.enums.ConnectionType;
+import com.example.android.domain.entities.DeviceConnectionState;
+import com.example.android.domain.entities.DeviceStorageStats;
+import com.example.android.domain.entities.LocalDeviceInfo;
+import com.example.android.domain.entities.RemoteDeviceInfo;
+import com.example.android.domain.enums.ConnectionType;
 import com.example.android.utils.DeviceUtils;
 
 public class DeviceRepository {
@@ -21,21 +21,27 @@ public class DeviceRepository {
     // LiveData holds the unified connection state
     private final MutableLiveData<DeviceConnectionState> connectionState = new MutableLiveData<>();
 
-    private DeviceRepository() {
-        // 1. Initialize local device data (this phone)
+    private DeviceRepository(String deviceId, String modelName) {
+        // Initialize local device data with REAL values
         LocalDeviceInfo initialLocal = new LocalDeviceInfo(
-                "9774d56d682e",           // Device ID
-                "Samsung Galaxy S21 Ultra", // Model Name
-                "0.0.0.0"                 // Initial IP
+                deviceId,      // Real Device ID
+                modelName,     // Real Model Name
+                "0.0.0.0"      // Initial IP (will be updated later)
         );
-
-        // 2. Set initial state (disconnected from PC by default)
+        // Set initial state
         connectionState.setValue(new DeviceConnectionState(initialLocal));
     }
 
-    public static synchronized DeviceRepository getInstance() {
+    public static synchronized DeviceRepository getInstance(String deviceId, String model) {
         if (instance == null) {
-            instance = new DeviceRepository();
+            instance = new DeviceRepository(deviceId, model);
+        }
+        return instance;
+    }
+
+    public static DeviceRepository getInstance() {
+        if (instance == null) {
+            throw new IllegalStateException("Repository must be initialized with data first!");
         }
         return instance;
     }

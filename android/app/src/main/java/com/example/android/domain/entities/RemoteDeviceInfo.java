@@ -1,6 +1,6 @@
-package com.example.android.data.models.entities;
+package com.example.android.domain.entities;
 
-import com.example.android.data.models.enums.ConnectionType;
+import com.example.android.domain.enums.ConnectionType;
 
 import java.util.HashMap;
 import java.util.Map;

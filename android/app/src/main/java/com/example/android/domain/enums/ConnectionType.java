@@ -1,4 +1,4 @@
-package com.example.android.data.models.enums;
+package com.example.android.domain.enums;
 
 /**
  * Defines the possible communication channels between the mobile device and the PC.
