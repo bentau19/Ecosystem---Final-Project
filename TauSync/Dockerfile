@@ -4,4 +4,4 @@ LABEL authors="Lavi"
 
 WORKDIR /windows-build
 
-RUN dotnet build .
+CMD ["dotnet" ,"build" ,"."]
