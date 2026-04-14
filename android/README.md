@@ -4,6 +4,21 @@ This project follows **Clean Architecture** principles combined with the **MVVM 
 
 ---
 
+## 🔄 Data Flow & Communication
+
+To ensure a unidirectional data flow and complete isolation of the business logic, the application follows this communication chain:
+
+**UI (Fragment)** → **ViewModel** → **Use Cases** → **Repository** → **DataSource** → **Android System**
+
+1.  **UI:** Triggers an action (e.g., "Refresh Stats" button click).
+2.  **ViewModel:** Receives the trigger and calls the appropriate Use Case.
+3.  **Use Case:** Contains the specific business logic for that action.
+4.  **Repository:** Coordinates data between the local system and the remote PC.
+5.  **DataSource:** Interacts with the Android Framework (Battery, IP, Storage).
+6.  **LiveData Flow:** The Repository updates the LiveData, which the UI observes for automatic updates.
+
+---
+
 ## 📂 Project Structure
 
 ```plaintext
@@ -43,7 +58,7 @@ app/src/main/java/com/example/android/
 
 ---
 
-## 🏗️ Architectural Decisions
+## 🧩 App Architecture
 
 ### 1. Clean Architecture & Layer Separation
 The project is divided into Presentation, Domain, and Data layers. By moving the core logic into Use Cases, the ViewModel remains lightweight and focuses only on UI state management. The Domain layer has zero dependencies on the Android Framework, allowing for fast and reliable Unit Testing.
