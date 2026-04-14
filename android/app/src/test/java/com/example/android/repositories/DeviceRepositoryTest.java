@@ -2,120 +2,125 @@ package com.example.android.repositories;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule;
+
 import com.example.android.data.repositories.DeviceRepository;
 import com.example.android.domain.entities.DeviceConnectionState;
-import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionType;
 
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
+
+/**
+ * Unit tests for DeviceRepository to ensure data integrity and state management.
+ */
 public class DeviceRepositoryTest {
 
-    // הכלל הזה הכרחי כדי לבדוק LiveData ב-Unit Test
+    // Forces LiveData to execute synchronously for testing purposes
     @Rule
     public InstantTaskExecutorRule instantExecutorRule = new InstantTaskExecutorRule();
 
     private DeviceRepository repository;
 
     @Before
-    public void setUp() {
-        // זוכרת את ה-getInstance החכם שעשינו? אנחנו מאתחלים אותו כאן
-        // בגלל שזה Singleton, חשוב לוודא שהוא נקי לפני כל טסט (נרחיב על זה בהמשך אם יצטרך)
+    public void setUp() throws Exception {
+        // Reset the Singleton instance using reflection to ensure test isolation
+        Field instance = DeviceRepository.class.getDeclaredField("instance");
+        instance.setAccessible(true);
+        instance.set(null, null);
+
+        // Initialize repository with test constants
         repository = DeviceRepository.getInstance("test_id", "Test Pixel 6");
     }
 
     @Test
     public void updateBattery_updatesLiveDataCorrectly() {
-        // 1. Act: מעדכנים סוללה ל-85%
+        // Arrange & Act
         repository.updateLocalBattery(85);
 
-        // 2. Assert: מוודאים שה-LiveData מכיל את הערך החדש
+        // Assert: Verify that the LiveData observer would receive the new battery value
         DeviceConnectionState state = repository.getConnectionState().getValue();
-
-        // בודקים שהסוללה בתוך ה-LocalDeviceInfo עודכנה
+        assertNotNull(state);
         assertEquals(85, state.getLocalDevice().getBatteryLevel());
     }
 
     @Test
     public void updateLocalStats_updatesBatteryAndIp() {
-        // השמות המדויקים מהקוד שלך:
+        // Act: Update multiple local device properties
         repository.updateLocalBattery(90);
         repository.updateLocalIp("10.0.0.5");
 
+        // Assert: Ensure both values were correctly stored in the state
         DeviceConnectionState state = repository.getConnectionState().getValue();
-
         assertEquals(90, state.getLocalDevice().getBatteryLevel());
         assertEquals("10.0.0.5", state.getLocalDevice().getIpAddress());
     }
 
     @Test
     public void connect_updatesStateToConnected() {
-        // אצלך הפונקציה היא connect ומקבלת שם, IP וסוג חיבור
+        // Act: Simulate connecting to a PC
         repository.connect("Ben-PC", "192.168.1.15", ConnectionType.WIFI);
 
+        // Assert: Verify the remote PC object is created and isConnected logic returns true
         DeviceConnectionState state = repository.getConnectionState().getValue();
-
-        // בודקים אם ה-PC עודכן נכון (זה מעיד על חיבור)
         assertNotNull(state.getRemotePC());
         assertEquals("Ben-PC", state.getRemotePC().getPcName());
+        assertTrue(state.isConnected());
     }
 
     @Test
     public void disconnect_clearsRemoteDevice() {
-        // קודם נחבר
+        // Arrange: Establish a connection first
         repository.connect("Ben-PC", "192.168.1.15", ConnectionType.WIFI);
 
-        // עכשיו ננתק (הפונקציה אצלך היא disconnect)
+        // Act: Disconnect the remote session
         repository.disconnect();
 
+        // Assert: Ensure the remote PC reference is cleared (null)
         DeviceConnectionState state = repository.getConnectionState().getValue();
-
-        // בודקים שה-RemoteDevice חזר להיות null או אובייקט ריק (תלוי במימוש שלך)
-        // אם המימוש שלך מאפס את ה-RemoteDevice בניתוק:
-        assertTrue(state.getRemotePC() == null || state.getRemotePC().getPcName().isEmpty());
+        assertNull(state.getRemotePC());
     }
 
     @Test
     public void updateLocalStats_whileDisconnected_stillUpdatesLocalDevice() {
-        // 1. וודא שאנחנו מנותקים
+        // Arrange: Start in a disconnected state
         repository.disconnect();
 
-        // 2. עדכון נתונים מקומיים
+        // Act: Update local hardware info
         repository.updateLocalBattery(42);
 
-        // 3. בדיקה שהסוללה התעדכנה למרות שאין חיבור למחשב
+        // Assert: Local stats should update regardless of remote connection status
         DeviceConnectionState state = repository.getConnectionState().getValue();
         assertEquals(42, state.getLocalDevice().getBatteryLevel());
     }
 
     @Test
     public void connect_toNewPc_overwritesOldPcInfo() {
-        // 1. חיבור למחשב ראשון
+        // Arrange: Connect to an initial PC
         repository.connect("Old-PC", "1.1.1.1", ConnectionType.WIFI);
 
-        // 2. חיבור למחשב שני בלי לנתק קודם
+        // Act: Connect to a different PC without explicit disconnection
         repository.connect("New-PC", "2.2.2.2", ConnectionType.WIFI);
 
+        // Assert: Verify that the old connection info was replaced by the new one
         DeviceConnectionState state = repository.getConnectionState().getValue();
-
-        // 3. בדיקה שהמידע הוחלף
         assertEquals("New-PC", state.getRemotePC().getPcName());
         assertEquals("2.2.2.2", state.getRemotePC().getPcIp());
     }
 
     @Test
     public void updateIp_doesNotAffectOtherFields() {
-        // הנתונים ההתחלתיים מה-getInstance ב-setUp הם "test_id" ו-"Test Pixel 6"
+        // Act: Change only the IP address
         repository.updateLocalIp("192.168.1.100");
 
+        // Assert: Verify the IP changed while other identity fields remained intact
         DeviceConnectionState state = repository.getConnectionState().getValue();
-
-        // בדיקה שה-IP התעדכן אבל השאר נשאר
         assertEquals("192.168.1.100", state.getLocalDevice().getIpAddress());
         assertEquals("test_id", state.getLocalDevice().getDeviceId());
         assertEquals("Test Pixel 6", state.getLocalDevice().getModelName());

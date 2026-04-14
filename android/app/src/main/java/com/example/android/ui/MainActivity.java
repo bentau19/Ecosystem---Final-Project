@@ -15,6 +15,7 @@ import com.example.android.R;
 import com.example.android.ui.fragments.ActionsFragment;
 import com.example.android.ui.fragments.ConnectFragment;
 import com.example.android.viewmodel.MainViewModel;
+import com.example.android.viewmodel.MainViewModelFactory; // הייבוא החדש
 import com.google.zxing.integration.android.IntentIntegrator;
 import com.google.zxing.integration.android.IntentResult;
 
@@ -33,8 +34,10 @@ public class MainActivity extends AppCompatActivity {
         setupStatusBar();
         setContentView(R.layout.activity_main);
 
-        // 1. Initialize the shared ViewModel
-        viewModel = new ViewModelProvider(this).get(MainViewModel.class);
+        // 1. Initialize the shared ViewModel using the Factory
+        // כאן אנחנו מעבירים את ה-Application ל-Factory כדי שהוא יכין את ה-Repository
+        MainViewModelFactory factory = new MainViewModelFactory(this.getApplication());
+        viewModel = new ViewModelProvider(this, factory).get(MainViewModel.class);
 
         // 2. Smart navigation logic: Check current connection state from the repository
         if (savedInstanceState == null) {
@@ -53,7 +56,7 @@ public class MainActivity extends AppCompatActivity {
      */
     public void processScannedData(String qrData) {
         // ViewModel handles the data parsing and updates the Repository
-        boolean success = viewModel.handleConnectionFromQR(this, qrData);
+        boolean success = viewModel.handleQr(qrData);
 
         if (success) {
             // Success: Navigate to the actions dashboard with transition animations
@@ -73,35 +76,25 @@ public class MainActivity extends AppCompatActivity {
         navigateToConnect();
 
         // Update the state (this will trigger observers across the app)
-        viewModel.disconnectFromPc();
+        viewModel.disconnect();
 
         Toast.makeText(this, "Disconnected", Toast.LENGTH_SHORT).show();
     }
 
     // --- Fragment Navigation ---
 
-    /**
-     * Navigates to the Actions screen if not already present.
-     */
     public void navigateToActions() {
         if (!(getSupportFragmentManager().findFragmentById(R.id.fragment_container) instanceof ActionsFragment)) {
             replaceFragment(new ActionsFragment());
         }
     }
 
-    /**
-     * Navigates to the Connection screen if not already present.
-     */
     public void navigateToConnect() {
         if (!(getSupportFragmentManager().findFragmentById(R.id.fragment_container) instanceof ConnectFragment)) {
             replaceFragment(new ConnectFragment());
         }
     }
 
-    /**
-     * Performs a fragment replacement transaction with fade animations.
-     * @param fragment The destination fragment to display.
-     */
     private void replaceFragment(Fragment fragment) {
         getSupportFragmentManager().beginTransaction()
                 .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out)
@@ -111,9 +104,6 @@ public class MainActivity extends AppCompatActivity {
 
     // --- UI Configurations ---
 
-    /**
-     * Configures the status bar color to match the application's dark theme.
-     */
     private void setupStatusBar() {
         Window window = getWindow();
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
@@ -122,9 +112,6 @@ public class MainActivity extends AppCompatActivity {
 
     // --- QR Scanner (Zxing Integration) ---
 
-    /**
-     * Launches the QR scanner interface.
-     */
     public void handleConnection() {
         new IntentIntegrator(this)
                 .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
@@ -134,9 +121,6 @@ public class MainActivity extends AppCompatActivity {
                 .initiateScan();
     }
 
-    /**
-     * Handles the result returned from the scanner activity.
-     */
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         IntentResult result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);

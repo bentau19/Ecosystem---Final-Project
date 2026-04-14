@@ -91,6 +91,12 @@ public class DeviceRepository {
         }
     }
 
+    public void refreshLocalStats(String ip, int battery) {
+        updateLocalIp(ip);
+        updateLocalBattery(battery);
+    }
+
+
     /**
      * Updates the local IP address in the current state and notifies observers.
      * @param newIp The freshly fetched IP address from NetworkUtils.

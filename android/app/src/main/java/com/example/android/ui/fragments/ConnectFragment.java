@@ -64,7 +64,7 @@ public class ConnectFragment extends Fragment {
      */
     private void refreshData() {
         if (viewModel != null && isAdded()) {
-            viewModel.refreshLocalDeviceStats(requireContext());
+            viewModel.refresh();
         }
     }
 

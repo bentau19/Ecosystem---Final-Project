@@ -1,36 +1,38 @@
 package com.example.android.viewmodel;
 
-import android.content.Context;
-
-import androidx.annotation.NonNull;
-import androidx.lifecycle.AndroidViewModel;
 import androidx.lifecycle.LiveData;
+import androidx.lifecycle.ViewModel;
 
 import com.example.android.domain.entities.DeviceConnectionState;
 import com.example.android.domain.entities.DeviceStorageStats;
-import com.example.android.domain.enums.ConnectionType;
+import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.data.repositories.DeviceRepository;
-import com.example.android.utils.DeviceUtils;
-import com.example.android.utils.NetworkUtils;
+import com.example.android.domain.usecases.ConnectToDeviceUseCase;
+import com.example.android.domain.usecases.ParseQrDataUseCase;
+import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
 
 /**
  * ViewModel responsible for preparing and managing data for the UI.
  * It acts as a bridge between the DeviceRepository and the Fragments,
  * handling business logic such as QR data processing and status refreshing.
  */
-public class MainViewModel extends AndroidViewModel {
+public class MainViewModel extends ViewModel {
+    private final RefreshLocalStatsUseCase refreshStats;
+    private final ConnectToDeviceUseCase connectToDevice;
+    private final ParseQrDataUseCase parseQr;
 
     private final DeviceRepository repository;
-    private android.content.BroadcastReceiver batteryReceiver;
+//    private android.content.BroadcastReceiver batteryReceiver;
 
-    public MainViewModel(@NonNull android.app.Application application) {
-        super(application);
+    public MainViewModel(DeviceRepository repository, RefreshLocalStatsUseCase refreshStats,
+                         ConnectToDeviceUseCase connectToDevice,
+                         ParseQrDataUseCase parseQr
+    ) {
+        this.repository = repository;
+        this.refreshStats = refreshStats;
+        this.connectToDevice = connectToDevice;
+        this.parseQr = parseQr;
 
-        String deviceId = DeviceUtils.getDeviceId(application);
-        String modelName = DeviceUtils.getDeviceModel();
-
-        // initial repository setup with device data
-        this.repository = DeviceRepository.getInstance(deviceId, modelName);
     }
 
     /**
@@ -43,57 +45,31 @@ public class MainViewModel extends AndroidViewModel {
     /**
      * Refreshes local hardware statistics such as battery level and IP address.
      * Updates the repository which in turn notifies the UI observers.
-     * @param context Application context for system services access.
      */
-    public void refreshLocalDeviceStats(Context context) {
-        String currentPhoneIp = NetworkUtils.getLocalIpAddress(context);
-        int battery = DeviceUtils.getBatteryPercentage(context);
-
-        // Update the repository with fresh local data
-        repository.updateLocalIp(currentPhoneIp);
-        repository.updateLocalBattery(battery);
-
-        // Future implementation for storage updates can be added here
-        // long total = DeviceUtils.getTotalStorage();
-        // long available = DeviceUtils.getAvailableStorage();
-        // repository.updateLocalStorage(total, available);
+    public void refresh() {
+        refreshStats.execute();
     }
+
 
     /**
      * Processes raw QR data and initiates the connection sequence.
-     * @param context Context for refreshing stats before connecting.
      * @param qrData The raw string retrieved from the QR scanner.
      * @return true if the connection data was valid and initiated; false otherwise.
      */
-    public boolean handleConnectionFromQR(Context context, String qrData) {
-        // 1. Logic for deserializing the QR data into a RemoteDeviceInfo object
-        // DeviceSerializer serializer = new DeviceSerializer();
-        // RemoteDeviceInfo remote = serializer.deserializeRemoteInfo(qrData);
-
-        // Mock implementation for development purposes:
-        String pcName = "Ben-PC";
-        String pcIp = "192.168.1.15";
-        ConnectionType type = ConnectionType.WIFI;
-
-        // Basic validation of the IP address
-        if (pcIp == null || pcIp.equals("0.0.0.0")) {
-            return false;
-        }
-
-        // 2. Ensure local stats are fresh before establishing a remote session
-        refreshLocalDeviceStats(context);
-
-        // 3. Execute the connection via the repository
-        repository.connect(pcName, pcIp, type);
+    public boolean handleQr(String qrData) {
+        RemoteDeviceInfo info = parseQr.execute(qrData);
+        if (info == null) return false;
+        connectToDevice.execute(info);
         return true;
     }
 
     /**
      * Commands the repository to terminate the current remote session.
      */
-    public void disconnectFromPc() {
-        repository.disconnect();
+    public void disconnect() {
+        connectToDevice.disconnect();
     }
+
 
     /**
      * Fetches the latest storage statistics from the repository.
@@ -110,29 +86,29 @@ public class MainViewModel extends AndroidViewModel {
      * This migration will ensure continuous monitoring and data synchronization with the PC
      * even when the app is in the background or the screen is off.
      */
-    public void startBatteryMonitoring(Context context) {
-        if (batteryReceiver != null) return;
-
-        batteryReceiver = new android.content.BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, android.content.Intent intent) {
-                int level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
-                int scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
-                int batteryPct = (int) ((level / (float) scale) * 100);
-
-                // update the local battery level in the repository
-                repository.updateLocalBattery(batteryPct);
-            }
-        };
-
-        context.registerReceiver(batteryReceiver,
-                new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
-    }
-
-    public void stopBatteryMonitoring(Context context) {
-        if (batteryReceiver != null) {
-            context.unregisterReceiver(batteryReceiver);
-            batteryReceiver = null;
-        }
-    }
+//    public void startBatteryMonitoring(Context context) {
+//        if (batteryReceiver != null) return;
+//
+//        batteryReceiver = new android.content.BroadcastReceiver() {
+//            @Override
+//            public void onReceive(Context context, android.content.Intent intent) {
+//                int level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+//                int scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
+//                int batteryPct = (int) ((level / (float) scale) * 100);
+//
+//                // update the local battery level in the repository
+//                repository.updateLocalBattery(batteryPct);
+//            }
+//        };
+//
+//        context.registerReceiver(batteryReceiver,
+//                new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+//    }
+//
+//    public void stopBatteryMonitoring(Context context) {
+//        if (batteryReceiver != null) {
+//            context.unregisterReceiver(batteryReceiver);
+//            batteryReceiver = null;
+//        }
+//    }
 }
