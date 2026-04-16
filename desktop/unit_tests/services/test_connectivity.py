@@ -1,4 +1,4 @@
-"""Unit tests for services.connectivity — DeviceConnectivity public interface."""
+"""Unit tests for services.connectivity — ConnectivityService public interface."""
 
 import threading
 from unittest.mock import MagicMock, patch
@@ -10,34 +10,21 @@ from services.connectivity import ConnectivityService
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def reset_singleton() -> None:
-    """Reset the ConnectivityService singleton before and after every test.
-
-    Without this, the first test's instance (and its mock TauSync) leaks
-    into every subsequent test — __init__ is guarded by _initialized so
-    new mocks would never be injected.
-    """
-    ConnectivityService._instance = None
-    ConnectivityService._initialized = False
-    yield
-    ConnectivityService._instance = None
-    ConnectivityService._initialized = False
-
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
 def _make_connectivity(mock_tau: MagicMock) -> ConnectivityService:
-    """Construct DeviceConnectivity with TauSync replaced by a mock."""
+    """Construct ConnectivityService with TauSync and repository replaced by mocks.
+
+    Also manually starts _listen() because the auto-start is commented out in
+    production code until the phone-side implementation is ready.
+    """
+    mock_repo = MagicMock()
     with patch("services.connectivity.TauSync", return_value=mock_tau):
-        return ConnectivityService()
+        svc = ConnectivityService(repository=mock_repo)
+    svc._listen()
+    return svc
 
 
 def _gated_tau(gate: threading.Event) -> MagicMock:
@@ -86,7 +73,6 @@ def test_connection_error_not_emitted_when_listen_succeeds(qtbot: QtBot) -> None
 
     gate.set()
 
-    # Wait for the success signal to confirm the thread finished, then assert no error
     qtbot.waitUntil(lambda: len(connected_received) > 0, timeout=1000)
     assert error_received == []
 
@@ -130,7 +116,6 @@ def test_device_connected_not_emitted_when_listen_raises(qtbot: QtBot) -> None:
 
     gate.set()
 
-    # Wait for the error signal to confirm the thread finished, then assert no connected
     qtbot.waitUntil(lambda: len(error_received) > 0, timeout=1000)
     assert connected_received == []
 
@@ -184,3 +169,23 @@ def test_disconnect_device_dispose_called_before_signal(qtbot: QtBot) -> None:
     svc.disconnect_device()
 
     assert call_order == ["dispose", "signal"]
+
+
+# ---------------------------------------------------------------------------
+# connect_to_device
+# ---------------------------------------------------------------------------
+
+
+def test_connect_to_device_emits_device_connected(qtbot: QtBot) -> None:
+    mock_tau = MagicMock()
+    mock_repo = MagicMock()
+    with patch("services.connectivity.TauSync", return_value=mock_tau):
+        svc = ConnectivityService(repository=mock_repo)
+
+    received: list[bool] = []
+    svc.device_connected.connect(lambda: received.append(True))
+
+    svc.connect_to_device("192.168.1.1")
+
+    qtbot.waitUntil(lambda: len(received) > 0, timeout=1000)
+    assert received == [True]

@@ -61,7 +61,7 @@ def generate(definition: dict[str, Any]) -> str:
         member_desc: str = member["description"]
 
         value_repr: str = f'"{member_value}"' if value_type == "string" else str(member_value)
-        is_last: bool = i == len(members) - 1
+        is_last: bool = (i == len(members) - 1)
         # Java enum entries end with ';' on the last entry, ',' otherwise.
         terminator: str = ";" if is_last else ","
 

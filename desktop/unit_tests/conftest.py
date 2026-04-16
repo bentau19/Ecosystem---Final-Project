@@ -1,16 +1,18 @@
+from datetime import date
+
 import pytest
 
-from entities.device_info import DeviceInfoEntity
+from entities.device_info import DeviceEntity
 
 
 @pytest.fixture()
-def previous_device_online() -> DeviceInfoEntity:
-    return DeviceInfoEntity(
+def previous_device_online() -> DeviceEntity:
+    return DeviceEntity(
         id="dev-001",
         name="Pixel 8 Pro",
         os="Android 14",
         tag="Work",
-        last_seen="now",
+        last_connected=date(2024, 1, 15),
         battery_level=82,
         battery_charging=True,
         storage_used=64,
@@ -20,13 +22,13 @@ def previous_device_online() -> DeviceInfoEntity:
 
 
 @pytest.fixture()
-def previous_device_recent() -> DeviceInfoEntity:
-    return DeviceInfoEntity(
+def previous_device_recent() -> DeviceEntity:
+    return DeviceEntity(
         id="dev-002",
         name="Galaxy S24",
         os="Android 14",
         tag="Home",
-        last_seen="today",
+        last_connected=date(2024, 1, 14),
         battery_level=45,
         battery_charging=False,
         storage_used=110,
@@ -36,13 +38,13 @@ def previous_device_recent() -> DeviceInfoEntity:
 
 
 @pytest.fixture()
-def previous_device_idle() -> DeviceInfoEntity:
-    return DeviceInfoEntity(
+def previous_device_idle() -> DeviceEntity:
+    return DeviceEntity(
         id="dev-003",
         name="OnePlus 12",
         os="Android 13",
         tag="Travel",
-        last_seen="3 days ago",
+        last_connected=date(2024, 1, 12),
         battery_level=60,
         battery_charging=False,
         storage_used=30,

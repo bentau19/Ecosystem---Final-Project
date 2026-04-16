@@ -1,4 +1,4 @@
-from dataclasses import asdict
+from datetime import datetime, date
 from typing import Optional
 
 from entities.device_info import DeviceEntity
@@ -16,7 +16,8 @@ class DeviceSerializer(ISerializer[Optional[DeviceEntity], dict]):
     the store.
     """
 
-    def serialize(self, entity: DeviceEntity | None) -> tuple[str, str, str, str, str, int, bool, int, int, str] | None:
+    def serialize(self, entity: DeviceEntity | None) -> tuple[
+                                                            str, str, str, str, str, int, bool, int, int, str] | None:
         """Convert a PreviousDeviceEntity to a JSON-serializable dictionary.
 
         Args:
@@ -29,7 +30,7 @@ class DeviceSerializer(ISerializer[Optional[DeviceEntity], dict]):
         """
         if entity is None:
             return None
-        return (entity.id, entity.name, entity.os, entity.tag, entity.last_connected,
+        return (entity.id, entity.name, entity.os, entity.tag, entity.last_connected.isoformat(),
                 entity.battery_level, entity.battery_charging, entity.storage_used,
                 entity.storage_total, entity.ip)
 
@@ -51,7 +52,7 @@ class DeviceSerializer(ISerializer[Optional[DeviceEntity], dict]):
             name=db_row[1],
             os=db_row[2],
             tag=db_row[3],
-            last_connected=db_row[4],
+            last_connected=datetime.strptime(db_row[4], "%Y-%m-%d").date(),
             battery_level=db_row[5],
             battery_charging=db_row[6],
             storage_used=db_row[7],

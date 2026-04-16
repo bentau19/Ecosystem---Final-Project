@@ -2,7 +2,7 @@
 Right panel of the login screen — 'Previously connected' device list.
 """
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
@@ -14,20 +14,19 @@ from resources.spacing import Spacing
 from utils.viewmodel_manager import viewmodel_manager
 from utils.navigation_manager import NavigationManager, navigation_manager
 from viewmodels.device import DeviceViewModel
-from views.widgets.login.device_card import DeviceCard
+from views.widgets.login.previous_device_card import PreviousDeviceCard
 
 
 class RightPanel(QWidget):
-    """
-    Right-side panel of the login screen.
+    """Right-side panel of the login screen.
 
-    Displays a title, a scrollable list of :class:`DeviceCard` widgets for
-    previously connected devices, and an 'End-to-end encrypted' footer.
+    Displays a title, a list of :class:`~views.widgets.login.previous_device_card.PreviousDeviceCard`
+    widgets for previously connected devices, and an 'End-to-end encrypted' footer.
     When no previous devices exist, shows a centered empty-state message instead.
 
-    Emits:
-        device_connect_requested: Forwarded from each DeviceCard's
-            connect_requested signal; carries the selected PreviousDeviceDTO.
+    Device cards are populated via :class:`~viewmodels.device.DeviceViewModel`;
+    this panel owns no signals of its own — navigation is handled by
+    :data:`~utils.navigation_manager.navigation_manager` inside each card.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -36,7 +35,7 @@ class RightPanel(QWidget):
             parent: Optional parent widget.
         """
         super().__init__(parent)
-        self._cards: list[DeviceCard] = []
+        self._cards: list[PreviousDeviceCard] = []
 
         self._title_lbl: QLabel
         self._subtitle_lbl: QLabel
@@ -49,7 +48,6 @@ class RightPanel(QWidget):
 
         self._device_viewmodel: DeviceViewModel = viewmodel_manager.device_viewmodel
         self._navigation_manager: NavigationManager = navigation_manager
-        self._device_viewmodel.connect_device("1232")
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("RightPanel")
@@ -203,7 +201,12 @@ class RightPanel(QWidget):
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
-        """Connect ViewModel signals and trigger the initial device load."""
+        """Connect ViewModel signals to their handler slots.
+
+        The initial device load is triggered separately in ``__init__`` after
+        this method returns, ensuring the slot is already wired before the
+        signal fires.
+        """
         self._device_viewmodel.previous_devices_updated.connect(self._on_devices_loaded)
 
     # ── Slots ──────────────────────────────────────────────────────────────────
@@ -233,7 +236,7 @@ class RightPanel(QWidget):
 
         # Populate with fresh cards
         for dto in dtos:
-            card = DeviceCard(dto, parent=self._device_list)
+            card = PreviousDeviceCard(dto, parent=self._device_list)
             card.setMinimumWidth(400)
             self._cards.append(card)
             self._device_list_layout.addWidget(card)

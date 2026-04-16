@@ -1,4 +1,4 @@
-from PySide6.QtCore import Slot
+from PySide6.QtCore import Slot, QEvent
 from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QMenu, QStackedWidget,
@@ -14,9 +14,24 @@ from views.screens.login import LoginScreen
 
 
 class MainWindow(QMainWindow):
-    """Main application window — manages screen navigation via QStackedWidget."""
+    """Main application window for SyncDose.
+
+    Hosts a :class:`~PySide6.QtWidgets.QStackedWidget` that switches between
+    the login screen and the dashboard screen. Navigation is driven entirely by
+    :data:`~utils.navigation_manager.navigation_manager` — nothing in this
+    class decides *when* to change screens.
+
+    Also manages the system tray icon so the user can reopen the window after
+    minimising it, and hides the window to the tray on minimise rather than
+    closing it.
+    """
 
     def __init__(self, parent: QWidget | None = None) -> None:
+        """Set up the window, screens, and system tray.
+
+        Args:
+            parent: Optional parent widget (typically ``None`` for a top-level window).
+        """
         super().__init__(parent)
         self._stack: QStackedWidget
         self._login_screen: LoginScreen
@@ -24,7 +39,7 @@ class MainWindow(QMainWindow):
         self._tray_icon: QSystemTrayIcon
 
         self._navigation_manager: NavigationManager = navigation_manager
-        self._screens: list[QWidget]
+        self._screens: dict[Screen, QWidget]
 
         self._setup_ui()
         self._connect_signals()
@@ -35,7 +50,7 @@ class MainWindow(QMainWindow):
         """Build the stacked widget, register both screens, and set up the tray."""
         self._stack = QStackedWidget(self)
 
-        self._screens: dict[Screen, QWidget] = {
+        self._screens = {
             Screen.LOGIN: LoginScreen(),
             Screen.DASHBOARD: DashboardScreen()
         }
@@ -45,7 +60,6 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(self._stack)
         self._setup_tray()
-        self._connect_signals()
 
     def _setup_tray(self) -> None:
         """Create the system tray icon with a context menu."""
@@ -67,28 +81,31 @@ class MainWindow(QMainWindow):
         self._tray_icon.show()
 
     def _connect_signals(self) -> None:
-        """Wire connectivity service signals to navigation slots."""
+        """Wire the navigation manager's navigate signal to the page-change slot."""
         self._navigation_manager.navigate.connect(self._change_page)
 
-    # ── Close → tray ──────────────────────────────────────────────────────────
+    def changeEvent(self, event: QEvent) -> None:
+        """Intercept minimise events and hide the window to the system tray.
 
-    def closeEvent(self, event: QCloseEvent) -> None:
-        """Intercept window close — hide to tray instead of quitting."""
-        event.ignore()
-        self.hide()
-
-        self._tray_icon.showMessage(
-            "SyncDose",
-            "Running in the background. Right-click the tray icon to quit.",
-            QSystemTrayIcon.MessageIcon.Information,
-            3000,  # ms
-        )
+        Args:
+            event: The change event delivered by Qt.
+        """
+        if event.type() == QEvent.Type.WindowStateChange:
+            if self.isMinimized():
+                # Hide to tray instead of showing a minimised taskbar entry
+                self.hide()
+        super().changeEvent(event)
 
     # ── Slots ──────────────────────────────────────────────────────────────────
 
     @Slot(int)
     def _change_page(self, index: int) -> None:
-        """Switch the stacked widget to the screen at the given index."""
+        """Switch the stacked widget to the screen at the given index.
+
+        Args:
+            index: Zero-based index of the target screen in the stack,
+                corresponding to the insertion order in :meth:`_setup_ui`.
+        """
         self._stack.setCurrentIndex(index)
 
     @Slot()
@@ -100,6 +117,10 @@ class MainWindow(QMainWindow):
 
     @Slot(QSystemTrayIcon.ActivationReason)
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        """Restore window on double-click of the tray icon."""
+        """Restore the window on double-click of the tray icon.
+
+        Args:
+            reason: The activation reason provided by the tray icon event.
+        """
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._restore_window()

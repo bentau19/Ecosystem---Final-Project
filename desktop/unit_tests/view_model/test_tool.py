@@ -1,4 +1,6 @@
-from unittest.mock import MagicMock, patch
+"""Unit tests for ToolViewModel."""
+
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -10,6 +12,7 @@ from viewmodels.tool import ToolViewModel
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def tool_enabled() -> ToolEntity:
@@ -54,10 +57,7 @@ def mock_repo() -> MagicMock:
 
 @pytest.fixture()
 def view_model(mock_repo: MagicMock) -> ToolViewModel:
-    with patch("viewmodels.tool.repository_manager") as mock_app_state:
-        mock_app_state.tools_repository = mock_repo
-        vm = ToolViewModel()
-    return vm
+    return ToolViewModel(tool_repository=mock_repo)
 
 
 # ---------------------------------------------------------------------------
@@ -89,17 +89,13 @@ def test_init_loads_enabled_tools_from_repo(
         tool_another_enabled: ToolEntity,
 ):
     mock_repo.get_all_enabled.return_value = [tool_enabled, tool_another_enabled]
-    with patch("viewmodels.tool.repository_manager") as mock_app_state:
-        mock_app_state.tools_repository = mock_repo
-        vm = ToolViewModel()
+    vm = ToolViewModel(tool_repository=mock_repo)
 
     assert len(vm._enabled_tools) == 2
 
 
 def test_init_connects_to_repo_signals(mock_repo: MagicMock):
-    with patch("viewmodels.tool.repository_manager") as mock_app_state:
-        mock_app_state.tools_repository = mock_repo
-        ToolViewModel()
+    ToolViewModel(tool_repository=mock_repo)
 
     mock_repo.entity_saved.connect.assert_called_once()
     mock_repo.entity_deleted.connect.assert_called_once()
@@ -121,9 +117,7 @@ def test_load_enabled_tools_emits_correct_tools(
         tool_enabled: ToolEntity,
 ):
     mock_repo.get_all_enabled.return_value = [tool_enabled]
-    with patch("viewmodels.tool.repository_manager") as mock_app_state:
-        mock_app_state.tools_repository = mock_repo
-        vm = ToolViewModel()
+    vm = ToolViewModel(tool_repository=mock_repo)
 
     received = []
     vm.tools_loaded.connect(lambda tools: received.append(tools))
@@ -139,9 +133,7 @@ def test_load_enabled_tools_emits_tool_count_changed_signal(
         tool_another_enabled: ToolEntity,
 ):
     mock_repo.get_all_enabled.return_value = [tool_enabled, tool_another_enabled]
-    with patch("viewmodels.tool.repository_manager") as mock_app_state:
-        mock_app_state.tools_repository = mock_repo
-        vm = ToolViewModel()
+    vm = ToolViewModel(tool_repository=mock_repo)
 
     received = []
     vm.tool_count_changed.connect(lambda count: received.append(count))

@@ -37,17 +37,6 @@ class DeviceOSDTO(DeviceInfoDTO):
 
 
 @dataclass
-class DeviceIPDTO(DeviceInfoDTO):
-    """DTO for the IP address card.
-
-    Attributes:
-        ip: The device's LAN IP address.
-    """
-
-    ip: str
-
-
-@dataclass
 class DeviceBatteryDTO(DeviceInfoDTO):
     """DTO for the battery status card.
 
@@ -72,16 +61,3 @@ class DeviceStorageDTO(DeviceInfoDTO):
     used: int
     total: int
 
-
-@dataclass
-class DeviceIDDTO(DeviceInfoDTO):
-    """DTO for the stable device identifier.
-
-    Not rendered as a dashboard card — used internally by ViewModels
-    that need to key records by a stable device identity.
-
-    Attributes:
-        device_id: The stable unique device identifier (e.g. Android ID).
-    """
-
-    device_id: str

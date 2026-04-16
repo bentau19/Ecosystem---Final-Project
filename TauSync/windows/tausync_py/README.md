@@ -6,6 +6,18 @@ arrays behind a clean two-class API: **`TauSync`** and **`TauSyncStream`**.
 
 ## Installation
 
+first go to
+
+```
+cd /path/to/Tausync_Windows/
+```
+then run
+
+```
+docker compose up  
+```
+and then 
+
 ```
 pip install -e /path/to/windows/
 ```

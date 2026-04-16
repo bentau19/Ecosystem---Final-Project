@@ -1,6 +1,5 @@
 from dataclasses import dataclass
-
-from enums.device_status import DeviceStatus
+from datetime import date
 
 
 @dataclass
@@ -15,14 +14,11 @@ class PreviousDeviceDTO:
         name (str): Human-readable device name, e.g. ``"Pixel 8 Pro"``.
         os (str): OS version string, e.g. ``"Android 14"``.
         tag (str): User-assigned label, e.g. ``"Home"``.
-        status (DeviceStatus): Current connection status.
-        last_connected (str): Human-readable timestamp, e.g. ``"now"``, ``"today"``,
-            ``"3 days ago"``.
-        ip (str): Last known LAN IP address of the device, used to reconnect.
+        last_connected (date): Calendar date of the most recent connection.
     """
 
+    id: str
     name: str
     os: str
     tag: str
-    last_connected: str
-    ip: str
+    last_connected: date

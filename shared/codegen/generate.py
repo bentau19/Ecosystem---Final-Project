@@ -45,7 +45,20 @@ _GENERATORS: dict[str, Callable[[dict[str, Any]], str]] = {
 }
 
 
-def _save_enum(lang, paths, source, enum_name: str):
+def _save_enum(lang: str, paths: list[Path], source: str, enum_name: str) -> None:
+    """Write generated enum source to every output directory for a given language.
+
+    Args:
+        lang: Target language key (e.g. ``"python"``, ``"java"``), used for
+            display and to look up the file suffix from ``_SUFFIXES``.
+        paths: List of destination directories in which to write the file.
+        source: Fully-formed source code to write.
+        enum_name: Base file name (without extension) for the output file.
+
+    Raises:
+        OSError: If an output directory cannot be created or the file cannot
+            be written.
+    """
     suffix = _SUFFIXES[lang]
     for path in paths:
         # parents=True creates any missing intermediate dirs; exist_ok=True avoids

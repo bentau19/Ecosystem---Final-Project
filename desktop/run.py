@@ -52,6 +52,6 @@ if __name__ == "__main__":
 
     compile_resources()
 
-    # run_tests()
+    run_tests()
 
     run_app()

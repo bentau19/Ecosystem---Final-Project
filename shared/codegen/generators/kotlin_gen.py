@@ -35,7 +35,7 @@ def generate(definition: dict[str, Any]) -> str:
     members: list[dict[str, Any]] = definition["members"]
 
     if value_type == "string":
-        kotlin_type = "String"
+        kotlin_type: str = "String"
     elif value_type == "int":
         kotlin_type = "Int"
     else:
@@ -60,9 +60,10 @@ def generate(definition: dict[str, Any]) -> str:
         member_value: Any = member["value"]
         member_desc: str = member["description"]
 
-        value_repr = f'"{member_value}"' if value_type == "string" else str(member_value)
-        is_last = i == len(members) - 1
-        terminator = ";" if is_last else ","
+        value_repr: str = f'"{member_value}"' if value_type == "string" else str(member_value)
+        is_last: bool = (i == len(members) - 1)
+        # Kotlin enum entries end with ';' on the last entry, ',' otherwise.
+        terminator: str = ";" if is_last else ","
 
         lines.append(f"    /** {member_desc} */")
         lines.append(f"    {member_name}({value_repr}){terminator}")

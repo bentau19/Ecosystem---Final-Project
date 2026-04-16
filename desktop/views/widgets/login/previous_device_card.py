@@ -3,9 +3,9 @@ Device card for the login screen's right panel.
 Shows name, OS/tag meta, status badge, and last-seen time.
 On hover the status column is replaced by a 'Connect →' button.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
-from PySide6.QtCore import QEvent, QRectF, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QRectF, Qt, Slot
 from PySide6.QtGui import QColor, QEnterEvent, QPainter, QPainterPath, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
@@ -23,7 +23,7 @@ from utils.viewmodel_manager import viewmodel_manager
 from utils.navigation_manager import navigation_manager
 from viewmodels.device import DeviceViewModel
 
-# Maps DeviceStatus → (QSS object name for badge, badge display text)
+# Maps DeviceStatus → QSS object name for the badge widget
 _BADGE_CONFIG: dict[DeviceStatus, str] = {
     DeviceStatus.RECENT: "BadgeRecent",
     DeviceStatus.IDLE: "BadgeIdle",
@@ -34,12 +34,16 @@ _ICON_RADIUS: int = 12
 _ICON_MARGIN: int = 9
 
 
-class DeviceCard(QWidget):
+class PreviousDeviceCard(QWidget):
     """Card widget for a single :class:`~dto.previous_device.PreviousDeviceDTO`.
 
-    On hover, replaces the status column with a 'Connect →' button.
-    Clicking the button calls the connectivity service directly via
-    :data:`utils.services_manager.services_manager`.
+    Displays the device name, OS/tag metadata, a recency badge, and the
+    last-seen timestamp. On hover, the status column is replaced by a
+    ``Connect →`` button that initiates a connection via the
+    :class:`~viewmodels.device.DeviceViewModel`.
+
+    When the ViewModel reports ``device_connected``, this card calls the
+    navigation manager to transition to the dashboard screen.
     """
 
     def __init__(
@@ -49,12 +53,12 @@ class DeviceCard(QWidget):
     ) -> None:
         """
         Args:
-            device: Device data to display.
+            device: Device data to display on this card.
             parent: Optional parent widget.
         """
         super().__init__(parent)
 
-        self._device = device
+        self._device: PreviousDeviceDTO = device
 
         self._icon_lbl: QLabel
         self._name_lbl: QLabel
@@ -97,19 +101,18 @@ class DeviceCard(QWidget):
         self._meta_lbl = QLabel(f"{self._device.os}  ·  {self._device.tag}")
         self._meta_lbl.setObjectName("DeviceMeta")
 
-        time = datetime.strptime(self._device.last_connected, "%d-%m-%Y")
+        time:date = self._device.last_connected
+        # Classify as 'recent' if last seen within 14 days, otherwise 'idle'
+        status = DeviceStatus.RECENT if datetime.now().date() - time < timedelta(days=14) else DeviceStatus.IDLE
+        obj_name = _BADGE_CONFIG[status]
 
-        obj_name = "BadgeRecent" if datetime.now() - time < timedelta(days=14) else "BadgeIdle"
-        text = "recent" if datetime.now() - time < timedelta(days=14) else "idle"
-
-        self._badge = QLabel(text)
+        self._badge = QLabel(status.value)  # StrEnum .value is "recent" or "idle"
         self._badge.setFixedWidth(50)
         self._badge.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.NONE)
         self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
         self._badge.setObjectName(obj_name)
 
-        self._time_lbl = QLabel(self._device.last_connected)
+        self._time_lbl = QLabel(self._device.last_connected.strftime("%B %d, %Y"))
         self._time_lbl.setObjectName("DeviceTime")
         self._time_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
 
@@ -122,8 +125,8 @@ class DeviceCard(QWidget):
     def _create_icon_label(self) -> QLabel:
         """Render the device icon as a tinted rounded-square Pixmap.
 
-        Derives the background color from the device ID so the same device
-        always gets the same color, with no color stored in the data layer.
+        Derives the background color from the design token so the icon
+        appearance is consistent across all device cards.
 
         Returns:
             A fixed-size QLabel containing the rendered Pixmap.
@@ -192,10 +195,9 @@ class DeviceCard(QWidget):
         pass
 
     def _connect_signals(self) -> None:
-        """Wire the Connect button to the connection handler."""
+        """Wire the Connect button and ViewModel signals to their handlers."""
         self._connect_btn.clicked.connect(self._on_button_clicked)
         self._device_viewmodel.device_connected.connect(self._on_device_connected)
-        pass
 
     # ── Hover events ──────────────────────────────────────────────────────────
 
@@ -203,7 +205,7 @@ class DeviceCard(QWidget):
         """Swap status column for the Connect button on mouse enter.
 
         Args:
-            event: The enter event.
+            event: The enter event delivered by Qt.
         """
         self._status_widget.setVisible(False)
         self._connect_btn.setVisible(True)
@@ -213,24 +215,22 @@ class DeviceCard(QWidget):
         """Restore status column and hide Connect button on mouse leave.
 
         Args:
-            event: The leave event.
+            event: The leave event delivered by Qt.
         """
         self._connect_btn.setVisible(False)
         self._status_widget.setVisible(True)
         super().leaveEvent(event)
 
-    @Slot(object)
-    def _on_device_connected(self, prev: PreviousDeviceDTO) -> None:
-        """Forward a card's connection request as a panel-level signal.
+    @Slot()
+    def _on_device_connected(self) -> None:
+        """Navigate to the dashboard when the ViewModel reports a connection.
 
-        Args:
-            prev: The DTO of the device the user wishes to connect to.
-
-        Emits:
-            device_connect_requested: Re-emits the same DTO upstream.
+        Called when :attr:`~viewmodels.device.DeviceViewModel.device_connected`
+        fires, regardless of which card initiated the connection request.
         """
         navigation_manager.go_to_screen(Screen.DASHBOARD)
 
     @Slot()
-    def _on_button_clicked(self):
-        self._device_viewmodel.connect_device(self._device.ip)
+    def _on_button_clicked(self) -> None:
+        """Forward a connect request to the ViewModel when the button is clicked."""
+        self._device_viewmodel.connect_to_device(self._device)

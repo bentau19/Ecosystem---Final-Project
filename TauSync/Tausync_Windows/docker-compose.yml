@@ -6,4 +6,4 @@ services:
     container_name: tausync
     restart: no
     volumes:
-      - ./TauSync_Windows/Tausync.Lib:/windows-build
+      - ./Tausync.Lib:/windows-build

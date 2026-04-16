@@ -49,7 +49,7 @@ class DeviceRepository(
             cursor = conn.cursor()
             cursor.execute("CREATE TABLE IF NOT EXISTS devices "
                            "(id TEXT PRIMARY KEY, name TEXT,"
-                           " os TEXT, tag TEXT, last_connected TEXT, battery_level INTEGER,"
+                           " os TEXT, tag TEXT, last_connected DATETIME, battery_level INTEGER,"
                            " battery_charging BOOLEAN, storage_used INTEGER,"
                            " storage_total INTEGER, ip TEXT)")
             conn.commit()
