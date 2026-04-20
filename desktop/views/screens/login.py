@@ -15,7 +15,8 @@ class LoginScreen(QWidget):
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """
+        """Initialize the login screen and build its two-panel layout.
+
         Args:
             parent: Optional parent widget.
         """

@@ -1,4 +1,4 @@
-from typing import List, Optional, Type
+from typing import List, Type
 
 from PySide6.QtCore import Slot
 from PySide6.QtGui import QColor, QIcon
@@ -46,7 +46,7 @@ class PhoneDetailsRow(QWidget):
             self,
             card_width: int = 200,
             card_height: int = 200,
-            parent: Optional[QWidget] = None,
+            parent: QWidget | None = None,
     ) -> None:
         """Initialize the PhoneDetailsRow widget.
 

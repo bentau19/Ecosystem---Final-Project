@@ -1,5 +1,3 @@
-from typing import Optional
-
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QFrame, QWidget
 
 from resources.paths import IndicatorStyles
@@ -20,7 +18,7 @@ class ConnectionPill(QFrame):
             Parent widget.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the ConnectionPill widget.
 
         Creates all child widgets, sets up the layout, and applies styling.

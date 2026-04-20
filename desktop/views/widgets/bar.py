@@ -1,5 +1,3 @@
-from typing import Optional
-
 from PySide6.QtGui import QPainter, Qt, QBrush, QColor, QLinearGradient, QPaintEvent
 from PySide6.QtWidgets import QWidget
 
@@ -19,7 +17,7 @@ class Bar(QWidget):
     """
 
     def __init__(self, percent: int, gradient_start: QColor, gradient_end: QColor,
-                 parent: Optional[QWidget] = None) -> None:
+                 parent: QWidget | None = None) -> None:
         """Initialize the BatteryBar widget.
         
         Args:

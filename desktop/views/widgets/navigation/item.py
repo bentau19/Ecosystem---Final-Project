@@ -9,24 +9,25 @@ from utils.styles import load_stylesheet
 
 
 class NavigationItem(QFrame):
-    """
-    A navigation item widget with an icon and text for navigation menus.
+    """A navigation item widget with an icon and text for navigation menus.
 
     Supports active/inactive states, hover effects, cursor changes,
-    and emits a signal when clicked.
+    and emits a ``clicked`` signal when the user releases the left mouse button.
+
+    Signals:
+        clicked: Emitted when the item is left-clicked.
     """
 
     clicked: Signal = Signal()
 
     def __init__(self, icon: QPixmap, item_title: str, is_active: bool = False, parent: QWidget | None = None) -> None:
-        """
-        Initialize the navigation item.
+        """Initialize the navigation item.
 
         Args:
-            icon (QPixmap): The icon to display.
-            item_title (str): Text displayed next to the icon.
-            is_active (bool, optional): Whether the item starts in the active state. Defaults to False.
-            parent (QWidget | None, optional): Parent widget. Defaults to None.
+            icon: The icon to display.
+            item_title: Text displayed next to the icon.
+            is_active: Whether the item starts in the active state. Defaults to False.
+            parent: Parent widget. Defaults to None.
         """
         super().__init__(parent)
 
@@ -76,11 +77,10 @@ class NavigationItem(QFrame):
         self.setFixedHeight(45)
 
     def _create_icon(self) -> QLabel:
-        """
-        Create the icon label.
+        """Create the icon label scaled to 26×26 px.
 
         Returns:
-            QLabel configured for the icon.
+            A fixed-width QLabel with the scaled icon and ``iconLabel`` object name.
         """
         icon_label: QLabel = QLabel()
         icon_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
@@ -91,11 +91,10 @@ class NavigationItem(QFrame):
         return icon_label
 
     def _create_text_label(self) -> QLabel:
-        """
-        Create the text label.
+        """Create the text label aligned to the vertical centre.
 
         Returns:
-            QLabel configured for the text.
+            A QLabel with the item title and ``textLabel`` object name set.
         """
         text_label: QLabel = QLabel(self._item_title)
         text_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
@@ -132,8 +131,11 @@ class NavigationItem(QFrame):
 
     @is_active.setter
     def is_active(self, value: bool) -> None:
-        """Set active state and update UI."""
+        """Set the active state and refresh the item's visual appearance.
 
+        Args:
+            value: True to mark this item as active, False to deactivate it.
+        """
         self._is_active = value
         self.setProperty("isActive", value)
         self._text_label.setProperty("isActive", value)

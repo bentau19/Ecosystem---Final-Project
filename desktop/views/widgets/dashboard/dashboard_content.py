@@ -3,6 +3,7 @@ from PySide6.QtWidgets import (
     QWidget, QScrollArea, QFrame, QVBoxLayout
 )
 
+from resources.colors import Palette
 from resources.spacing import Spacing
 from views.widgets.dashboard.phone_details_row import PhoneDetailsRow
 from views.widgets.dashboard.tools_grid import ToolsGrid
@@ -10,19 +11,18 @@ from views.widgets.dashboard.tools_section_header import ToolsSectionHeader
 
 
 class DashboardContent(QScrollArea):
-    """
-    Main content widget for the dashboard page.
+    """Scrollable main content area for the dashboard screen.
 
-    Displays device status cards, tool cards, and navigation controls
-    in a scrollable layout with proper styling and organization.
+    Displays a device-status row, a tools section header, and a flow-layout
+    grid of tool cards inside a vertically scrollable, frame-less
+    :class:`QScrollArea`.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """
-        Initialize the MainContent widget.
+        """Initialize the DashboardContent widget.
 
         Args:
-            parent: Parent widget, defaults to None
+            parent: Parent widget, defaults to None.
         """
         super().__init__(parent)
 
@@ -33,33 +33,25 @@ class DashboardContent(QScrollArea):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        """
-        Set up the main UI components and layout.
-        """
+        """Configure the scroll area and build child widgets and layout."""
         self.setObjectName("dashboardContent")
-        self.viewport().setStyleSheet("background-color: #0d1117")
+        self.viewport().setStyleSheet(f"background-color: {Palette.DARK_950};")
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self._create_widgets()
-
         self._create_layout()
 
     def _create_widgets(self) -> None:
-        """
-        Create the main content widgets.
-        """
+        """Instantiate the device-status row, tools header, and tools grid."""
         self._device_status_row: PhoneDetailsRow = self._create_device_status_row()
         self._tools_section_header: ToolsSectionHeader = ToolsSectionHeader()
         self._tools_grid: ToolsGrid = ToolsGrid()
 
     def _create_layout(self) -> None:
-        """
-        Create the inner content widget with all dashboard components.
-        """
-
+        """Build the inner content widget and set it as the scroll area's widget."""
         inner: QWidget = QWidget()
 
         layout: QVBoxLayout = QVBoxLayout(inner)
@@ -79,11 +71,9 @@ class DashboardContent(QScrollArea):
 
     @staticmethod
     def _create_device_status_row() -> PhoneDetailsRow:
-        """
-        Create the device status row.
+        """Create the phone details row widget.
 
         Returns:
-            PhoneDetailsRow: The created device status row.
+            A default-constructed :class:`~views.widgets.dashboard.phone_details_row.PhoneDetailsRow`.
         """
-        return PhoneDetailsRow(
-        )
+        return PhoneDetailsRow()

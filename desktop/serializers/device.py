@@ -1,11 +1,9 @@
 from datetime import datetime, date
-from typing import Optional
-
 from entities.device_info import DeviceEntity
 from serializers.interfaces.base import ISerializer
 
 
-class DeviceSerializer(ISerializer[Optional[DeviceEntity], dict]):
+class DeviceSerializer(ISerializer[DeviceEntity | None, dict]):
     """Serializes and deserializes the currently connected device entity.
 
     Maps between a ``PreviousDeviceEntity`` (or ``None`` when no device is

@@ -1,5 +1,3 @@
-from typing import Optional
-
 from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout
 
@@ -12,9 +10,14 @@ from viewmodels.tool import ToolViewModel
 
 
 class ToolsSectionHeader(QWidget):
-    """Tools section header widget."""
+    """Header row for the tools section on the dashboard.
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    Displays an 'Available Tools' title on the left and a live count badge
+    ('N tools available') on the right that updates whenever the tool count
+    changes via the :class:`~viewmodels.tool.ToolViewModel`.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the _tools section header widget.
 
         Args:
@@ -87,11 +90,7 @@ class ToolsSectionHeader(QWidget):
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
-        """Connect the signals for the _tools section header.
-
-        Connect the `tool_count_changed` signal of the `_tools_view_model`
-        to the `_update_tag` slot.
-        """
+        """Connect ViewModel signals to their handler slots."""
         self._tools_view_model.tool_count_changed.connect(self._update_tag)
 
     @Slot(int)

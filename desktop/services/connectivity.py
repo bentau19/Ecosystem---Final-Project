@@ -7,7 +7,8 @@ emitting Qt signals when a device connects or disconnects.
 import functools
 import threading
 import uuid
-from typing import Callable, Optional
+from datetime import date
+from typing import Callable
 
 from PySide6.QtCore import QObject, Signal
 from tausync_py import TauSync
@@ -32,6 +33,7 @@ def threaded(func: Callable) -> Callable[..., threading.Thread]:
         A wrapper that starts the method on a background thread and returns
         the :class:`threading.Thread` object to the caller.
     """
+
     @functools.wraps(func)
     def run_as_thread(*args, **kwargs) -> threading.Thread:
         self = args[0]
@@ -69,7 +71,7 @@ class ConnectivityService(QObject):
     connection_error = Signal(str)
     device_info_ready = Signal(object)
 
-    def __init__(self, repository: DeviceRepository, parent: Optional[QObject] = None) -> None:
+    def __init__(self, repository: DeviceRepository, parent: QObject | None = None) -> None:
         """Initialize the service and set up the TauSync connection.
 
         Args:
@@ -146,7 +148,7 @@ class ConnectivityService(QObject):
             battery_charging=bool(network.read_from_channel(self._tau, DeviceInfoChannels.BATTERY_CHARGING)),
             storage_total=int(network.read_from_channel(self._tau, DeviceInfoChannels.STORAGE_TOTAL)),
             storage_used=int(network.read_from_channel(self._tau, DeviceInfoChannels.STORAGE_USED)),
-            last_connected=network.read_from_channel(self._tau, DeviceInfoChannels.LAST_SEEN),
+            last_connected=date.fromisoformat(network.read_from_channel(self._tau, DeviceInfoChannels.LAST_SEEN)),
             ip=network.read_from_channel(self._tau, DeviceInfoChannels.IP)
         )
         self.device_info_ready.emit(entity)
@@ -195,7 +197,7 @@ class ConnectivityService(QObject):
             ip: The IP address of the remote TauSync server.
 
         Emits:
-            device_connected: Immediately (stub behaviour).
+            device_connected: Immediately (stub behavior).
         """
         # TODO: via Bluetooth with prev id...
         # self._tau.connect_to(ip)

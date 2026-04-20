@@ -1,7 +1,5 @@
 import sqlite3
 from pathlib import Path
-from typing import Optional
-
 from PySide6.QtCore import QObject, Signal
 
 from entities.device_info import DeviceEntity
@@ -31,7 +29,7 @@ class DeviceRepository(
 
     def __init__(
             self,
-            parent: Optional[QObject] = None,
+            parent: QObject | None = None,
     ) -> None:
         """Initialize the repository and eagerly load data from the store.
 
@@ -41,10 +39,11 @@ class DeviceRepository(
         super().__init__(parent)
 
         self._serializer = DeviceSerializer()
-        self._db_path = Path(__file__).parent.parent / "data" / "devices.db"
+        self._db_path = Path(__file__).parent.parent / "data" / "app.db"
         self._configure_db()
 
-    def _configure_db(self):
+    def _configure_db(self) -> None:
+        """Create the ``devices`` table if it does not already exist."""
         with sqlite3.connect(self._db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("CREATE TABLE IF NOT EXISTS devices "
@@ -54,7 +53,15 @@ class DeviceRepository(
                            " storage_total INTEGER, ip TEXT)")
             conn.commit()
 
-    def id_exists(self, id: str):
+    def id_exists(self, id: str) -> bool:
+        """Check whether a device with the given ID exists in the database.
+
+        Args:
+            id: The device UUID to look up.
+
+        Returns:
+            ``True`` if a matching row exists, ``False`` otherwise.
+        """
         with sqlite3.connect(self._db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT 1 FROM devices WHERE id = ?", (id,))

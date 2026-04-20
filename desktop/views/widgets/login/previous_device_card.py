@@ -181,7 +181,7 @@ class PreviousDeviceCard(QWidget):
 
         text_col = QVBoxLayout()
         text_col.setSpacing(Spacing.XS)
-        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.NONE)
         text_col.addWidget(self._name_lbl)
         text_col.addWidget(self._meta_lbl)
 

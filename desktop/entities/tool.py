@@ -3,15 +3,18 @@ from dataclasses import dataclass
 
 @dataclass
 class ToolEntity:
-    """
-       tool entity.
+    """Canonical domain object representing a SyncDose tool/action.
 
-       Attributes:
-           title (str): The title of the tool.
-           description (str): The description of the tool.
-           icon_path (str): The path to the tool icon.
-           is_enabled (bool): Indicates whether the tool is enabled.
-       """
+    Populated by :class:`~repositories.tool.ToolRepository` and consumed by
+    the tool ViewModel.
+
+    Attributes:
+        title: Display name and primary key of the tool.
+        description: Short human-readable description shown on the tool card.
+        icon_path: Qt virtual path to the tool's icon (e.g. ``":/icons/…"``).
+        is_enabled: Whether the tool is active and should appear in the grid.
+    """
+
     title: str
     description: str
     icon_path: str

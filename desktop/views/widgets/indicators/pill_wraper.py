@@ -1,4 +1,3 @@
-from typing import Optional
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 
 from resources.spacing import Spacing
@@ -11,7 +10,7 @@ class PillWrapper(QWidget):
     vertical layout with predefined spacing and margins.
     """
 
-    def __init__(self, minimum_height: int = 55, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, minimum_height: int = 55, parent: QWidget | None = None) -> None:
         """
         Initialize the PillWrapper.
 

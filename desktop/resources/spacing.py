@@ -2,6 +2,12 @@ from typing import Final
 
 
 class Spacing:
+    """Design-token constants for layout spacing values (in pixels).
+
+    All margins, padding, and ``setSpacing`` calls in the codebase must
+    reference these constants instead of hardcoded integers.
+    """
+
     # No spacing
     NONE: Final[int] = 0
     # Tiny spacing (4px)

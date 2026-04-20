@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 
 from PySide6.QtCore import Qt, QMargins, QRect, QSize
 from PySide6.QtWidgets import QLayout, QLayoutItem, QWidget
@@ -11,7 +11,7 @@ class FlowLayout(QLayout):
     A layout that arranges its children in a horizontal flow.
     """
 
-    def __init__(self, min_width: int = 200, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, min_width: int = 200, parent: QWidget | None = None) -> None:
         """
         Initialize the FlowLayout.
 
@@ -46,7 +46,7 @@ class FlowLayout(QLayout):
         """
         return len(self._item_list)
 
-    def itemAt(self, index: int) -> Optional[QLayoutItem]:
+    def itemAt(self, index: int) -> QLayoutItem | None:
         """
         Return the child item at the specified index.
 
@@ -61,7 +61,7 @@ class FlowLayout(QLayout):
 
         return None
 
-    def takeAt(self, index: int) -> Optional[QLayoutItem]:
+    def takeAt(self, index: int) -> QLayoutItem | None:
         """
         Remove and return the child item at the specified index.
 
@@ -149,17 +149,15 @@ class FlowLayout(QLayout):
         return size
 
     def _do_layout(self, rect: QRect, test_only: bool) -> int:
-        """
-        Perform the layout.
+        """Arrange all child items within ``rect``, or measure the required height.
 
         Args:
-            rect (QRect): The layout rectangle.
-            test_only (bool): If True, only test the layout without performing any actual layout.
-            rect: The layout rectangle.
-            test_only: If True, only test the layout without performing any actual layout.
+            rect: The bounding rectangle available for layout.
+            test_only: When ``True``, only calculates the required height without
+                repositioning any child widgets (used by ``heightForWidth``).
 
         Returns:
-            int: The height of the layout.
+            The total height needed to fit all items inside ``rect``.
         """
         if not self._item_list:
             return 0

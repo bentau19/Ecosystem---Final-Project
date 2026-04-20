@@ -1,10 +1,12 @@
-from unittest.mock import MagicMock
+"""Unit tests for ToolRepository (SQLite-backed)."""
+
+import sqlite3
+from pathlib import Path
 
 import pytest
 
 from entities.tool import ToolEntity
 from repositories.tool import ToolRepository
-from stores.interfaces.base import IStore
 
 
 # ---------------------------------------------------------------------------
@@ -12,25 +14,11 @@ from stores.interfaces.base import IStore
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-def reset_singleton() -> None:
-    """Reset the ToolRepository singleton before and after every test.
-
-    Without this, the first test's instance leaks into every subsequent
-    test — __init__ is guarded by _initialized so new mock stores would
-    never be injected.
-    """
-    ToolRepository._instance = None
-    ToolRepository._initialized = False
-    yield
-    ToolRepository._instance = None
-    ToolRepository._initialized = False
-
 @pytest.fixture()
 def tool_enabled() -> ToolEntity:
     return ToolEntity(
         title="hammer",
-        description="A tool for hammering",
+        description="A tool for driving nails into wood.",
         icon_path="hammer.png",
         is_enabled=True,
     )
@@ -40,9 +28,9 @@ def tool_enabled() -> ToolEntity:
 def tool_disabled() -> ToolEntity:
     return ToolEntity(
         title="screwdriver",
-        is_enabled=False,
-        description="A tool for screwdriving",
+        description="A tool for driving screws.",
         icon_path="screwdriver.png",
+        is_enabled=False,
     )
 
 
@@ -50,184 +38,296 @@ def tool_disabled() -> ToolEntity:
 def tool_another_enabled() -> ToolEntity:
     return ToolEntity(
         title="wrench",
-        is_enabled=True,
-        description="A tool for wrenching",
+        description="A tool for tightening nuts and bolts.",
         icon_path="wrench.png",
+        is_enabled=True,
     )
 
 
 @pytest.fixture()
-def mock_store_empty() -> MagicMock:
-    store: MagicMock = MagicMock(spec=IStore)
-    store.load.return_value = {}
-    return store
+def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ToolRepository:
+    """Provide a ToolRepository backed by a temp SQLite database.
 
-
-@pytest.fixture()
-def mock_store_with_items(
-        tool_enabled: ToolEntity,
-        tool_disabled: ToolEntity,
-        tool_another_enabled: ToolEntity,
-) -> MagicMock:
-    store: MagicMock = MagicMock(spec=IStore)
-    store.load.return_value = {
-        tool_enabled.title: tool_enabled,
-        tool_disabled.title: tool_disabled,
-        tool_another_enabled.title: tool_another_enabled,
-    }
-    return store
+    Monkeypatches ``sqlite3.connect`` so all calls within ToolRepository are
+    redirected to a fresh, empty database in ``tmp_path`` instead of the
+    production file.  Seeds are inserted by ``_configure_db`` as normal.
+    """
+    db_path = str(tmp_path / "test_tools.db")
+    original_connect = sqlite3.connect
+    monkeypatch.setattr(sqlite3, "connect", lambda path, **kw: original_connect(db_path, **kw))
+    return ToolRepository()
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# id_exists
 # ---------------------------------------------------------------------------
 
-# --- load ---
-def test_load_when_store_is_empty_returns_empty_dict(mock_store_empty: MagicMock):
-    repo = ToolRepository(store=mock_store_empty)
-    assert repo.load() == {}
+
+def test_id_exists_returns_false_when_title_not_in_db(
+    repository: ToolRepository,
+) -> None:
+    assert repository.id_exists("nonexistent") is False
 
 
-def test_load_when_store_has_items_returns_all_tools(mock_store_with_items: MagicMock):
-    repo = ToolRepository(store=mock_store_with_items)
-    assert repo.load() == mock_store_with_items.load.return_value
+def test_id_exists_returns_true_after_save(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
+
+    assert repository.id_exists(tool_enabled.title) is True
 
 
-# --- get_by_id ---
+def test_id_exists_returns_false_for_unknown_title_when_other_entities_exist(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
 
-def test_get_by_id_when_tool_exists_returns_correct_tool(
-        mock_store_with_items: MagicMock,
-        tool_enabled: ToolEntity,
-        tool_disabled: ToolEntity,
-):
-    repo = ToolRepository(store=mock_store_with_items)
-    assert repo.get_by_id(tool_enabled.title) == tool_enabled
-    assert repo.get_by_id(tool_disabled.title) == tool_disabled
+    assert repository.id_exists("nonexistent") is False
 
 
-def test_get_by_id_when_tool_does_not_exist_returns_none(mock_store_empty: MagicMock):
-    repo = ToolRepository(store=mock_store_empty)
-    assert repo.get_by_id("nonexistent") is None
+# ---------------------------------------------------------------------------
+# get_by_id
+# ---------------------------------------------------------------------------
 
 
-# --- get_all ---
-
-def test_get_all_when_store_is_empty_returns_empty_list(mock_store_empty: MagicMock):
-    repo = ToolRepository(store=mock_store_empty)
-    assert repo.get_all() == []
-
-
-def test_get_all_when_store_has_items_returns_all_tools(
-        mock_store_with_items: MagicMock,
-        tool_enabled: ToolEntity,
-        tool_disabled: ToolEntity,
-        tool_another_enabled: ToolEntity,
-):
-    repo = ToolRepository(store=mock_store_with_items)
-    assert repo.get_all() == [tool_enabled, tool_disabled, tool_another_enabled]
+def test_get_by_id_returns_none_when_title_not_found(
+    repository: ToolRepository,
+) -> None:
+    assert repository.get_by_id("nonexistent") is None
 
 
-# --- get_all_enabled ---
+def test_get_by_id_returns_entity_after_save(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
+
+    result = repository.get_by_id(tool_enabled.title)
+
+    assert result == tool_enabled
+
+
+def test_get_by_id_returns_none_when_title_does_not_match(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
+
+    assert repository.get_by_id("nonexistent") is None
+
+
+def test_get_by_id_returns_correct_entity_when_multiple_saved(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+    tool_disabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
+    repository.save(tool_disabled)
+
+    assert repository.get_by_id(tool_enabled.title) == tool_enabled
+    assert repository.get_by_id(tool_disabled.title) == tool_disabled
+
+
+# ---------------------------------------------------------------------------
+# get_all
+# ---------------------------------------------------------------------------
+
+
+def test_get_all_returns_only_seeded_tools_when_no_extra_saves(
+    repository: ToolRepository,
+) -> None:
+    # The fixture DB is seeded with 10 default tools by _configure_db
+    result = repository.get_all()
+    assert len(result) == 10
+
+
+def test_get_all_returns_additional_entity_after_save(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+) -> None:
+    initial_count = len(repository.get_all())
+    repository.save(tool_enabled)
+
+    assert len(repository.get_all()) == initial_count + 1
+
+
+def test_get_all_excludes_deleted_entities(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+    tool_disabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
+    repository.save(tool_disabled)
+
+    repository.delete(tool_enabled.title)
+
+    result = repository.get_all()
+    assert tool_enabled not in result
+    assert tool_disabled in result
+
+
+# ---------------------------------------------------------------------------
+# get_all_enabled
+# ---------------------------------------------------------------------------
+
 
 def test_get_all_enabled_returns_only_enabled_tools(
-        mock_store_with_items: MagicMock,
-        tool_enabled: ToolEntity,
-        tool_another_enabled: ToolEntity,
-):
-    repo = ToolRepository(store=mock_store_with_items)
-    assert repo.get_all_enabled() == [tool_enabled, tool_another_enabled]
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+    tool_disabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
+    repository.save(tool_disabled)
+
+    result = repository.get_all_enabled()
+
+    assert tool_enabled in result
+    assert tool_disabled not in result
 
 
-def test_get_all_enabled_when_no_enabled_tools_returns_empty_list(
-        mock_store_empty: MagicMock,
-        tool_disabled: ToolEntity,
-):
-    mock_store_empty.load.return_value = {tool_disabled.title: tool_disabled}
-    repo = ToolRepository(store=mock_store_empty)
-    assert repo.get_all_enabled() == []
+def test_get_all_enabled_excludes_newly_disabled_tool(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
+    disabled_version = ToolEntity(
+        title=tool_enabled.title,
+        description=tool_enabled.description,
+        icon_path=tool_enabled.icon_path,
+        is_enabled=False,
+    )
+    repository.save(disabled_version)
+
+    result = repository.get_all_enabled()
+
+    assert disabled_version not in result
 
 
-# --- save ---
-
-def test_save_new_tool_makes_it_retrievable_by_id(
-        mock_store_empty: MagicMock,
-        tool_enabled: ToolEntity,
-):
-    repo = ToolRepository(store=mock_store_empty)
-    repo.save(tool_enabled)
-    assert repo.get_by_id(tool_enabled.title) == tool_enabled
+# ---------------------------------------------------------------------------
+# save
+# ---------------------------------------------------------------------------
 
 
-def test_save_new_tool_persists_to_store(
-        mock_store_empty: MagicMock,
-        tool_enabled: ToolEntity,
-):
-    repo = ToolRepository(store=mock_store_empty)
-    repo.save(tool_enabled)
-    mock_store_empty.save.assert_called_once()
+def test_save_persists_entity_to_db(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
+
+    assert repository.get_by_id(tool_enabled.title) == tool_enabled
 
 
-def test_save_new_tool_emits_entity_saved_signal(
-        mock_store_empty: MagicMock,
-        tool_enabled: ToolEntity,
-):
-    repo = ToolRepository(store=mock_store_empty)
-    received = []
-    repo.entity_saved.connect(lambda t: received.append(t))
-    repo.save(tool_enabled)
+def test_save_replaces_existing_entity_with_same_title(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
+
+    updated = ToolEntity(
+        title=tool_enabled.title,
+        description="Updated description",
+        icon_path="new_icon.png",
+        is_enabled=False,
+    )
+    repository.save(updated)
+
+    assert repository.get_by_id(tool_enabled.title) == updated
+
+
+def test_save_emits_entity_saved_with_saved_entity(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+) -> None:
+    received: list[ToolEntity] = []
+    repository.entity_saved.connect(lambda e: received.append(e))
+
+    repository.save(tool_enabled)
+
     assert received == [tool_enabled]
 
 
-def test_save_duplicate_tool_raises_value_error(
-        mock_store_empty: MagicMock,
-        tool_enabled: ToolEntity,
-):
-    repo = ToolRepository(store=mock_store_empty)
-    repo.save(tool_enabled)
-    with pytest.raises(ValueError, match=f"Tool with title '{tool_enabled.title}' already exists."):
-        repo.save(tool_enabled)
+def test_save_emits_entity_saved_once_per_call(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+    tool_disabled: ToolEntity,
+) -> None:
+    received: list[ToolEntity] = []
+    repository.entity_saved.connect(lambda e: received.append(e))
+
+    repository.save(tool_enabled)
+    repository.save(tool_disabled)
+
+    assert len(received) == 2
+    assert received[0] == tool_enabled
+    assert received[1] == tool_disabled
 
 
-# --- delete ---
-
-def test_delete_existing_tool_returns_none_on_get(
-        mock_store_with_items: MagicMock,
-        tool_enabled: ToolEntity,
-):
-    repo = ToolRepository(store=mock_store_with_items)
-    repo.delete(tool_enabled.title)
-    assert repo.get_by_id(tool_enabled.title) is None
+# ---------------------------------------------------------------------------
+# delete
+# ---------------------------------------------------------------------------
 
 
-def test_delete_all_tools_results_in_empty_repo(
-        mock_store_with_items: MagicMock,
-        tool_enabled: ToolEntity,
-        tool_disabled: ToolEntity,
-        tool_another_enabled: ToolEntity,
-):
-    repo = ToolRepository(store=mock_store_with_items)
-    repo.delete(tool_enabled.title)
-    repo.delete(tool_disabled.title)
-    repo.delete(tool_another_enabled.title)
-    assert repo.get_all() == []
+def test_delete_removes_entity_from_db(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
+
+    repository.delete(tool_enabled.title)
+
+    assert repository.get_by_id(tool_enabled.title) is None
 
 
-def test_delete_existing_tool_emits_entity_deleted_signal(
-        mock_store_with_items: MagicMock,
-        tool_enabled: ToolEntity,
-):
-    repo = ToolRepository(store=mock_store_with_items)
-    received = []
-    repo.entity_deleted.connect(lambda t: received.append(t))
-    repo.delete(tool_enabled.title)
+def test_delete_only_removes_matching_entity(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+    tool_disabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
+    repository.save(tool_disabled)
+
+    repository.delete(tool_enabled.title)
+
+    assert repository.get_by_id(tool_disabled.title) == tool_disabled
+
+
+def test_delete_emits_entity_deleted_signal(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
+    received: list[str] = []
+    repository.entity_deleted.connect(lambda title: received.append(title))
+
+    repository.delete(tool_enabled.title)
+
     assert received == [tool_enabled.title]
 
 
-def test_delete_nonexistent_tool_still_emits_entity_deleted_signal(
-        mock_store_empty: MagicMock,
-):
-    repo = ToolRepository(store=mock_store_empty)
-    received = []
-    repo.entity_deleted.connect(lambda t: received.append(t))
-    repo.delete("nonexistent")
+def test_delete_nonexistent_title_still_emits_entity_deleted(
+    repository: ToolRepository,
+) -> None:
+    received: list[str] = []
+    repository.entity_deleted.connect(lambda title: received.append(title))
+
+    repository.delete("nonexistent")
+
     assert received == ["nonexistent"]
+
+
+def test_delete_all_entities_results_in_only_seeded_tools_removed(
+    repository: ToolRepository,
+    tool_enabled: ToolEntity,
+    tool_disabled: ToolEntity,
+) -> None:
+    repository.save(tool_enabled)
+    repository.save(tool_disabled)
+
+    repository.delete(tool_enabled.title)
+    repository.delete(tool_disabled.title)
+
+    titles = {t.title for t in repository.get_all()}
+    assert tool_enabled.title not in titles
+    assert tool_disabled.title not in titles

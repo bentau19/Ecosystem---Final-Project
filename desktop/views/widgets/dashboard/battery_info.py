@@ -1,6 +1,5 @@
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QFrame, QWidget
-from typing import Optional
 
 from resources.colors import DashboardColors, BatteryBarColors
 from resources.paths import DashboardStyles
@@ -10,20 +9,14 @@ from views.widgets.bar import Bar
 
 
 class BatteryInfo(QFrame):
-    """A compact card widget that displays battery information with a visual indicator.
+    """Compact card widget showing battery percentage with a gradient progress bar.
 
-    This widget shows battery status including percentage, a progress bar,
-    charging.svg status, and an icon. It's styled using QSS and displays
-    battery information in a compact card format.
-
-    Args:
-        battery_percentage (int): Battery percentage (0-100).
-        is_charging (bool): Whether the battery is currently charging.
-        parent (Optional[QWidget]): Parent widget, defaults to None.
+    Displays the percentage value, a filled bar, and a charging status label.
+    Styled via QSS.
     """
 
     def __init__(
-            self, battery_percentage: int, is_charging: bool, parent: Optional[QWidget] = None
+            self, battery_percentage: int, is_charging: bool, parent: QWidget | None = None
     ) -> None:
         """Initialize the BatteryInfo widget.
 

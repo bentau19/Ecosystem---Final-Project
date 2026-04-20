@@ -1,7 +1,5 @@
 import random
 import uuid
-from typing import Optional
-
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 from datetime import datetime
 
@@ -52,7 +50,7 @@ class DeviceViewModel(QObject):
             self,
             repository: DeviceRepository,
             connectivity_service: ConnectivityService,
-            parent: Optional[QObject] = None,
+            parent: QObject | None = None,
     ) -> None:
         """Initialize the ViewModel and wire up repository and service signals.
 
@@ -147,7 +145,6 @@ class DeviceViewModel(QObject):
     def disconnect_device(self) -> None:
         """Disconnect the currently connected device via the connectivity service."""
         self._connectivity_service.disconnect_device()
-
     # ── Slots ─────────────────────────────────────────────────────────────────
 
     @Slot(object)

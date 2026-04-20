@@ -1,5 +1,3 @@
-from typing import Optional
-
 from PySide6.QtCore import Signal, QPropertyAnimation, QEasingCurve, QPoint, QEvent
 from PySide6.QtGui import QColor, QMouseEvent, QPixmap, Qt, QIcon, QEnterEvent
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget, QFrame
@@ -25,7 +23,7 @@ class ToolCard(QFrame):
             content_widget: QWidget,
             icon_width: int = 30,
             icon_height: int = 30,
-            parent: Optional[QWidget] = None
+            parent: QWidget | None = None
     ) -> None:
         """
         Initialize the dashboard card widget.

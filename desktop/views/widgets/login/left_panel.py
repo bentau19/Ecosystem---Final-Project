@@ -24,7 +24,8 @@ class LeftPanel(QWidget):
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """
+        """Initialize the left panel and build its content layout.
+
         Args:
             parent: Optional parent widget.
         """

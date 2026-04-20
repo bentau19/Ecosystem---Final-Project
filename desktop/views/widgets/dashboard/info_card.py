@@ -1,5 +1,3 @@
-from typing import Optional
-
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve, Signal
 from PySide6.QtGui import QColor, QMouseEvent, Qt, QIcon, QPixmap
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget, QFrame
@@ -19,7 +17,7 @@ class InfoCard(QFrame):
 
     def __init__(self, icon: QIcon, icon_background: QColor,
                  title: str, content_widget: QWidget, icon_width: int = 30, icon_height: int = 30,
-                 parent: Optional[QWidget] = None) -> None:
+                 parent: QWidget | None = None) -> None:
         """
         Initialize the dashboard card widget.
 

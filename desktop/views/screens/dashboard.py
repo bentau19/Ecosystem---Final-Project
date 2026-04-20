@@ -5,7 +5,6 @@ from PySide6.QtWidgets import (
 import resources_qrc  # noqa: F401
 from resources.spacing import Spacing
 from utils import viewmodel_manager
-from viewmodels.device import DeviceViewModel
 from views.widgets.dashboard.dashboard_content import DashboardContent
 from views.widgets.divider import Divider
 from views.widgets.navigation.sidebar import Sidebar
@@ -13,29 +12,31 @@ from views.widgets.topbar import Topbar
 
 
 class DashboardScreen(QWidget):
-    """Dashboard for the PhoneLink Dashboard."""
+    """Main dashboard screen composed of a sidebar, topbar, divider, and content area."""
 
-    def __init__(self) -> None:
-        """Initialize the Dashboard."""
-        super().__init__()
-        self._device_viewmodel: DeviceViewModel = viewmodel_manager.viewmodel_manager
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """Initialize the dashboard screen and build its layout.
 
+        Args:
+            parent: Optional parent widget.
+        """
+        super().__init__(parent)
         self._set_up_ui()
         self.setWindowTitle("Dashboard")
 
     def _set_up_ui(self) -> None:
-        """Set up the UI of the Dashboard."""
+        """Instantiate all child widgets and assemble the screen layout."""
         self._create_widgets()
         self._setup_layout()
 
     def _create_widgets(self) -> None:
-        """Create the widgets for the Dashboard."""
+        """Create the sidebar, topbar, and main content area widgets."""
         self._dashboard_content = DashboardContent()
         self._sidebar = Sidebar(logo_widget_height=100)
         self._topbar = Topbar("Dashboard", "Samsung Galaxy S23 — Last synced just now", 100)
 
     def _setup_layout(self) -> None:
-        """Set up the layout of the Dashboard."""
+        """Arrange widgets: sidebar on the left, topbar + content on the right."""
         # Right side: topbar + divider + content
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)

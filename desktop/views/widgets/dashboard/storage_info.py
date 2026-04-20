@@ -1,5 +1,3 @@
-from typing import Optional
-
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QVBoxLayout, QLabel, QFrame, QWidget
 
@@ -11,11 +9,17 @@ from views.widgets.bar import Bar
 
 
 class StorageInfo(QFrame):
+    """Compact card widget showing storage usage with a gradient progress bar.
+
+    Displays used/total storage in gigabytes, a filled bar proportional to
+    usage, and a percentage sub-label. Styled via QSS.
+    """
+
     def __init__(
             self,
             total_space: int = 256,
             used_space: int = 126,
-            parent: Optional[QWidget] = None,
+            parent: QWidget | None = None,
     ) -> None:
         """Initialize the StorageInfo widget.
 

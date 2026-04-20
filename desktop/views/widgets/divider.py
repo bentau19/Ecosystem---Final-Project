@@ -15,7 +15,7 @@ class Divider(QFrame):
         parent (Optional[QWidget]): Parent widget, defaults to None
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: "QWidget | None" = None) -> None:
         """Initialize the Divider widget.
         
         Sets up the frame shape, dimensions, and applies styling.

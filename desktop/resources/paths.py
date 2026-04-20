@@ -1,13 +1,17 @@
 from enum import StrEnum
 
 
-# used for type checking
 class PathsEnum(StrEnum):
-    pass
+    """Base marker class for all Qt virtual-path enums.
+
+    Used as a type bound so any path enum can be passed where a
+    ``PathsEnum`` is expected without coupling to a specific sub-class.
+    """
 
 
-# Icons
 class Icons(PathsEnum):
+    """Qt virtual paths to bundled SVG icon assets (registered in ``syncdose.qrc``)."""
+
     LOGO = ":/icons/logo.svg"
     SETTINGS = ":/icons/settings.svg"
     DASHBOARD = ":/icons/dashboard.svg"
@@ -19,25 +23,26 @@ class Icons(PathsEnum):
     REFRESH = ":/icons/refresh.svg"
 
 
-# Styles
 class Styles(PathsEnum):
+    """Qt virtual paths to top-level QSS stylesheets."""
+
     DIVIDER = ":/styles/divider.qss"
     TOPBAR = ":/styles/topbar.qss"
     LOGO_WIDGET = ":/styles/logo_widget.qss"
     TRAY_MENU = ":/styles/tray-menu.qss"
 
 
-
-# Navigation
-
 class NavigationStyles(PathsEnum):
+    """Qt virtual paths to navigation-widget QSS stylesheets."""
+
     SIDEBAR = ":/styles/navigation/sidebar.qss"
     CONTAINER = ":/styles/navigation/container.qss"
     ITEM = ":/styles/navigation/item.qss"
 
 
-# Dashboard
 class DashboardStyles(PathsEnum):
+    """Qt virtual paths to dashboard-widget QSS stylesheets."""
+
     INFO_CARD = ":/styles/dashboard/info_card.qss"
     TOOL_CARD = ":/styles/dashboard/tool_card.qss"
     BATTERY_INFO = ":/styles/dashboard/battery_info.qss"
@@ -48,10 +53,13 @@ class DashboardStyles(PathsEnum):
 
 
 class LoginStyles(PathsEnum):
+    """Qt virtual paths to login-screen QSS stylesheets."""
+
     LEFT_PANEL = ":/styles/login/left-panel.qss"
     RIGHT_PANEL = ":/styles/login/right-panel.qss"
 
 
-# Indicators
 class IndicatorStyles(PathsEnum):
+    """Qt virtual paths to indicator-widget QSS stylesheets."""
+
     CONNECTION_PILL = ":/styles/indicators/connection_pill.qss"

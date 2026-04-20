@@ -3,15 +3,18 @@ from dataclasses import dataclass
 
 @dataclass
 class ToolDTO:
-    """
-    Data Transfer Object (DTO) for a tool.
+    """Data Transfer Object for a single tool entry.
+
+    Consumed exclusively by the view layer — no entity or repository
+    types must leak into this dataclass.
 
     Attributes:
-        title (str): The title of the tool.
-        description (str): The description of the tool.
-        icon_path (str): The path to the tool icon.
-        is_enabled (bool): Indicates whether the tool is enabled.
+        title: Display name of the tool.
+        description: Short description shown on the tool card.
+        icon_path: Qt virtual path to the tool's icon resource.
+        is_enabled: Whether the tool is currently enabled for use.
     """
+
     title: str
     description: str
     icon_path: str

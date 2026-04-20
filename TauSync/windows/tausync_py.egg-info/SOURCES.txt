@@ -8,3 +8,6 @@ tausync_py.egg-info/SOURCES.txt
 tausync_py.egg-info/dependency_links.txt
 tausync_py.egg-info/requires.txt
 tausync_py.egg-info/top_level.txt
+tausync_py/dll/TauSync.Lib.deps.json
+tausync_py/dll/TauSync.Lib.dll
+tausync_py/dll/TauSync.Lib.pdb

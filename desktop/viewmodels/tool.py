@@ -1,4 +1,3 @@
-from typing import List
 from PySide6.QtCore import QObject, Signal, Slot
 
 from dto.tool import ToolDTO
@@ -25,16 +24,19 @@ class ToolViewModel(QObject):
     tool_count_changed: Signal = Signal(int)
 
     def __init__(self, tool_repository: ToolRepository, parent: QObject | None = None) -> None:
-        """
-        Initialize the ToolViewModel.
+        """Initialize the ToolViewModel.
+
+        Populates the in-memory enabled-tool list from the repository on
+        construction and wires repository signals for ongoing mutations.
 
         Args:
-            parent (QObject, optional): The parent object. Defaults to None.
+            tool_repository: The repository used to read and persist tool data.
+            parent: Optional Qt parent object for memory management.
         """
         super().__init__(parent)
 
         self._repo = tool_repository
-        self._enabled_tools: List[ToolDTO] = [
+        self._enabled_tools: list[ToolDTO] = [
             self._convert_to_dto(tool) for tool in self._repo.get_all_enabled()
         ]
 
@@ -102,8 +104,11 @@ class ToolViewModel(QObject):
         self.tool_deleted.emit(id)
 
     def load_enabled_tools(self) -> None:
-        """
-        Load the enabled tools.
+        """Emit the current enabled-tool list and the total count.
+
+        Emits:
+            tools_loaded: With the in-memory ``list[ToolDTO]`` of enabled tools.
+            tool_count_changed: With the number of enabled tools as an ``int``.
         """
         self.tools_loaded.emit(self._enabled_tools)
         self.tool_count_changed.emit(len(self._enabled_tools))

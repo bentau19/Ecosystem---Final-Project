@@ -1,5 +1,3 @@
-from typing import Optional
-
 from PySide6.QtCore import Qt, QSize, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
@@ -28,7 +26,7 @@ class Topbar(QWidget):
             title: str,
             subtitle: str,
             topbar_height: int = 72,
-            parent: Optional[QWidget] = None
+            parent: QWidget | None = None
     ) -> None:
         """Initialize the Topbar.
 
@@ -120,14 +118,17 @@ class Topbar(QWidget):
         qss: str = load_stylesheet(Styles.TOPBAR)
         self.setStyleSheet(qss)
 
-    def setup_signals(self):
+    def setup_signals(self) -> None:
+        """Wire the disconnect button and ViewModel signals to their slots."""
         self._disconnect_button.clicked.connect(self._disconnect_from_current_device)
         self._device_viewmodel.device_disconnected.connect(self._move_to_login)
 
     @Slot()
-    def _disconnect_from_current_device(self):
+    def _disconnect_from_current_device(self) -> None:
+        """Request device disconnection from the ViewModel."""
         self._device_viewmodel.disconnect_device()
 
     @Slot()
-    def _move_to_login(self):
+    def _move_to_login(self) -> None:
+        """Navigate back to the login screen after the device disconnects."""
         navigation_manager.go_to_screen(Screen.LOGIN)

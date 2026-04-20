@@ -2,7 +2,6 @@ from PySide6.QtCore import QRectF
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QBrush, QPen, QPixmap, Qt, QPainterPath, QPaintEvent
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout, QFrame
-from typing import Optional
 
 from resources.colors import LogoColors
 from resources.paths import Icons, Styles
@@ -11,21 +10,18 @@ from utils.styles import load_stylesheet
 
 
 class LogoWidget(QFrame):
-    """
-    A QWidget displaying the application logo and application name.
+    """Sidebar header widget displaying the circular logo and gradient app name.
 
-    The widget consists of a circular logo icon and a text label with
-    gradient-colored application name. Layout, margins, and spacing
-    are handled internally.
+    Composed of a :class:`Logo` icon on the left and a :class:`LogoNameLabel`
+    on the right, laid out horizontally with a trailing stretch.
     """
 
-    def __init__(self, logo_size: int = 70, parent: Optional[QWidget] = None) -> None:
-        """
-        Initialize the LogoWidget.
+    def __init__(self, logo_size: int = 70, parent: QWidget | None = None) -> None:
+        """Initialize the LogoWidget.
 
         Args:
-            logo_size (int, optional): The size of the logo icon.
-            parent (Optional[QWidget], optional): Optional parent widget.
+            logo_size: Diameter of the circular logo icon in pixels.
+            parent: Optional parent widget.
         """
         super().__init__(parent)
         self._logo_size: int = logo_size
@@ -37,7 +33,6 @@ class LogoWidget(QFrame):
 
     def _setup_ui(self) -> None:
         """Initialize child widgets, layout, and apply stylesheet."""
-
         self.setObjectName("logoFrame")
         self._create_widgets()
         self._setup_layout()
@@ -57,16 +52,20 @@ class LogoWidget(QFrame):
         layout.addWidget(self._app_name_label)
         layout.addStretch()
 
-    def _create_logo_icon(self) -> QLabel:
+    def _create_logo_icon(self) -> "Logo":
+        """Create and return the circular logo widget.
+
+        Returns:
+            A :class:`Logo` instance sized to ``_logo_size``.
+        """
         return Logo(self._logo_size)
 
     @staticmethod
     def _create_name_label() -> "LogoNameLabel":
-        """
-        Create a label displaying the application name with gradient text.
+        """Create a label displaying the application name with gradient text.
 
         Returns:
-            LogoNameLabel: The application name label.
+            A :class:`LogoNameLabel` instance with the ``logoText`` object name.
         """
         label: LogoNameLabel = LogoNameLabel()
         label.setObjectName("logoText")
@@ -79,16 +78,13 @@ class LogoWidget(QFrame):
 
 
 class LogoNameLabel(QLabel):
-    """
-    QLabel subclass for displaying the application name with gradient text.
-    """
+    """QLabel subclass that paints the app name text with a linear gradient fill."""
 
-    def __init__(self, parent: Optional[QLabel] = None) -> None:
-        """
-        Initialize the gradient text label.
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """Initialize the gradient text label.
 
         Args:
-            parent (Optional[QLabel], optional): Optional parent widget.
+            parent: Optional parent widget.
         """
         super().__init__(parent)
         self._init_ui()
@@ -98,11 +94,13 @@ class LogoNameLabel(QLabel):
         self.setText(self.tr("SyncDose"))
 
     def paintEvent(self, event: QPaintEvent) -> None:
-        """
-        Paint the label text using a linear gradient.
+        """Paint the label text using a linear gradient.
+
+        Calls the base ``paintEvent`` first so the standard label geometry is
+        established, then overlays the gradient-painted text on top.
 
         Args:
-            event: The paint event.
+            event: The paint event delivered by Qt.
         """
         super().paintEvent(event)
         painter: QPainter = QPainter(self)
@@ -118,13 +116,26 @@ class LogoNameLabel(QLabel):
 
 
 class Logo(QLabel):
+    """Circular clipped SVG logo widget.
+
+    Renders ``Icons.LOGO`` into a square pixmap with an elliptical clip path
+    so the icon appears as a circle regardless of the SVG's original shape.
+    """
+
     def __init__(self, logo_size: int = 70, parent: QWidget | None = None) -> None:
+        """Initialize the Logo widget.
+
+        Args:
+            logo_size: Width and height of the circular logo in pixels.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
-        self._logo_size = logo_size
+        self._logo_size: int = logo_size
         self._setup_logo()
         self._apply_style()
 
-    def _setup_logo(self):
+    def _setup_logo(self) -> None:
+        """Render the SVG into a clipped circular pixmap and apply it to the label."""
         pixmap: QPixmap = QPixmap(self._logo_size, self._logo_size)
         pixmap.fill(Qt.GlobalColor.transparent)
 
@@ -140,7 +151,6 @@ class Logo(QLabel):
         renderer.render(painter, QRectF(0, 0, self._logo_size, self._logo_size))
         painter.end()
 
-        logo_icon: QLabel = QLabel()
         self.setPixmap(pixmap)
         self.setFixedSize(self._logo_size, self._logo_size)
         self.setObjectName("logoIcon")

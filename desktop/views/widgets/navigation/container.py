@@ -1,5 +1,3 @@
-from typing import List
-
 from PySide6.QtCore import Slot
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
@@ -28,7 +26,7 @@ class NavigationContainer(QWidget):
         super().__init__(parent)
 
         self._navigation_label: QLabel
-        self._navigation_items: List[NavigationItem]
+        self._navigation_items: list[NavigationItem]
         self._active_navigation_item: NavigationItem
 
         self._setup_ui()
@@ -100,11 +98,10 @@ class NavigationContainer(QWidget):
         self._active_navigation_item = navigation_item
 
     def _create_navigation_label(self) -> QLabel:
-        """
-        Create the navigation label widget.
+        """Create the section heading label ('General').
 
         Returns:
-            QLabel: The navigation label widget.
+            A ``QLabel`` with the ``navigationSectionLabel`` object name set.
         """
         label: QLabel = QLabel(self.tr("General"))
         label.setObjectName("navigationSectionLabel")

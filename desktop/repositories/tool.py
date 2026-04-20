@@ -1,110 +1,182 @@
+import sqlite3
+from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from entities.tool import ToolEntity
 from repositories.interfaces.base import IRepository
-from stores.interfaces.base import IStore
-from stores.tool import ToolStore
+from serializers.tool import ToolSerializer
 from utils.meta import ABCQObjectMeta
 
+# Mock data
+_SEED_TOOLS: list[tuple[str, str, str, bool]] = [
+    ("Tool 1", "Description 1", ":/icons/android.svg", True),
+    ("Tool 2", "Description 2", ":/icons/android.svg", True),
+    ("Tool 3", "Description 3", ":/icons/android.svg", True),
+    ("Tool 4", "Description 4", ":/icons/android.svg", True),
+    ("Tool 5", "Description 5", ":/icons/android.svg", False),
+    ("Tool 6", "Description 6", ":/icons/android.svg", True),
+    ("Tool 7", "Description 7", ":/icons/android.svg", False),
+    ("Tool 8", "Description 8", ":/icons/android.svg", True),
+    ("Tool 9", "Description 9", ":/icons/android.svg", False),
+    ("Tool 10", "Description 10", ":/icons/android.svg", True),
+]
 
-class ToolRepository(IRepository[ToolEntity, str], QObject, metaclass=ABCQObjectMeta):
-    """Repository for tool entities.
 
-    Implements the singleton pattern so that a single shared instance is used
-    throughout the application.  Data is eagerly loaded from the backing store
-    on first construction and kept in an in-memory cache; save mutations flush
-    the full cache back to disk.
+class ToolRepository(
+    IRepository[ToolEntity, str], QObject, metaclass=ABCQObjectMeta
+):
+    """Repository for tool entities backed by a SQLite database.
+
+    Each public method opens a short-lived connection so the repository is
+    safe to call from any thread.  The ``tools`` table is created — and
+    seeded with default tools — on first construction via ``_configure_db``.
+    Seeds are only inserted when the table is empty, so user edits are never
+    overwritten across restarts.
 
     Signals:
-        entity_saved:   Emitted with the saved ToolEntity after a successful
-            ``save`` call.
-        entity_deleted: Emitted with the tool ID string after a ``delete`` call.
+        entity_saved:   Emitted with the saved ``ToolEntity`` after a
+            successful ``save`` call.
+        entity_deleted: Emitted with the tool title (``str``) after a
+            successful ``delete`` call.
     """
 
     entity_saved: Signal = Signal(object)
     entity_deleted: Signal = Signal(str)
 
-    def __init__(self, store: IStore = ToolStore(), parent: QObject | None = None) -> None:
-        """Initialize the tool repository.
-
-        Guarded by ``_initialized`` so that the singleton body only runs once
-        even if the constructor is called multiple times.
+    def __init__(
+        self,
+        parent: QObject | None = None,
+    ) -> None:
+        """Initialize the repository and ensure the backing table exists.
 
         Args:
-            store: Backing store used for file I/O.  Defaults to a fresh
-                ``ToolStore`` instance.
             parent: Optional Qt parent object.
         """
         super().__init__(parent)
-        self._store: IStore = store
-        self._tools: dict[str, ToolEntity] = self.load()
-        self._initialized = True
+        self._serializer = ToolSerializer()
+        self._db_path = Path(__file__).parent.parent / "data" / "app.db"
+        self._configure_db()
 
-    def load(self) -> dict[str, ToolEntity]:
-        """Load tools from the backing store.
+    def _configure_db(self) -> None:
+        """Create the ``tools`` table if absent and seed default rows.
 
-        Returns:
-            A dictionary mapping tool titles to ToolEntity objects.
+        Seeds are only written when the table is completely empty so that
+        runtime mutations survive application restarts.
         """
-        return self._store.load()
+        with sqlite3.connect(self._db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS tools "
+                "(title TEXT PRIMARY KEY, description TEXT,"
+                " icon_path TEXT, is_enabled BOOLEAN)"
+            )
+            cursor.execute("SELECT COUNT(*) FROM tools")
+            if cursor.fetchone()[0] == 0:
+                cursor.executemany(
+                    "INSERT INTO tools (title, description, icon_path, is_enabled) "
+                    "VALUES (?, ?, ?, ?)",
+                    _SEED_TOOLS,
+                )
+            conn.commit()
 
-    def save(self, entity: ToolEntity) -> None:
-        """Insert a new tool and flush to disk.
+    def id_exists(self, title: str) -> bool:
+        """Check whether a tool with the given title exists in the database.
 
         Args:
-            entity: The tool to save.
+            title: The tool title to look up.
 
-        Raises:
-            ValueError: If a tool with the same title already exists.
-
-        Emits:
-            tool_saved: With the saved entity after the store write.
+        Returns:
+            ``True`` if a matching row exists, ``False`` otherwise.
         """
-        if entity.title in self._tools:
-            raise ValueError(f"Tool with title '{entity.title}' already exists.")
-        self._tools[entity.title] = entity
-        self.entity_saved.emit(entity)
-        self._store.save(self._tools)
+        with sqlite3.connect(self._db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM tools WHERE title = ?", (title,))
+            return cursor.fetchone() is not None
 
     def get_by_id(self, id: str) -> ToolEntity | None:
-        """Return the tool with the given ID, or ``None`` if absent.
+        """Return the tool with the given title, or ``None`` if absent.
 
         Args:
-            id: The tool title used as the dictionary key.
+            id: The tool title used as the primary key.
 
         Returns:
-            The matching ToolEntity, or ``None`` if not found.
+            The matching ``ToolEntity``, or ``None`` if not found.
         """
-        if id not in self._tools:
-            return None
-        return self._tools[id]
+        with sqlite3.connect(self._db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM tools WHERE title = ?", (id,))
+            row = cursor.fetchone()
+            return self._serializer.deserialize(row)
 
     def get_all(self) -> list[ToolEntity]:
         """Return all stored tools.
 
         Returns:
-            A list of all ToolEntity objects.
+            A list of all ``ToolEntity`` objects in the database.
         """
-        return list(self._tools.values())
+        with sqlite3.connect(self._db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM tools")
+            rows = cursor.fetchall()
+            return [
+                entity
+                for row in rows
+                if (entity := self._serializer.deserialize(row)) is not None
+            ]
 
     def get_all_enabled(self) -> list[ToolEntity]:
-        """Return only tools that are currently enabled.
+        """Return only tools whose ``is_enabled`` flag is set.
 
         Returns:
-            A list of ToolEntity objects where ``is_enabled`` is ``True``.
+            A list of ``ToolEntity`` objects where ``is_enabled`` is ``True``.
         """
-        return [tool for tool in self._tools.values() if tool.is_enabled]
+        with sqlite3.connect(self._db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM tools WHERE is_enabled = 1")
+            rows = cursor.fetchall()
+            return [
+                entity
+                for row in rows
+                if (entity := self._serializer.deserialize(row)) is not None
+            ]
+
+    def save(self, entity: ToolEntity) -> None:
+        """Insert or replace a tool and persist to disk.
+
+        Performs an upsert: if a tool with the same title already exists it
+        is overwritten; otherwise a new row is inserted.
+
+        Args:
+            entity: The tool to persist.
+
+        Emits:
+            entity_saved: With the saved entity after the database write.
+        """
+        with sqlite3.connect(self._db_path) as conn:
+            cursor = conn.cursor()
+            row: tuple[str, str, str, bool] | None = self._serializer.serialize(entity)
+            if row is None:
+                return
+            cursor.execute(
+                "REPLACE INTO tools (title, description, icon_path, is_enabled) "
+                "VALUES (?, ?, ?, ?)",
+                row,
+            )
+            conn.commit()
+            self.entity_saved.emit(entity)
 
     def delete(self, id: str) -> None:
-        """Remove a tool by ID and emit the deleted signal.
+        """Remove a tool by title and emit the deleted signal.
 
         Args:
             id: The tool title to remove.
 
         Emits:
-            tool_deleted: With the tool ID regardless of whether it was
-                present in the cache.
+            entity_deleted: With ``id`` after the database write, even if no
+                matching row existed.
         """
-        if id in self._tools:
-            del self._tools[id]
-        self.entity_deleted.emit(id)
+        with sqlite3.connect(self._db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM tools WHERE title = ?", (id,))
+            conn.commit()
+            self.entity_deleted.emit(id)

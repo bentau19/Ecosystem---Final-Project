@@ -2,19 +2,27 @@
 Right panel of the login screen — 'Previously connected' device list.
 """
 
-from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QRectF, Slot
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 import utils.styles
 from dto.previous_device import PreviousDeviceDTO
 from enums.screen import Screen
+from resources.colors import Palette
 from resources.paths import Icons, LoginStyles
 from resources.spacing import Spacing
 from utils.viewmodel_manager import viewmodel_manager
 from utils.navigation_manager import NavigationManager, navigation_manager
 from viewmodels.device import DeviceViewModel
 from views.widgets.login.previous_device_card import PreviousDeviceCard
+
+
+# Empty-state icon dimensions — mirrors the HTML .device-icon CSS rule
+_EMPTY_ICON_SIZE: int   = 40   # CSS: width/height 40px
+_EMPTY_ICON_RADIUS: int = 10   # CSS: border-radius 10px
+_EMPTY_ICON_MARGIN: int = 8    # SVG natural size 24px → (40-24)/2 = 8px padding
 
 
 class RightPanel(QWidget):
@@ -99,7 +107,7 @@ class RightPanel(QWidget):
             A QWidget with an icon, heading, and hint text vertically centered.
         """
         container = QWidget(self)
-        container.setObjectName("EmptyState")
+        container.setObjectName("NoDevicesView")
         # Allow the container to expand so internal stretches can center the content
         container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -107,15 +115,11 @@ class RightPanel(QWidget):
         layout.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.NONE)
         layout.setSpacing(Spacing.NONE)
 
-        # Icon
+        # Icon — glowing rounded-square container with cyan smartphone SVG
         icon_lbl = QLabel()
         icon_lbl.setObjectName("EmptyStateIcon")
-        pixmap = QPixmap(Icons.SMARTPHONE).scaled(
-            48, 48,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        icon_lbl.setPixmap(pixmap)
+        icon_lbl.setFixedSize(_EMPTY_ICON_SIZE, _EMPTY_ICON_SIZE)
+        icon_lbl.setPixmap(self._create_icon_pixmap())
         icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         title_lbl = QLabel("No devices connected previously")
@@ -175,6 +179,46 @@ class RightPanel(QWidget):
         layout.addWidget(self._help_lbl)
 
         return footer
+
+    def _create_icon_pixmap(self) -> QPixmap:
+        """Render the empty-state smartphone icon.
+
+        Translates the HTML ``.device-icon`` CSS rule into a QPainter pixmap:
+        - background: ``oklch(1 0 0 / 0.04)``  → white at 4 % opacity
+        - border:     ``1px solid --line-2``    → :data:`Palette.GRAY_640`
+        - border-radius: 10 px
+        - icon color: ``--text-2``              → SVG stroke (cyan accent)
+
+        Returns:
+            A fully rendered QPixmap ready to be set on a QLabel.
+        """
+        s = _EMPTY_ICON_SIZE
+        r = _EMPTY_ICON_RADIUS
+        m = _EMPTY_ICON_MARGIN
+
+        pixmap = QPixmap(s, s)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # 0.5 px inset so the 1 px stroke sits fully within the pixmap boundary
+        rect = QRectF(0.5, 0.5, s - 1.0, s - 1.0)
+        path = QPainterPath()
+        path.addRoundedRect(rect, r, r)
+
+        # background: oklch(1 0 0 / 0.04) — white at ~4 % opacity
+        painter.setBrush(QColor(255, 255, 255, 10))
+        # border: 1px solid --line-2
+        painter.setPen(QPen(QColor(Palette.GRAY_640), 1.0))
+        painter.drawPath(path)
+
+        # icon centered — SVG stroke carries the --text-2 colour
+        renderer = QSvgRenderer(Icons.SMARTPHONE)
+        renderer.render(painter, QRectF(m, m, s - m * 2, s - m * 2))
+
+        painter.end()
+        return pixmap
 
     def _setup_layout(self) -> None:
         """Arrange all child widgets in a vertical column."""

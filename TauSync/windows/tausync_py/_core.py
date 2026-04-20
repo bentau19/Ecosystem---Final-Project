@@ -14,6 +14,8 @@ import ipaddress
 import os
 import sys
 import threading
+from idlelib import parenmatch
+from pathlib import Path
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -37,20 +39,31 @@ _DEFAULT_DLL_RELATIVE = os.path.join(
 
 def _find_dll() -> str:
     """Walk up from this file's directory to locate the DLL automatically."""
-    anchor = os.path.dirname(os.path.abspath(__file__))
-    current = anchor
-    for _ in range(10):
-        candidate = os.path.join(current, _DEFAULT_DLL_RELATIVE)
-        if os.path.isfile(candidate):
-            return os.path.abspath(candidate)
-        parent = os.path.dirname(current)
-        if parent == current:
-            break
-        current = parent
-    raise FileNotFoundError(
-        f"TauSync.Lib.dll not found. Searched upward from {anchor}. "
-        "Pass dll_path= explicitly to TauSync() if the DLL is elsewhere."
-    )
+
+    dll_file = Path(__file__).parent / "dll" / "TauSync.Lib.dll"
+    #
+    # anchor = os.path.dirname(os.path.abspath(__file__))
+    # current = anchor
+    # for _ in range(10):
+    #     candidate = os.path.join(current, _DEFAULT_DLL_RELATIVE)
+    #     if os.path.isfile(candidate):
+    #         return os.path.abspath(candidate)
+    #     parent = os.path.dirname(current)
+    #     if parent == current:
+    #         break
+    #     current = parent
+    # raise FileNotFoundError(
+    #     f"TauSync.Lib.dll not found. Searched upward from {anchor}. "
+    #     "Pass dll_path= explicitly to TauSync() if the DLL is elsewhere."
+    # )
+
+    if dll_file.exists():
+        return str(dll_file)
+    else:
+        raise FileNotFoundError(
+            f"TauSync.Lib.dll not found.Searched for  {dll_file}. "
+            "Pass dll_path= explicitly to TauSync() if the DLL is elsewhere."
+        )
 
 
 def _ensure_clr(dll_path: Optional[str] = None) -> None:
@@ -149,10 +162,10 @@ class TauSyncStream:
     """
 
     def __init__(
-        self,
-        dotnet_stream,
-        word: str = "",
-        default_chunk_size: int = 65536,
+            self,
+            dotnet_stream,
+            word: str = "",
+            default_chunk_size: int = 65536,
     ) -> None:
         if dotnet_stream is None:
             raise ValueError("dotnet_stream must not be None")
@@ -430,10 +443,10 @@ class TauSyncStream:
         return total
 
     def read_to_file(
-        self,
-        path: str,
-        length: int,
-        chunk_size: int = 65536,
+            self,
+            path: str,
+            length: int,
+            chunk_size: int = 65536,
     ) -> int:
         """Read exactly *length* bytes from the stream and save to a file.
 
@@ -654,9 +667,9 @@ class TauSync:
     # -- channels ----------------------------------------------------------
 
     def connect(
-        self,
-        word: str,
-        chunk_size: int = 65536,
+            self,
+            word: str,
+            chunk_size: int = 65536,
     ) -> TauSyncStream:
         """Open a named duplex stream (meeting-word handshake).
 

@@ -9,8 +9,12 @@ description = "TauSync Python SDK"
 readme = "tausync_py/README.md"
 requires-python = ">=3.9"
 dependencies = [
-  "pythonnet>=3.0.0",
+    "pythonnet>=3.0.0",
 ]
 
 [tool.setuptools]
 packages = ["tausync_py"]
+
+[tool.setuptools.package-data]
+tausync_py = ["dll/*", "README.md"]
+

@@ -1,13 +1,21 @@
 from enum import StrEnum
 
 
-#  used for type checking
 class ColorsEnum(StrEnum):
-    pass
+    """Base marker class for all color enum families.
+
+    Used as a type bound in :func:`~utils.styles.load_stylesheet` so that
+    any color enum — ``Palette``, ``Colors``, or a component sub-class — can
+    be passed interchangeably.
+    """
 
 
-# Only hex values. No semantics. Add new hues here.
 class Palette(ColorsEnum):
+    """Raw hex color values with no semantic meaning.
+
+    Layer 1 of the design-token hierarchy.  Only add new hues here; semantic
+    aliases belong in :class:`Colors` or a component-specific class.
+    """
     DARK_950 = "#0d1117"  # Deepest background surface (login left panel)
     DARK_900 = "#111827"  # Primary background color
     DARK_800 = "#141C26"  # Secondary background color
@@ -58,9 +66,12 @@ class Palette(ColorsEnum):
     GREEN_900  = "#0d2c1a"  # deep green tint
 
 
-# What a color means. References layer 1. No component names here.
-
 class Colors(ColorsEnum):
+    """Semantic color aliases that reference :class:`Palette` entries.
+
+    Layer 2 of the design-token hierarchy.  Names describe *purpose*
+    (e.g. ``TEXT_PRIMARY``), not appearance.  No component names here.
+    """
     SURFACE_PRIMARY = Palette.DARK_900  # Primary background color
     SURFACE_SECONDARY = Palette.DARK_800  # Secondary background color
 
@@ -85,33 +96,44 @@ class Colors(ColorsEnum):
 
 
 class SidebarColors(ColorsEnum):
+    """Component-scoped color tokens for the navigation sidebar."""
+
     BACKGROUND = Colors.SURFACE_PRIMARY  # Background color of the sidebar
     BORDER = Colors.BORDER_DEFAULT  # Border color of the sidebar
 
 
 class NavigationColors(ColorsEnum):
+    """Component-scoped color tokens for individual navigation items."""
+
     ITEM_HOVER = Colors.BORDER_SUBTLE  # Border color when hovering over a navigation item
     ITEM_ACTIVE = Colors.BORDER_ACTIVE  # Border color when a navigation item is active
 
 
 class DashboardColors(ColorsEnum):
+    """Component-scoped color tokens for dashboard-level containers."""
+
     BORDER = Colors.ACCENT_PRIMARY  # Border color of the dashboard card
     CARD_BACKGROUND = Colors.SURFACE_SECONDARY  # Background color of the dashboard card
     CARD_BORDER = Colors.BORDER_DEFAULT  # Border color of the dashboard card
 
 
 class StorageBarColors(ColorsEnum):
+    """Component-scoped color tokens for the storage progress bar gradient."""
+
     GRADIENT_START = Palette.PURPLE_500  # Start color for the gradient
-    GRADIENT_END = Palette.PURPLE_400
-    # End color for the gradient
+    GRADIENT_END = Palette.PURPLE_400    # End color for the gradient
 
 
 class BatteryBarColors(ColorsEnum):
+    """Component-scoped color tokens for the battery progress bar gradient."""
+
     GRADIENT_START = Palette.GREEN_400  # Start color for the gradient
     GRADIENT_END = Palette.GREEN_200  # End color for the gradient
 
 
 class InfoCardColors(ColorsEnum):
+    """Component-scoped color tokens for device info cards on the dashboard."""
+
     BACKGROUND = Colors.SURFACE_SECONDARY  # Background color of the dashboard card
     BORDER = Colors.BORDER_DEFAULT  # Border color of the dashboard card
     TITLE = Colors.TEXT_SECONDARY  # Text color for the title of the info card
@@ -119,6 +141,8 @@ class InfoCardColors(ColorsEnum):
 
 
 class ToolCardColors(ColorsEnum):
+    """Component-scoped color tokens for tool cards on the dashboard."""
+
     BACKGROUND = Colors.SURFACE_SECONDARY  # Background color of the dashboard card
     BORDER = Colors.BORDER_DEFAULT  # Border color of the dashboard card
     TITLE = Colors.TEXT_PRIMARY  # Text color for the title of the tool card
@@ -127,6 +151,8 @@ class ToolCardColors(ColorsEnum):
 
 
 class LoginColors(ColorsEnum):
+    """Component-scoped color tokens for the login screen panels and device cards."""
+
     LEFT_PANEL_BG = Palette.DARK_950  # Left-panel body background
     LEFT_PANEL_BORDER = Palette.GRAY_720  # Left-panel right-edge separator
     CARD_BG = Palette.DARK_750  # Device card resting background
@@ -135,7 +161,8 @@ class LoginColors(ColorsEnum):
     ICON_BG = Palette.BLUE_700  # Device icon rounded-square background
 
 
-# Misc / special
 class LogoColors(ColorsEnum):
+    """Component-scoped color tokens for the logo gradient text label."""
+
     GRADIENT_START = Palette.SILVER_300  # Start color for the gradient
     GRADIENT_END = Palette.SILVER_500  # End color for the gradient

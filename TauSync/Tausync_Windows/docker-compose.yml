@@ -1,9 +1,0 @@
-services:
-  tau-sync:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: tausync
-    restart: no
-    volumes:
-      - ./Tausync.Lib:/windows-build

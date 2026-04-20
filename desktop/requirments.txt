@@ -1,5 +1,0 @@
-python = 3.13
-pyside6>=6.5.0
-pytest>=8.3.4
-pytest-qt>=4.4.0
-qrcode>= 7.4.2

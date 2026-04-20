@@ -91,7 +91,6 @@ def process_definition(json_path: Path) -> None:
         if generator is None:
             print(f"[SKIP] No generator registered for language '{lang}'")
             continue
-        print(definition)
         source: str = generator(definition)
 
         _save_enum(lang, paths, source, name)

@@ -22,7 +22,7 @@ class Sidebar(QFrame):
     """
 
     def __init__(
-        self, sidebar_width: int = 230, logo_widget_height: int = 120, parent: QWidget | None = None
+            self, sidebar_width: int = 230, logo_widget_height: int = 120, parent: QWidget | None = None
     ) -> None:
         """
         Initialize the Sidebar widget.
