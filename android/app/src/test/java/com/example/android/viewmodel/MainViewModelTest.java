@@ -9,7 +9,7 @@ import androidx.arch.core.executor.testing.InstantTaskExecutorRule;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
-import com.example.android.data.repositories.DeviceRepository;
+import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.entities.DeviceConnectionState;
 import com.example.android.domain.entities.LocalDeviceInfo;
 import com.example.android.domain.entities.RemoteDeviceInfo;

@@ -6,7 +6,7 @@ import androidx.lifecycle.ViewModel;
 import com.example.android.domain.entities.DeviceConnectionState;
 import com.example.android.domain.entities.DeviceStorageStats;
 import com.example.android.domain.entities.RemoteDeviceInfo;
-import com.example.android.data.repositories.DeviceRepository;
+import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
 import com.example.android.domain.usecases.ParseQrDataUseCase;
 import com.example.android.domain.usecases.RefreshLocalStatsUseCase;

@@ -7,7 +7,6 @@ import static org.junit.Assert.assertTrue;
 
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule;
 
-import com.example.android.data.repositories.DeviceRepository;
 import com.example.android.domain.entities.DeviceConnectionState;
 import com.example.android.domain.enums.ConnectionType;
 

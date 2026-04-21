@@ -1,6 +1,6 @@
 package com.example.android.domain.usecases;
 
-import com.example.android.data.repositories.DeviceRepository;
+import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 
 public class ConnectToDeviceUseCase {

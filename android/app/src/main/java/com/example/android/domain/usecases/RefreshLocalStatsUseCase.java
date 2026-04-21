@@ -1,7 +1,7 @@
 package com.example.android.domain.usecases;
 
 import com.example.android.data.datasource.SystemDataSource;
-import com.example.android.data.repositories.DeviceRepository;
+import com.example.android.repositories.DeviceRepository;
 
 public class RefreshLocalStatsUseCase {
 

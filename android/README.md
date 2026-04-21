@@ -39,9 +39,9 @@ app/src/main/java/com/example/android/
 │   ├── 📂 enums/                 # ConnectionType (WIFI, BLUETOOTH)
 │   └── 📂 usecases/              # Single Action Logic (ParseQr, RefreshStats, ConnectToDevice)
 │
-├── 📂 data/                      # Data Access Layer
-│   ├── 📂 datasource/            # Raw System Access (SystemDataSource - Context dependent)
-│   └── 📂 repositories/          # Single Source of Truth (DeviceRepository)
+├── 📂 data/                      # Data Access Layer 
+│   └── 📂 datasource/            # Raw System Access (SystemDataSource - Context dependent)
+├── 📂 repositories/          # Single Source of Truth (DeviceRepository)
 │
 ├── 📂 serializers/               # Data Transformation Layer
 │   └── DeviceSerializer.java     # JSON Mapping & Serialization logic

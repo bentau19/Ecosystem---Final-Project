@@ -7,7 +7,7 @@ import androidx.lifecycle.ViewModel;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.data.datasource.SystemDataSource;
-import com.example.android.data.repositories.DeviceRepository;
+import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
 import com.example.android.domain.usecases.ParseQrDataUseCase;
 import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
