@@ -1,0 +1,215 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background gradient: deep navy to teal -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a1628"/>
+      <stop offset="100%" style="stop-color:#0d2a3a"/>
+    </linearGradient>
+
+    <!-- Accent glow teal -->
+    <linearGradient id="tealGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00e5c0"/>
+      <stop offset="100%" style="stop-color:#00b4d8"/>
+    </linearGradient>
+
+    <!-- Phone gradient -->
+    <linearGradient id="phoneGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e3a52"/>
+      <stop offset="100%" style="stop-color:#112233"/>
+    </linearGradient>
+
+    <!-- Monitor gradient -->
+    <linearGradient id="monitorGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a3347"/>
+      <stop offset="100%" style="stop-color:#0f2030"/>
+    </linearGradient>
+
+    <!-- Droplet gradient -->
+    <linearGradient id="dropGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#00e5c0"/>
+      <stop offset="100%" style="stop-color:#0094c8"/>
+    </linearGradient>
+
+    <!-- Screen glow -->
+    <radialGradient id="screenGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" style="stop-color:#00e5c0;stop-opacity:0.25"/>
+      <stop offset="100%" style="stop-color:#00e5c0;stop-opacity:0"/>
+    </radialGradient>
+
+    <!-- Outer ring glow -->
+    <radialGradient id="outerGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="60%" style="stop-color:#0a1628;stop-opacity:0"/>
+      <stop offset="100%" style="stop-color:#00e5c0;stop-opacity:0.12"/>
+    </radialGradient>
+
+    <!-- Drop shadow filter -->
+    <filter id="glowFilter" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="dropShadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+
+    <clipPath id="roundedRect">
+      <rect width="512" height="512" rx="112" ry="112"/>
+    </clipPath>
+  </defs>
+
+  <!-- Icon background with rounded corners -->
+  <g clip-path="url(#roundedRect)">
+    <!-- Base background -->
+    <rect width="512" height="512" fill="url(#bgGrad)"/>
+
+    <!-- Subtle radial outer glow -->
+    <rect width="512" height="512" fill="url(#outerGlow)"/>
+
+    <!-- Subtle grid lines background -->
+    <g opacity="0.04" stroke="#00e5c0" stroke-width="1">
+      <line x1="0" y1="64" x2="512" y2="64"/>
+      <line x1="0" y1="128" x2="512" y2="128"/>
+      <line x1="0" y1="192" x2="512" y2="192"/>
+      <line x1="0" y1="256" x2="512" y2="256"/>
+      <line x1="0" y1="320" x2="512" y2="320"/>
+      <line x1="0" y1="384" x2="512" y2="384"/>
+      <line x1="0" y1="448" x2="512" y2="448"/>
+      <line x1="64" y1="0" x2="64" y2="512"/>
+      <line x1="128" y1="0" x2="128" y2="512"/>
+      <line x1="192" y1="0" x2="192" y2="512"/>
+      <line x1="256" y1="0" x2="256" y2="512"/>
+      <line x1="320" y1="0" x2="320" y2="512"/>
+      <line x1="384" y1="0" x2="384" y2="512"/>
+      <line x1="448" y1="0" x2="448" y2="512"/>
+    </g>
+
+    <!-- === MONITOR (left, slightly behind) === -->
+    <g filter="url(#dropShadow)">
+      <!-- Monitor body -->
+      <rect x="52" y="155" width="240" height="165" rx="10" ry="10" fill="url(#monitorGrad)" stroke="#1e4060" stroke-width="2.5"/>
+      <!-- Monitor screen bezel -->
+      <rect x="62" y="164" width="220" height="138" rx="6" ry="6" fill="#081520"/>
+      <!-- Screen glow overlay -->
+      <rect x="62" y="164" width="220" height="138" rx="6" ry="6" fill="url(#screenGlow)"/>
+
+      <!-- Screen content: dose bar charts -->
+      <g opacity="0.9">
+        <!-- Bar 1 -->
+        <rect x="82" y="248" width="22" height="42" rx="3" fill="#00e5c0" opacity="0.7"/>
+        <!-- Bar 2 -->
+        <rect x="114" y="232" width="22" height="58" rx="3" fill="#00e5c0" opacity="0.85"/>
+        <!-- Bar 3 -->
+        <rect x="146" y="220" width="22" height="70" rx="3" fill="#00e5c0"/>
+        <!-- Bar 4 -->
+        <rect x="178" y="238" width="22" height="52" rx="3" fill="#00e5c0" opacity="0.75"/>
+        <!-- Bar 5 -->
+        <rect x="210" y="255" width="22" height="35" rx="3" fill="#00e5c0" opacity="0.6"/>
+
+        <!-- Axis line -->
+        <line x1="76" y1="292" x2="246" y2="292" stroke="#00e5c0" stroke-width="1.5" opacity="0.4"/>
+      </g>
+
+      <!-- Monitor stand neck -->
+      <rect x="152" y="320" width="40" height="26" rx="2" fill="#112233"/>
+      <!-- Monitor stand base -->
+      <rect x="122" y="343" width="100" height="14" rx="7" fill="#1a3347"/>
+    </g>
+
+    <!-- === PHONE (right, slightly in front) === -->
+    <g filter="url(#dropShadow)">
+      <!-- Phone body -->
+      <rect x="295" y="125" width="160" height="268" rx="22" ry="22" fill="url(#phoneGrad)" stroke="#1e4060" stroke-width="2.5"/>
+      <!-- Phone screen bezel -->
+      <rect x="308" y="148" width="134" height="216" rx="8" ry="8" fill="#081520"/>
+      <!-- Screen glow overlay -->
+      <rect x="308" y="148" width="134" height="216" rx="8" ry="8" fill="url(#screenGlow)"/>
+
+      <!-- Phone notch -->
+      <rect x="348" y="134" width="54" height="10" rx="5" fill="#0a1828"/>
+      <!-- Home indicator -->
+      <rect x="348" y="382" width="54" height="5" rx="2.5" fill="#1e4060"/>
+
+      <!-- Phone screen: dose schedule list -->
+      <g opacity="0.9">
+        <!-- Row 1 - dose item -->
+        <rect x="318" y="162" width="114" height="22" rx="4" fill="#0d2a3a"/>
+        <circle cx="330" cy="173" r="5" fill="#00e5c0" opacity="0.9"/>
+        <rect x="342" y="168" width="60" height="4" rx="2" fill="#00e5c0" opacity="0.6"/>
+        <rect x="342" y="176" width="38" height="3" rx="1.5" fill="#00b4d8" opacity="0.4"/>
+
+        <!-- Row 2 - dose item (active) -->
+        <rect x="318" y="190" width="114" height="22" rx="4" fill="#0d3040"/>
+        <circle cx="330" cy="201" r="5" fill="#00e5c0"/>
+        <rect x="342" y="196" width="72" height="4" rx="2" fill="#00e5c0" opacity="0.9"/>
+        <rect x="342" y="204" width="44" height="3" rx="1.5" fill="#00b4d8" opacity="0.6"/>
+        <!-- Active indicator -->
+        <circle cx="418" cy="201" r="5" fill="#00e5c0" opacity="0.8"/>
+
+        <!-- Row 3 -->
+        <rect x="318" y="218" width="114" height="22" rx="4" fill="#0d2a3a"/>
+        <circle cx="330" cy="229" r="5" fill="#00e5c0" opacity="0.6"/>
+        <rect x="342" y="224" width="50" height="4" rx="2" fill="#00e5c0" opacity="0.5"/>
+        <rect x="342" y="232" width="30" height="3" rx="1.5" fill="#00b4d8" opacity="0.3"/>
+
+        <!-- Row 4 -->
+        <rect x="318" y="246" width="114" height="22" rx="4" fill="#0d2a3a"/>
+        <circle cx="330" cy="257" r="5" fill="#00e5c0" opacity="0.4"/>
+        <rect x="342" y="252" width="66" height="4" rx="2" fill="#00e5c0" opacity="0.4"/>
+        <rect x="342" y="260" width="40" height="3" rx="1.5" fill="#00b4d8" opacity="0.25"/>
+
+        <!-- Mini progress bar at bottom -->
+        <rect x="318" y="340" width="114" height="8" rx="4" fill="#0d2a3a"/>
+        <rect x="318" y="340" width="72" height="8" rx="4" fill="#00e5c0" opacity="0.7"/>
+      </g>
+    </g>
+
+    <!-- === CENTRAL DOSE DROPLET (overlapping both, front and center) === -->
+    <g filter="url(#glowFilter)">
+      <!-- Droplet shape centered between devices -->
+      <path d="M256,178 C256,178 222,220 222,248 C222,274 237,292 256,292 C275,292 290,274 290,248 C290,220 256,178 256,178 Z"
+            fill="url(#dropGrad)" opacity="0.95"/>
+      <!-- Droplet inner highlight -->
+      <path d="M256,195 C256,195 240,228 240,248 C240,262 247,273 256,275 C248,268 244,259 244,248 C244,230 256,200 256,195 Z"
+            fill="white" opacity="0.18"/>
+      <!-- Droplet shine dot -->
+      <circle cx="263" cy="220" r="5" fill="white" opacity="0.22"/>
+
+      <!-- Cross / plus mark inside droplet (dosing symbol) -->
+      <rect x="249.5" y="233" width="13" height="4" rx="2" fill="white" opacity="0.9"/>
+      <rect x="253.5" y="229" width="5" height="12" rx="2" fill="white" opacity="0.9"/>
+    </g>
+
+    <!-- === SYNC ARC connecting phone and monitor === -->
+    <g filter="url(#softGlow)" opacity="0.75">
+      <!-- Arc from monitor to phone, curved above droplet -->
+      <path d="M 172 180 Q 256 108 340 168"
+            fill="none" stroke="url(#tealGrad)" stroke-width="2.5" stroke-dasharray="8,5"
+            stroke-linecap="round"/>
+      <!-- Arrow head at phone end -->
+      <polygon points="340,168 326,160 330,174" fill="#00e5c0" opacity="0.9"/>
+      <!-- Dot at monitor end -->
+      <circle cx="172" cy="180" r="4" fill="#00e5c0" opacity="0.9"/>
+    </g>
+
+    <!-- === TICK marks / small dots on arc === -->
+    <g opacity="0.5">
+      <circle cx="210" cy="136" r="2.5" fill="#00e5c0"/>
+      <circle cx="256" cy="118" r="2.5" fill="#00e5c0"/>
+      <circle cx="302" cy="136" r="2.5" fill="#00e5c0"/>
+    </g>
+
+    <!-- Fine teal border ring inside rounded rect edges -->
+    <rect x="2" y="2" width="508" height="508" rx="111" ry="111" fill="none" stroke="#00e5c0" stroke-width="1.5" opacity="0.12"/>
+  </g>
+</svg>

@@ -6,9 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.android"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.android"
@@ -42,6 +40,8 @@ android {
 }
 
 dependencies {
+    implementation(project(":tausync-lib"))
+    implementation("com.google.code.gson:gson:2.10.1")
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("androidx.gridlayout:gridlayout:1.0.0")
     implementation("androidx.cardview:cardview:1.0.0")

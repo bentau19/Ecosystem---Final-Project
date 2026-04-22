@@ -9,6 +9,7 @@
         android:name="android.hardware.camera"
         android:required="false" />
     <application
+        android:usesCleartextTraffic="true"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -17,10 +18,19 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Android">
+
+        <activity
+            android:name=".testing.TestTauSyncActivity"
+            android:exported="true"
+            android:label="TauSync Test"
+            android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+        </activity>
+
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
-            android:label="@string/app_name">
+            android:label="@string/app_name"
+            android:theme="@style/Theme.Android">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

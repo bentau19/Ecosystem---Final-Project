@@ -1,0 +1,41 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file alias="logo.svg">icons/logo.svg</file>
+        <file alias="settings.svg">icons/settings.svg</file>
+        <file alias="dashboard.svg">icons/dashboard.svg</file>
+        <file alias="battery.svg">icons/battery.svg</file>
+        <file alias="android.svg">icons/android.svg</file>
+        <file alias="storage.svg">icons/storage.svg</file>
+        <file alias="smartphone.svg">icons/smartphone.svg</file>
+        <file alias="disconnect.svg">icons/disconnect.svg</file>
+    </qresource>
+
+
+    <qresource prefix="/styles/navigation">
+        <file alias="item.qss">styles/navigation/item.qss</file>
+        <file alias="sidebar.qss">styles/navigation/sidebar.qss</file>
+        <file alias="container.qss">styles/navigation/container.qss</file>
+    </qresource>
+
+    <qresource prefix="/styles/dashboard">
+        <file alias="battery_info.qss">styles/dashboard/battery_info.qss</file>
+        <file alias="storage_info.qss">styles/dashboard/storage_info.qss</file>
+        <file alias="device_status_row.qss">styles/dashboard/device_status_row.qss</file>
+        <file alias="tools_grid.qss">styles/dashboard/tools_grid.qss</file>
+        <file alias="content.qss">styles/dashboard/content.qss</file>
+        <file alias="tools_section_header.qss">styles/dashboard/tools_section_header.qss</file>
+        <file alias="info_card.qss">styles/dashboard/info_card.qss</file>
+        <file alias="tool_card.qss">styles/dashboard/tool_card.qss</file>
+    </qresource>
+
+    <qresource prefix="/styles/indicators">
+        <file alias="connection_pill.qss">styles/indicators/connection_pill.qss</file>
+    </qresource>
+
+    <qresource prefix="/styles">
+        <file alias="logo_widget.qss">styles/logo_widget.qss</file>
+        <file alias="divider.qss">styles/divider.qss</file>
+        <file alias="topbar.qss">styles/topbar.qss</file>
+    </qresource>
+
+</RCC>
