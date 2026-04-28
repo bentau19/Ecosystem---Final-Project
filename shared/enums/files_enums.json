@@ -1,0 +1,17 @@
+{
+  "name": "FileTransferChannels",
+  "description": "TauSync meeting-word identifiers for the file transfer protocol. Both PC and Android must call tau.connect() with the exact same string — define it here once and generate both sides.",
+  "type": "string",
+  "members": [
+    {
+      "name": "REGULAR_FILE_METADATA",
+      "value": "file_meta",
+      "description": "Metadata channel for a regular file transfer — carries JSON with the filename and byte-count before the data channel opens."
+    },
+    {
+      "name": "REGULAR_FILE_DATA",
+      "value": "file_data",
+      "description": "Data channel for a regular file transfer — carries raw file bytes, exactly the byte-count declared in the metadata channel."
+    }
+  ]
+}

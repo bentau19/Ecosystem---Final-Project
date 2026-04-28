@@ -25,8 +25,13 @@ def mock_connectivity() -> MagicMock:
 
 
 @pytest.fixture()
-def view_model(qtbot, mock_repo: MagicMock, mock_connectivity: MagicMock) -> DeviceViewModel:
-    return DeviceViewModel(repository=mock_repo, connectivity_service=mock_connectivity)
+def mock_device_info_service() -> MagicMock:
+    return MagicMock()
+
+
+@pytest.fixture()
+def view_model(qtbot, mock_repo: MagicMock, mock_connectivity: MagicMock, mock_device_info_service: MagicMock) -> DeviceViewModel:
+    return DeviceViewModel(repository=mock_repo, connectivity_service=mock_connectivity, device_info_service=mock_device_info_service)
 
 
 # ---------------------------------------------------------------------------

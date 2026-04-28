@@ -19,6 +19,7 @@ class ViewModelManager:
         self.device_viewmodel: DeviceViewModel = DeviceViewModel(
             repository_manager.device_repository,
             services_manager.connectivity_service,
+            services_manager.device_info_service,
         )
 
 

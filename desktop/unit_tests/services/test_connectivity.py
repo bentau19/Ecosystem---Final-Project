@@ -15,14 +15,13 @@ from services.connectivity import ConnectivityService
 
 
 def _make_connectivity(mock_tau: MagicMock) -> ConnectivityService:
-    """Construct ConnectivityService with TauSync and repository replaced by mocks.
+    """Construct ConnectivityService with TauSync replaced by a mock.
 
-    Also manually starts _listen() because the auto-start is commented out in
-    production code until the phone-side implementation is ready.
+    Also manually starts _listen() because start_listening() is not called
+    automatically — the application triggers it explicitly when ready.
     """
-    mock_repo = MagicMock()
     with patch("services.connectivity.TauSync", return_value=mock_tau):
-        svc = ConnectivityService(repository=mock_repo)
+        svc = ConnectivityService()
     svc._listen()
     return svc
 
@@ -178,9 +177,8 @@ def test_disconnect_device_dispose_called_before_signal(qtbot: QtBot) -> None:
 
 def test_connect_to_device_emits_device_connected(qtbot: QtBot) -> None:
     mock_tau = MagicMock()
-    mock_repo = MagicMock()
     with patch("services.connectivity.TauSync", return_value=mock_tau):
-        svc = ConnectivityService(repository=mock_repo)
+        svc = ConnectivityService()
 
     received: list[bool] = []
     svc.device_connected.connect(lambda: received.append(True))

@@ -15,6 +15,7 @@ from entities.device_info import DeviceEntity
 from repositories.device import DeviceRepository
 from resources.paths import Icons
 from services.connectivity import ConnectivityService
+from services.device_info import DeviceInfoService
 
 
 class DeviceViewModel(QObject):
@@ -25,7 +26,7 @@ class DeviceViewModel(QObject):
     dashboard card (name, OS, battery, storage).
 
     A periodic :class:`~PySide6.QtCore.QTimer` fires every 10 minutes to pull
-    refreshed data from the connectivity service while a device is connected.
+    refreshed data from the device-info service while a device is connected.
 
     Signals:
         device_infos_updated (Signal[object]): Emitted with
@@ -50,6 +51,7 @@ class DeviceViewModel(QObject):
             self,
             repository: DeviceRepository,
             connectivity_service: ConnectivityService,
+            device_info_service: DeviceInfoService,
             parent: QObject | None = None,
     ) -> None:
         """Initialize the ViewModel and wire up repository and service signals.
@@ -59,15 +61,18 @@ class DeviceViewModel(QObject):
                 :class:`~entities.device_info.DeviceEntity` objects.
             connectivity_service: The service that manages the TauSync
                 connection and emits device lifecycle signals.
+            device_info_service: The service that reads device metadata from
+                TauSync channels and emits a populated DeviceEntity.
             parent: Optional Qt parent object for memory management.
         """
         super().__init__(parent)
         self._device_repository: DeviceRepository = repository
         self._connectivity_service: ConnectivityService = connectivity_service
+        self._device_info_service: DeviceInfoService = device_info_service
 
         self._connectivity_service.device_connected.connect(self._on_device_connected)
-        self._connectivity_service.device_info_ready.connect(self._on_device_info_ready)
         self._connectivity_service.device_disconnected.connect(self.device_disconnected)
+        self._device_info_service.device_info_ready.connect(self._on_device_info_ready)
 
         # Mock device, until connectivity in phone side will be established
         self._device_repository.save(
@@ -86,14 +91,10 @@ class DeviceViewModel(QObject):
         )
 
         self._refresh_timer: QTimer = QTimer(self)
-        self._refresh_timer.timeout.connect(self._refresh)
+        self._refresh_timer.timeout.connect(self._request_device_info_refresh)
         self._refresh_timer.start(self._TEN_MINUTES)
 
         self._current_device_connected_id: str = "1"  # TODO: get this from the connectivity service when phone side works
-
-    def _refresh(self) -> None:
-        """Refresh the view with the current device's info."""
-        self._connectivity_service.get_device_info()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -127,10 +128,10 @@ class DeviceViewModel(QObject):
     def update_device_info(self) -> None:
         """Trigger a manual refresh of the current device's info.
 
-        Delegates to the connectivity service to re-read all device channels
+        Delegates to the device-info service to re-read all device channels
         on a background thread.
         """
-        self._refresh()
+        self._request_device_info_refresh()
 
     # TODO: define what to do because as now cant listen and connect in the same time
     def connect_to_device(self, device: PreviousDeviceDTO) -> None:
@@ -145,11 +146,18 @@ class DeviceViewModel(QObject):
     def disconnect_device(self) -> None:
         """Disconnect the currently connected device via the connectivity service."""
         self._connectivity_service.disconnect_device()
+
+    # ── Private helpers ────────────────────────────────────────────────────────
+
+    def _request_device_info_refresh(self) -> None:
+        """Delegate to the device-info service to fetch fresh device metadata."""
+        self._device_info_service.fetch_device_info()
+
     # ── Slots ─────────────────────────────────────────────────────────────────
 
     @Slot(object)
     def _on_device_info_ready(self, entity: DeviceEntity) -> None:
-        """Handle a freshly assembled DeviceEntity from the connectivity service.
+        """Handle a freshly assembled DeviceEntity from the device-info service.
 
         Persists the entity to the repository, updates the tracked ID, and
         emits the DTO list so the view refreshes.
@@ -188,7 +196,7 @@ class DeviceViewModel(QObject):
             device_connected: To signal views that a device is now connected.
         """
         self.device_connected.emit()
-        self._refresh()
+        self._request_device_info_refresh()
 
     # ── Conversion ────────────────────────────────────────────────────────────
 

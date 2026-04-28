@@ -644,7 +644,6 @@ class TauSync:
             TauSync._global_role = _ROLE_CLIENT
             TauSync._global_target = ip
         try:
-            print(f"hey i am nothing")
             self._manager.ConnectTransport(ip).GetAwaiter().GetResult()
         except Exception:
             with TauSync._global_role_lock:
