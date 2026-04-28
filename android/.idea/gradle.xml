@@ -9,7 +9,7 @@
         <option name="gradleJvm" value="#GRADLE_LOCAL_JAVA_HOME" />
         <option name="modules">
           <set>
-            <option value="$PROJECT_DIR$/../TauSync/android/tausync-lib" />
+            <option value="$PROJECT_DIR$/../TauSync/Tausync_Android/tausync-lib" />
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/app" />
           </set>
