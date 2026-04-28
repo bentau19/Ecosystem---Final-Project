@@ -7,6 +7,10 @@ arrays behind a clean two-class API: **`TauSync`** and **`TauSyncStream`**.
 ## Installation
 
 ```
+before all if you didnt compile the dll yet open the CMD on the main folder (the Ecosystem---Final-Project) and run the next line:
+dotnet build Tausync/Tausync_Windows/TauSync.Lib/TauSync.Lib.csproj
+
+the next step is:
 pip install -e <path to the folder>\tausync_py
 e.g.
 PS C:\Users\User\Desktop\OneDrive\CS_BA\Third_Year\final_project\Ecosystem---Final-Project\windows\tests\ben_test\file_test> py -e pip install -e ..\..\..\tausync_py 
