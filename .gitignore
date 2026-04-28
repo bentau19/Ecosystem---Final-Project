@@ -46,3 +46,5 @@ local.properties
 Thumbs.db
 desktop.ini
 .ai
+.claude
+graphify-out

@@ -13,20 +13,20 @@
 
 All protocol-level constants live in one place (`CoreConfig` on C#). Both platforms **must** use identical values.
 
-| Constant | Value | Description |
-|:---|:---|:---|
-| `TPackHeaderSize` | `8` | Fixed header: 4B length + 3B TargetID + 1B flags. |
-| `CorrelationIdBytes` | `3` | TargetID field width (max value `0xFFFFFF`). |
-| `MagicBytes` | `0x54415553` | ASCII "TAUS" — protocol identity in every signaling JSON. |
-| `ControlChannelId` | `0` | Reserved TargetID for discovery/handshake frames. |
-| `FlagFin` | `0x01` | Bit 0 — final packet of a logical stream. Triggers cleanup. |
-| `FlagControl` | `0x02` | Bit 1 — payload is a `TransferRequest` JSON (signaling). |
-| `StreamChunkSize` | `65536` | Recommended max payload per data frame (64 KB). |
-| `HandshakeTimeoutSeconds` | `30` | Max time to wait for a handshake OK before timing out. |
-| `DefaultPort` | `8888` | TCP port used by `SocketTransport`. |
-| `ClientConnectRetryDelaySeconds` | `2` | Delay between TCP connection retries (client mode). |
-| `IdRecycleDelayMs` | `2000` | Grace period before a released ID is eligible for reuse (prevents stale-FIN corruption). |
-| `MaxPendingDiscoveryPerWord` | `64` | Max queued REQs per word before the service is registered. |
+| Constant                         | Value        | Description                                                                              |
+|:---------------------------------|:-------------|:-----------------------------------------------------------------------------------------|
+| `TPackHeaderSize`                | `8`          | Fixed header: 4B length + 3B TargetID + 1B flags.                                        |
+| `CorrelationIdBytes`             | `3`          | TargetID field width (max value `0xFFFFFF`).                                             |
+| `MagicBytes`                     | `0x54415553` | ASCII "TAUS" — protocol identity in every signaling JSON.                                |
+| `ControlChannelId`               | `0`          | Reserved TargetID for discovery/handshake frames.                                        |
+| `FlagFin`                        | `0x01`       | Bit 0 — final packet of a logical stream. Triggers cleanup.                              |
+| `FlagControl`                    | `0x02`       | Bit 1 — payload is a `TransferRequest` JSON (signaling).                                 |
+| `StreamChunkSize`                | `65536`      | Recommended max payload per data frame (64 KB).                                          |
+| `HandshakeTimeoutSeconds`        | `30`         | Max time to wait for a handshake OK before timing out.                                   |
+| `DefaultPort`                    | `8888`       | TCP port used by `SocketTransport`.                                                      |
+| `ClientConnectRetryDelaySeconds` | `2`          | Delay between TCP connection retries (client mode).                                      |
+| `IdRecycleDelayMs`               | `2000`       | Grace period before a released ID is eligible for reuse (prevents stale-FIN corruption). |
+| `MaxPendingDiscoveryPerWord`     | `64`         | Max queued REQs per word before the service is registered.                               |
 
 ### Valid ID Range
 
@@ -57,11 +57,11 @@ Offset  Size  Field         Encoding
 
 **Flags** (byte 7):
 
-| Bit | Mask | Name | Meaning |
-|:----|:-----|:-----|:--------|
-| 0 | `0x01` | FIN | Last frame for this stream. Receiver must clean up the handler, routing entries, and release the ID. |
-| 1 | `0x02` | CONTROL | Payload is a JSON `TransferRequest` (signaling). When unset, payload is opaque binary data. |
-| 2–7 | | Reserved | Must be `0`. |
+| Bit | Mask   | Name     | Meaning                                                                                              |
+|:----|:-------|:---------|:-----------------------------------------------------------------------------------------------------|
+| 0   | `0x01` | FIN      | Last frame for this stream. Receiver must clean up the handler, routing entries, and release the ID. |
+| 1   | `0x02` | CONTROL  | Payload is a JSON `TransferRequest` (signaling). When unset, payload is opaque binary data.          |
+| 2–7 |        | Reserved | Must be `0`.                                                                                         |
 
 ### 2.2 Frame Construction (BuildFrame)
 
@@ -108,18 +108,18 @@ Discovery and handshake use JSON payloads inside **control frames** (TargetID=0,
 ```json
 {
   "MagicBytes": 1413567827,
-  "SenderID":   <int>,
+  "SenderID":   "<int>",
   "Type":       "<string>",
   "Status":     "REQ" | "OK" | "REJECT"
 }
 ```
 
-| Field | Type | Description |
-|:---|:---|:---|
-| `MagicBytes` | `uint32` | Must be `0x54415553` (decimal `1413567827`). Protocol identity check. |
-| `SenderID` | `int` | The **local ID of the sender** — the ID the peer should target when sending frames back. Range: 1..0xFFFFFF. |
-| `Type` | `string` | The **Meeting Word** (e.g. `"CLIPBOARD"`, `"FILE"`, `"main"`). Case-insensitive matching. Required for `REQ`, echoed back in `OK`. |
-| `Status` | `string` | `"REQ"` = initiate, `"OK"` = accept, `"REJECT"` = deny. |
+| Field        | Type     | Description                                                                                                                        |
+|:-------------|:---------|:-----------------------------------------------------------------------------------------------------------------------------------|
+| `MagicBytes` | `uint32` | Must be `0x54415553` (decimal `1413567827`). Protocol identity check.                                                              |
+| `SenderID`   | `int`    | The **local ID of the sender** — the ID the peer should target when sending frames back. Range: 1..0xFFFFFF.                       |
+| `Type`       | `string` | The **Meeting Word** (e.g. `"CLIPBOARD"`, `"FILE"`, `"main"`). Case-insensitive matching. Required for `REQ`, echoed back in `OK`. |
+| `Status`     | `string` | `"REQ"` = initiate, `"OK"` = accept, `"REJECT"` = deny.                                                                            |
 
 ### 3.1 Validation Rules
 
@@ -179,12 +179,12 @@ A `TransferRequest` is valid when:
 
 Manages the physical TCP connection. One instance per medium (singleton).
 
-| Method | Signature | Description |
-|:---|:---|:---|
-| `Connect` | `Task Connect(string? targetId)` | `targetId` = IP → client mode (connect to peer). `null`/`""` → server mode (listen for one client). |
-| `SendRaw` | `Task SendRaw(byte[] data)` | Send a complete TPack frame (header + payload). Thread-safe via internal send lock. |
-| `IsConnected` | `bool IsConnected()` | Connection status. |
-| `OnDataReceived` | `event EventHandler<byte[]>` | Fired for unhandled control frames only (handled frames go through `ConnectionContext.Dispatch`). |
+| Method           | Signature                        | Description                                                                                         |
+|:-----------------|:---------------------------------|:----------------------------------------------------------------------------------------------------|
+| `Connect`        | `Task Connect(string? targetId)` | `targetId` = IP → client mode (connect to peer). `null`/`""` → server mode (listen for one client). |
+| `SendRaw`        | `Task SendRaw(byte[] data)`      | Send a complete TPack frame (header + payload). Thread-safe via internal send lock.                 |
+| `IsConnected`    | `bool IsConnected()`             | Connection status.                                                                                  |
+| `OnDataReceived` | `event EventHandler<byte[]>`     | Fired for unhandled control frames only (handled frames go through `ConnectionContext.Dispatch`).   |
 
 #### Transport Behavior
 
@@ -198,29 +198,29 @@ Manages the physical TCP connection. One instance per medium (singleton).
 
 Framing, parsing, and handshake — the "how" of data flow.
 
-| Method | Signature | Description |
-|:---|:---|:---|
-| `GetHeaderSize` | `int GetHeaderSize()` | Returns `8` (TPack header size). |
-| `GetPayloadLength` | `int GetPayloadLength(byte[] header)` | Reads LE uint32 from bytes 0–3 of the header. |
-| `IsControlFrame` | `bool IsControlFrame(int targetId, byte flags)` | Returns `true` when `targetId == 0`. |
-| `BuildFrame` | `byte[] BuildFrame(int targetId, byte[] payload, byte flags)` | Constructs header + payload. |
-| `ParseFrame` | `(int, byte[], byte) ParseFrame(byte[] rawPacket)` | Returns `(targetId, payload, flags)`. |
-| `SendHandshakeAsync` | `Task<TransferRequest?> SendHandshakeAsync(...)` | Builds and sends a signaling frame, then awaits a response payload and parses it. |
+| Method               | Signature                                                     | Description                                                                       |
+|:---------------------|:--------------------------------------------------------------|:----------------------------------------------------------------------------------|
+| `GetHeaderSize`      | `int GetHeaderSize()`                                         | Returns `8` (TPack header size).                                                  |
+| `GetPayloadLength`   | `int GetPayloadLength(byte[] header)`                         | Reads LE uint32 from bytes 0–3 of the header.                                     |
+| `IsControlFrame`     | `bool IsControlFrame(int targetId, byte flags)`               | Returns `true` when `targetId == 0`.                                              |
+| `BuildFrame`         | `byte[] BuildFrame(int targetId, byte[] payload, byte flags)` | Constructs header + payload.                                                      |
+| `ParseFrame`         | `(int, byte[], byte) ParseFrame(byte[] rawPacket)`            | Returns `(targetId, payload, flags)`.                                             |
+| `SendHandshakeAsync` | `Task<TransferRequest?> SendHandshakeAsync(...)`              | Builds and sends a signaling frame, then awaits a response payload and parses it. |
 
 ### 5.3 IConnectionManager
 
 The public API consumed by applications.
 
-| Method | Signature | Description |
-|:---|:---|:---|
-| `Initialize` | `void Initialize(ITransport transport)` | Binds to a transport. Called once. |
-| `ConnectTransport` | `Task ConnectTransport(string? targetId)` | Delegates to `ConnectionContext.InitializeTransports`. |
-| `IsConnected` | `bool IsConnected()` | Transport status. |
-| `Connect` | `Task<Stream> Connect(string word)` | Symmetric connect — both sides call this with the same word. Returns a duplex `Stream`. |
-| `SendStreamData` | `void SendStreamData(int localId, byte[] buffer, int offset, int count)` | Sends data over an existing stream. Throws `InvalidOperationException` if no peer route exists. |
-| `SendStreamDataAsync` | `Task SendStreamDataAsync(...)` | Async version of `SendStreamData`. |
-| `CompleteStream` | `void CompleteStream(int localId)` | Sends FIN and releases the local ID. |
-| `ErrorOccurred` | `event EventHandler<Exception>` | Error notifications. |
+| Method                | Signature                                                                | Description                                                                                     |
+|:----------------------|:-------------------------------------------------------------------------|:------------------------------------------------------------------------------------------------|
+| `Initialize`          | `void Initialize(ITransport transport)`                                  | Binds to a transport. Called once.                                                              |
+| `ConnectTransport`    | `Task ConnectTransport(string? targetId)`                                | Delegates to `ConnectionContext.InitializeTransports`.                                          |
+| `IsConnected`         | `bool IsConnected()`                                                     | Transport status.                                                                               |
+| `Connect`             | `Task<Stream> Connect(string word)`                                      | Symmetric connect — both sides call this with the same word. Returns a duplex `Stream`.         |
+| `SendStreamData`      | `void SendStreamData(int localId, byte[] buffer, int offset, int count)` | Sends data over an existing stream. Throws `InvalidOperationException` if no peer route exists. |
+| `SendStreamDataAsync` | `Task SendStreamDataAsync(...)`                                          | Async version of `SendStreamData`.                                                              |
+| `CompleteStream`      | `void CompleteStream(int localId)`                                       | Sends FIN and releases the local ID.                                                            |
+| `ErrorOccurred`       | `event EventHandler<Exception>`                                          | Error notifications.                                                                            |
 
 ### 5.4 ISecureChannel (Not Yet Integrated)
 
@@ -237,14 +237,14 @@ Defined for future AES-GCM payload encryption. Currently implemented (`SecureCha
 
 ### 6.1 Internal State
 
-| Structure | Type | Key → Value | Purpose |
-|:---|:---|:---|:---|
-| `_routingMap` | `ConcurrentDictionary<int, Action<byte[], byte>>` | localId → handler | Incoming frame dispatch. Handler receives `(payload, flags)`. |
-| `_targetMap` | `ConcurrentDictionary<int, int>` | localId → peerId | Outgoing: when writing via `localId`, the TPack header uses `peerId` as TargetID. |
-| `_serviceRegistry` | `ConcurrentDictionary<string, Action<int,int,Stream>>` | word → callback | Registered listeners for Meeting Words. Case-insensitive. |
+| Structure                 | Type                                                    | Key → Value                  | Purpose                                                                                        |
+|:--------------------------|:--------------------------------------------------------|:-----------------------------|:-----------------------------------------------------------------------------------------------|
+| `_routingMap`             | `ConcurrentDictionary<int, Action<byte[], byte>>`       | localId → handler            | Incoming frame dispatch. Handler receives `(payload, flags)`.                                  |
+| `_targetMap`              | `ConcurrentDictionary<int, int>`                        | localId → peerId             | Outgoing: when writing via `localId`, the TPack header uses `peerId` as TargetID.              |
+| `_serviceRegistry`        | `ConcurrentDictionary<string, Action<int,int,Stream>>`  | word → callback              | Registered listeners for Meeting Words. Case-insensitive.                                      |
 | `_pendingDiscoveryByWord` | `ConcurrentDictionary<string, ConcurrentQueue<byte[]>>` | word → queue of REQ payloads | Buffers REQ frames that arrive before the service is registered. Drained on `RegisterService`. |
-| `_releasedIds` | `ConcurrentDictionary<int, byte>` | id → 0 | Pool of IDs available for reuse (set semantics, idempotent add). |
-| `_nextCorrelationId` | `int` (atomic) | — | Monotonically incrementing ID counter. Starts at 1. |
+| `_releasedIds`            | `ConcurrentDictionary<int, byte>`                       | id → 0                       | Pool of IDs available for reuse (set semantics, idempotent add).                               |
+| `_nextCorrelationId`      | `int` (atomic)                                          | —                            | Monotonically incrementing ID counter. Starts at 1.                                            |
 
 ### 6.2 ID Management
 
@@ -278,7 +278,7 @@ Dispatch(targetId, payload, flags):
 4. Return true.
 
 **DispatchDiscoveryRequest(payload, flags):**
-1. Require `flags & CONTROL`. Otherwise → return false.
+1. Require `flags & CONTROL`. Otherwise, → return false.
 2. Parse JSON → `TransferRequest`. Validate `MagicBytes`, `Status == "REQ"`.
 3. Look up `Type` (word) in `_serviceRegistry`.
 4. **If not found**: queue the raw payload in `_pendingDiscoveryByWord[word]` (max 64 per word). Return true.
@@ -288,7 +288,7 @@ Dispatch(targetId, payload, flags):
 1. `localId = ReserveId()`
 2. `_targetMap[localId] = request.SenderID`
 3. Create `BackBufferedStream`, register an incoming-channel handler in `_routingMap[localId]`.
-4. Schedule `callback(localId, peerSenderId, stream)` on `Task.Run` (so it doesn't block the receive loop).
+4. Schedule `callback(localId, peerSenderId, stream)` on `Task.Run` (so it doesn't block the reception loop).
 
 ### 6.4 Pending Discovery Queue
 
@@ -338,9 +338,9 @@ When the peer's REQ arrives at TargetID=0:
 
 When **both** sides call `Connect(word)` at the same time, each side ends up with **two candidate streams**:
 
-| Path | Created by | Stream reads from | Stream writes to |
-|:---|:---|:---|:---|
-| **Own path** | Received OK response to our REQ | Our outgoing `BackBufferedStream` (localId from `CreateConnectAttempt`) | `_targetMap[ourLocalId]` = peer's incoming localId |
+| Path          | Created by                                | Stream reads from                                                             | Stream writes to                                        |
+|:--------------|:------------------------------------------|:------------------------------------------------------------------------------|:--------------------------------------------------------|
+| **Own path**  | Received OK response to our REQ           | Our outgoing `BackBufferedStream` (localId from `CreateConnectAttempt`)       | `_targetMap[ourLocalId]` = peer's incoming localId      |
 | **Peer path** | Peer's REQ triggered our service callback | Our incoming `BackBufferedStream` (localId from `CompleteDiscoveryHandshake`) | `_targetMap[incomingLocalId]` = peer's outgoing localId |
 
 **Critical constraint**: For data to flow correctly, one side must use the own path and the other must use the peer path. If both pick the same path, data is written to a `BackBufferedStream` that nobody reads.
@@ -518,16 +518,16 @@ Peer A (TCP Client)                          Peer B (TCP Server)
 
 ## 11. Thread Safety & Concurrency Model
 
-| Resource | Mechanism |
-|:---|:---|
-| `_routingMap`, `_targetMap`, `_serviceRegistry` | `ConcurrentDictionary` — lock-free reads, fine-grained locking on writes. |
-| `_nextCorrelationId` | `Interlocked.Increment` — atomic. |
-| `_releasedIds` | `ConcurrentDictionary<int,byte>` — set semantics, idempotent add. |
-| TCP send | `SemaphoreSlim(1,1)` in `SocketTransport` — serializes frame writes. |
-| Receive loop | Single background `Task` reads frames sequentially. |
-| Service callbacks | Dispatched on `Task.Run` to avoid blocking the receive loop. |
-| `BackBufferedStream` | `Channel<byte[]>` (unbounded) — thread-safe producer/consumer. |
-| `DuplexStream` | Read and write are independent — reads come from `BackBufferedStream`, writes go through `SendStreamData`. No shared mutable state between the two directions. |
+| Resource                                        | Mechanism                                                                                                                                                      |
+|:------------------------------------------------|:---------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `_routingMap`, `_targetMap`, `_serviceRegistry` | `ConcurrentDictionary` — lock-free reads, fine-grained locking on writes.                                                                                      |
+| `_nextCorrelationId`                            | `Interlocked.Increment` — atomic.                                                                                                                              |
+| `_releasedIds`                                  | `ConcurrentDictionary<int,byte>` — set semantics, idempotent add.                                                                                              |
+| TCP send                                        | `SemaphoreSlim(1,1)` in `SocketTransport` — serializes frame writes.                                                                                           |
+| Receive loop                                    | Single background `Task` reads frames sequentially.                                                                                                            |
+| Service callbacks                               | Dispatched on `Task.Run` to avoid blocking the receive loop.                                                                                                   |
+| `BackBufferedStream`                            | `Channel<byte[]>` (unbounded) — thread-safe producer/consumer.                                                                                                 |
+| `DuplexStream`                                  | Read and write are independent — reads come from `BackBufferedStream`, writes go through `SendStreamData`. No shared mutable state between the two directions. |
 
 ---
 
@@ -564,7 +564,7 @@ The Java implementation must be **wire-compatible** with the C# side. This means
 - Singleton pattern (Java static instance vs C# static readonly).
 - Async model (Java `CompletableFuture`/threads vs C# `Task`/`async-await`).
 - Channel implementation (Java `BlockingQueue` or `LinkedTransferQueue` vs C# `Channel<T>`).
-- Transport discovery (Android may use Bluetooth in addition to WiFi/TCP).
+- Transport discovery (Android may use Bluetooth in addition to Wi-Fi/TCP).
 
 ---
 

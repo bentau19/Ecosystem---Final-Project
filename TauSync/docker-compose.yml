@@ -1,0 +1,10 @@
+services:
+  tau-sync-dll:
+    build:
+      context: ./Tausync_Windows
+      dockerfile: Dockerfile
+    container_name: tausync
+    image: dll:latest
+    restart: no
+    volumes:
+      - ./windows/tausync_py/dll:/output
