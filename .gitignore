@@ -45,3 +45,6 @@ local.properties
 .DS_Store
 Thumbs.db
 desktop.ini
+.ai
+.claude
+graphify-out

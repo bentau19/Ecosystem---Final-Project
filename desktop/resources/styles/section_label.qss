@@ -1,0 +1,9 @@
+#SectionLabel {
+    color: {{MUTED}};
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    background: transparent;
+    padding: 0 12px;
+    margin-top: 8px;
+}

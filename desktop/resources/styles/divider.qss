@@ -1,0 +1,4 @@
+Divider {
+    background: {{BORDER_DEFAULT}};
+    border: none;
+}

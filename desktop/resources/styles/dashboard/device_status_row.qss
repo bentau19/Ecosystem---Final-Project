@@ -1,0 +1,18 @@
+QWidget {
+    background: transparent;
+}
+
+
+#primaryDescription {
+    font-size: 20px;
+     font-weight: 700;
+    color: {{TEXT_PRIMARY}};
+    background: transparent;
+}
+
+#secondaryDescription {
+    font-size: 12px;
+    color: {{TEXT_SECONDARY}};
+    background: transparent;
+
+}
