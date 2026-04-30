@@ -1,0 +1,38 @@
+NavigationItem {
+    background-color: transparent;
+    border-radius: 10px;
+}
+
+NavigationItem:hover {
+    background: {{ITEM_HOVER}};
+}
+
+#textLabel[hovered="true"][isActive="false"] {
+    color: white;
+}
+
+NavigationItem[isActive="true"] {
+    background: {{ITEM_ACTIVE}};
+    border-left-width: 3px;
+    border-left-style : solid;
+    border-left-color: {{ACCENT_PRIMARY}};
+    border-top-left-radius: 12px;
+    border-bottom-left-radius:  12px;
+}
+
+ #textLabel[isActive="true"] {
+    color: {{ACCENT_PRIMARY}};
+    font-weight: 600;
+}
+
+#textLabel {
+    background: transparent;
+    font-weight: 600;
+    font-size: 18px;
+    color: {{TEXT_SECONDARY}};
+}
+
+#iconLabel {
+    background: transparent;
+    font-size: 18px;
+}

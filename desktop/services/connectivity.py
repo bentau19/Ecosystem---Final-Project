@@ -4,38 +4,13 @@ Device connectivity service.
 Manages the TauSync TCP connection lifecycle on a background thread,
 emitting Qt signals when a device connects or disconnects.
 """
-import functools
 import threading
 from typing import Callable
 
 from PySide6.QtCore import QObject, Signal
 from tausync_py import TauSync
 
-
-def threaded(func: Callable) -> Callable[..., threading.Thread]:
-    """Decorator that runs a bound method on a new daemon :class:`threading.Thread`.
-
-    The spawned thread is appended to ``self._threads`` so it can be joined
-    during cleanup. The first positional argument of the decorated method must
-    be the instance (``self``) and must expose a ``_threads: list`` attribute.
-
-    Args:
-        func: The bound method to wrap.
-
-    Returns:
-        A wrapper that starts the method on a background thread and returns
-        the :class:`threading.Thread` object to the caller.
-    """
-
-    @functools.wraps(func)
-    def run_as_thread(*args, **kwargs) -> threading.Thread:
-        self = args[0]
-        thread = threading.Thread(target=func, args=args, kwargs=kwargs, daemon=True)
-        self._threads.append(thread)
-        thread.start()
-        return thread
-
-    return run_as_thread
+from utils.decorators import threaded
 
 
 class ConnectivityService(QObject):
@@ -115,10 +90,8 @@ class ConnectivityService(QObject):
         """
         try:
             self._tau.listen()
-            print("disposed---------------")
             self.device_connected.emit()
         except Exception as exc:
-            print("disposed---------------")
             self.connection_error.emit(str(exc))
 
     def disconnect_device(self) -> None:
@@ -156,4 +129,4 @@ class ConnectivityService(QObject):
         # print("happened")
         # self._tau.connect_to("192.168.68.1")
         # self._tau.connect_to(ip)
-        self.device_connected.emit()
+        # self.device_connected.emit()

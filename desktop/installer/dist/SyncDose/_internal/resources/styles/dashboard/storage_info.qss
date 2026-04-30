@@ -1,0 +1,12 @@
+#storageValue {
+    color: {{TEXT_PRIMARY}};
+    font-size: 16px;
+    font-weight: 700;
+    background: transparent;
+}
+
+#storageSubLabel {
+    color: {{TEXT_SECONDARY}};
+    font-size: 11px;
+    background: transparent;
+}

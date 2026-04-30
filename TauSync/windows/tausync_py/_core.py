@@ -574,7 +574,7 @@ class TauSync:
         self._disposed = False
 
 
-    def GetPeerWaitingWords(self) -> list[str]:
+    def get_peer_waiting_words(self) -> list[str]:
         """Get a snapshot of the peer's pending discovery words.
 
         These are the words that the peer has fired REQ frames for but

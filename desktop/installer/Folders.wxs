@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Folders.wxs — SyncDose Installer (WiX v7)
+    ==========================================
+    Defines the directory structure on the target machine:
+      C:\Program Files\SyncDose\       ← app installs here
+      %DESKTOP%\                        ← desktop shortcut
+      %STARTMENU%\SyncDose\            ← start menu folder
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+    <Fragment>
+
+        <!-- C:\Program Files\SyncDose\ -->
+        <StandardDirectory Id="ProgramFilesFolder">
+            <Directory Id="INSTALLFOLDER" Name="SyncDose">
+                <Directory Id="FILEHANDLERFOLDER" Name="FileHandler"/>
+            </Directory>
+        </StandardDirectory>
+
+        <!-- Desktop (for shortcut) -->
+        <StandardDirectory Id="DesktopFolder"/>
+
+        <!-- Start Menu > SyncDose -->
+        <StandardDirectory Id="ProgramMenuFolder">
+            <Directory Id="SyncDoseStartMenuFolder" Name="SyncDose"/>
+        </StandardDirectory>
+
+    </Fragment>
+</Wix>

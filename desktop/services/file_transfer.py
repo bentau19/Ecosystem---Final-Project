@@ -19,7 +19,8 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from enums.FileTransferChannels import FileTransferChannels
-from services.connectivity import ConnectivityService, threaded
+from services.connectivity import ConnectivityService
+from utils.decorators import threaded
 
 
 # Meeting-words agreed between PC and Android.  Both sides must use the same

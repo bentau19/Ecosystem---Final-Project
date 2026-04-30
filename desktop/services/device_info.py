@@ -14,8 +14,9 @@ from tausync_py import TauSync
 from entities.device_info import DeviceEntity
 from enums.device_info_channels import DeviceInfoChannels
 from repositories.device import DeviceRepository
-from services.connectivity import ConnectivityService, threaded
+from services.connectivity import ConnectivityService
 from utils import network
+from utils.decorators import threaded
 
 
 class DeviceInfoService(QObject):

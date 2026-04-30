@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Package.wxs — SyncDose Installer (WiX v7)
+    ==========================================
+    Main installer definition: product metadata, UI, upgrade policy, features.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+    <Package
+            Name="SyncDose"
+            Manufacturer="Your Company"
+            Version="1.0.0"
+            UpgradeCode="6BE420ED-58EB-441F-9F94-005C8C74791E"
+            Scope="perMachine">
+
+        <MediaTemplate EmbedCab="yes"/>
+
+        <!--
+            Built-in WiX installer UI.
+            WixUI_InstallDir shows: Welcome → License → InstallDir picker → Install → Finish
+            Change to WixUI_Minimal if you want: Welcome → Install → Finish (no dir picker)
+        -->
+        <ui:WixUI
+                Id="WixUI_InstallDir"
+                InstallDirectory="INSTALLFOLDER"/>
+
+        <!-- Optional: show a license agreement screen -->
+        <!-- <WixVariable Id="WixUILicenseRtf" Value="license.rtf" /> -->
+
+        <!--
+            MajorUpgrade: handles version upgrades cleanly.
+            - Removes old SyncDose before installing new one.
+            - Blocks downgrade with an error message.
+        -->
+        <MajorUpgrade
+                DowngradeErrorMessage="A newer version of SyncDose is already installed."/>
+
+        <!--
+            Feature: defines what gets installed.
+            SyncDose has one feature — the full app.
+        -->
+        <Feature Id="MainFeature" Title="SyncDose" Level="1">
+            <ComponentGroupRef Id="FileHandlerFiles"/>
+            <ComponentGroupRef Id="SyncDoseAppFiles"/>
+            <ComponentGroupRef Id="SyncDoseShortcuts"/>
+            <ComponentGroupRef Id="SyncDoseRegistry"/>
+        </Feature>
+
+    </Package>
+</Wix>
