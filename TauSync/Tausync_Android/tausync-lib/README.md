@@ -87,6 +87,7 @@ lifecycleScope.launch(Dispatchers.IO) {
 | `connect(String word)`                 | Open a named channel (30s timeout). Blocks until paired. |
 | `connect(String word, int timeoutSec)` | Open a channel with custom timeout.                      |
 | `isConnected()`                        | Returns `true` if the transport layer is active.         |
+| `getPeerWaitingWords()`                | `List<String>` snapshot of words the peer has REQ'd that we have not paired yet. |
 | `newManager()`                         | Creates another TauSync sharing the same socket.         |
 | `dispose()`                            | Releases the underlying ConnectionManager. Idempotent.   |
 
