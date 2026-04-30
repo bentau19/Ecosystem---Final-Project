@@ -1,12 +1,16 @@
 package com.example.android.ui;
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
@@ -18,6 +22,8 @@ import com.example.android.viewmodel.MainViewModel;
 import com.example.android.viewmodel.MainViewModelFactory; // הייבוא החדש
 import com.google.zxing.integration.android.IntentIntegrator;
 import com.google.zxing.integration.android.IntentResult;
+
+import com.example.android.services.ConnectivityService;
 
 /**
  * Main Activity serves as the primary host for fragments and manages the QR scanning process.
@@ -59,7 +65,12 @@ public class MainActivity extends AppCompatActivity {
         boolean success = viewModel.handleQr(qrData);
 
         if (success) {
-            // Success: Navigate to the actions dashboard with transition animations
+            // בדיקת הרשאות נוטיפיקציה (לאנדרואיד 13+) לפני הפעלת הסרוויס
+            checkNotificationPermission();
+
+            // הפעלת הסרוויס - כאן הקסם קורה!
+            startConnectivityService();
+
             navigateToActions();
             Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
         } else {
@@ -68,16 +79,46 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
+     * Starts the Foreground Service to maintain the PC connection.
+     */
+    private void startConnectivityService() {
+        Intent serviceIntent = new Intent(this, ConnectivityService.class);
+        // אנחנו יכולים להעביר לסרוויס נתונים דרך ה-Intent אם נרצה בעתיד
+        // serviceIntent.putExtra("IP_ADDRESS", viewModel.getIp().getValue());
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(this, serviceIntent);
+        } else {
+            startService(serviceIntent);
+        }
+    }
+
+    /**
+     * Request POST_NOTIFICATIONS permission for Android 13+
+     */
+    private void checkNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
+            }
+        }
+    }
+
+    /**
      * Orchestrates the disconnection sequence.
      * Updates the repository and reverts the UI to the connection screen.
      */
     public void disconnect() {
+        // עצירת הסרוויס כשמתנתקים
+        stopService(new Intent(this, ConnectivityService.class));
+
         // Switch back to the connection setup screen
         navigateToConnect();
 
         // Update the state (this will trigger observers across the app)
         viewModel.disconnect();
-
         Toast.makeText(this, "Disconnected", Toast.LENGTH_SHORT).show();
     }
 

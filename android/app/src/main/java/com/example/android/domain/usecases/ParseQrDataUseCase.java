@@ -10,6 +10,7 @@ public class ParseQrDataUseCase {
         // DeviceSerializer serializer = new DeviceSerializer();
         // RemoteDeviceInfo remote = serializer.deserializeRemoteInfo(qrData);
 
+        if (qr == null || qr.isEmpty()) return null;
         return new RemoteDeviceInfo("Ben-PC", "192.168.1.15", ConnectionType.WIFI);
 
 
