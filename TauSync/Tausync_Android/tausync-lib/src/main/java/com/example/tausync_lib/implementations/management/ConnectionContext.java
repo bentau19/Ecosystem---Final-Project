@@ -8,7 +8,6 @@ import com.google.gson.Gson;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
@@ -169,16 +168,32 @@ public final class ConnectionContext {
             throw new IllegalArgumentException("Word cannot be null or empty.");
         }
         if (callback == null) throw new IllegalArgumentException("callback must not be null");
-        String key = word.trim().toUpperCase(Locale.ROOT);
+        String key = word.trim();
         serviceRegistry.put(key, callback);
         drainPendingDiscovery(key);
     }
 
     public void unregisterService(String word) {
         if (word == null || word.trim().isEmpty()) return;
-        String key = word.trim().toUpperCase(Locale.ROOT);
+        String key = word.trim();
         serviceRegistry.remove(key);
         pendingDiscoveryByWord.remove(key);
+    }
+
+    /**
+     * Returns a snapshot of words the peer is waiting on but we have not paired
+     * with locally. Mirrors C# {@code ConnectionContext.GetPeerWaitingWords}.
+     * Empty queues (drained but never removed by {@link #drainPendingDiscovery})
+     * are filtered out.
+     */
+    public java.util.List<String> getPeerWaitingWords() {
+        java.util.List<String> result = new java.util.ArrayList<>();
+        for (java.util.Map.Entry<String, ConcurrentLinkedQueue<byte[]>> entry : pendingDiscoveryByWord.entrySet()) {
+            if (!entry.getValue().isEmpty()) {
+                result.add(entry.getKey());
+            }
+        }
+        return java.util.Collections.unmodifiableList(result);
     }
 
     public boolean hasHandlerFor(int id) {
@@ -226,7 +241,7 @@ public final class ConnectionContext {
         if (request.getStatus() == null) return false;
         if (!request.getStatus().trim().equalsIgnoreCase("REQ")) return false;
 
-        String word = request.getType() != null ? request.getType().trim().toUpperCase(Locale.ROOT) : null;
+        String word = request.getType() != null ? request.getType().trim() : null;
         if (word == null || word.isEmpty()) return false;
 
         TriConsumer<Integer, Integer, InputStream> callback = serviceRegistry.get(word);
