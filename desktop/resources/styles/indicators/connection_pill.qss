@@ -1,0 +1,15 @@
+#label {
+    color: {{GREEN}};
+    font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+    border: none;
+}
+
+ConnectionPill {
+    background-color: rgba(0,230,118,0.08);
+    border-width: 1px;
+    border-style: solid;
+    border-color: rgba(0,230,118,0.22);
+    border-radius: 10px;
+}

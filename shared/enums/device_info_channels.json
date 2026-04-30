@@ -1,0 +1,57 @@
+{
+  "name": "DeviceInfoChannels",
+  "description": "JSON key names for the DeviceInfo payload exchanged over the DEVICE_INFO channel. Both PC and Android must use the exact same key strings — define them here once and generate both sides.",
+  "type": "string",
+  "members": [
+    {
+      "name": "ID",
+      "value": "id",
+      "description": "Unique device identifier."
+    },
+    {
+      "name": "NAME",
+      "value": "name",
+      "description": "Human-readable device name, e.g. \"Pixel 8 Pro\"."
+    },
+    {
+      "name": "OS",
+      "value": "os",
+      "description": "OS version string, e.g. \"Android 14\"."
+    },
+    {
+      "name": "TAG",
+      "value": "tag",
+      "description": "User-assigned label, e.g. \"Home\"."
+    },
+    {
+      "name": "LAST_SEEN",
+      "value": "last_seen",
+      "description": "Human-readable recency string, e.g. \"now\", \"today\", \"3 days ago\"."
+    },
+    {
+      "name": "BATTERY_LEVEL",
+      "value": "battery_level",
+      "description": "Battery level as an integer percentage (0–100)."
+    },
+    {
+      "name": "BATTERY_CHARGING",
+      "value": "battery_charging",
+      "description": "Whether the device is currently charging."
+    },
+    {
+      "name": "STORAGE_USED",
+      "value": "storage_used",
+      "description": "Used storage in bytes."
+    },
+    {
+      "name": "STORAGE_TOTAL",
+      "value": "storage_total",
+      "description": "Total storage capacity in bytes."
+    },
+    {
+      "name": "IP",
+      "value": "ip",
+      "description": "Last known LAN IP address of the device, used to reconnect."
+    }
+  ]
+}
