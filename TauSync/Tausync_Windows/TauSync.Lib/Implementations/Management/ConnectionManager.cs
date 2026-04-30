@@ -18,7 +18,7 @@ namespace TauSync.Implementations.Management
         private ITransport? _wifiTransport;
         private readonly IProtocolHandler _protocolHandler;
         /// <summary>Per-word queue of incoming connections (when the other side sent REQ first).</summary>
-        private readonly ConcurrentDictionary<string, Channel<Stream>> _incomingByWord = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, Channel<Stream>> _incomingByWord = new();
         private bool _disposed;
 
         public event EventHandler<Exception>? ErrorOccurred;
@@ -324,6 +324,11 @@ namespace TauSync.Implementations.Management
                 BackStream = backStream;
                 ResponseTcs = responseTcs;
             }
+        }
+
+        public IReadOnlyList<string> GetPeerWaitingWords()
+        {
+            return ConnectionContext.Instance.GetPeerWaitingWords();
         }
 
 

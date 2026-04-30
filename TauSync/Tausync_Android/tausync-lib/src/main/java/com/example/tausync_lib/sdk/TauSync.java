@@ -129,7 +129,7 @@ public final class TauSync {
      * they are paired automatically and each gets a private
      * {@link TauSyncStream}.
      *
-     * @param word the Meeting Word (case-insensitive, e.g. "main")
+     * @param word the Meeting Word (case-sensitive, e.g. "main")
      * @return a bidirectional stream for reading and writing
      * @throws IllegalArgumentException if word is null or blank
      * @throws IllegalStateException    if not connected or disposed
@@ -190,6 +190,18 @@ public final class TauSync {
         TauSync other = new TauSync();
         other.manager = new ConnectionManager();
         return other;
+    }
+
+    /**
+     * Snapshot of words the peer is waiting on but we have not paired with
+     * locally. Mirrors C# {@code TauSync.GetPeerWaitingWords}.
+     *
+     * @return immutable list of peer-waiting words (uppercased on this side)
+     * @throws IllegalStateException if this instance is disposed
+     */
+    public java.util.List<String> getPeerWaitingWords() {
+        checkNotDisposed();
+        return manager.getPeerWaitingWords();
     }
 
     /**

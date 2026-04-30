@@ -102,6 +102,10 @@ def _ensure_clr(dll_path: Optional[str] = None) -> None:
         _clr_ready = True
 
 
+
+        
+
+
 # ---------------------------------------------------------------------------
 #  Fast Python <-> .NET byte conversions (GCHandle + memmove)
 # ---------------------------------------------------------------------------
@@ -569,6 +573,28 @@ class TauSync:
         self._manager = _ConnectionManagerCls()
         self._disposed = False
 
+
+    def GetPeerWaitingWords(self) -> list[str]:
+        """Get a snapshot of the peer's pending discovery words.
+
+        These are the words that the peer has fired REQ frames for but
+        has not yet paired with a local word.  This is useful for
+        debugging and testing to see what the peer is waiting on.
+
+        Returns:
+            A list of strings representing the peer's waiting words.
+
+        Raises:
+            RuntimeError: If the transport is not connected or this manager
+                has been disposed.
+        """
+        self._check_not_disposed()
+        # if TauSync._global_role == _ROLE_NONE:
+        #     raise RuntimeError(
+        #         "Cannot GetPeerWaitingWords() - transport is not established.  "
+        #         "Call listen() or connect_to() first."
+        #     )
+        return list(self._manager.GetPeerWaitingWords())
     # -- transport ---------------------------------------------------------
 
     def listen(self) -> None:

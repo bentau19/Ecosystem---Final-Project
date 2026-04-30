@@ -45,15 +45,13 @@ namespace TauSync.Implementations.Management
         private readonly ConcurrentDictionary<int, int> _targetMap = new();
 
         /// <summary>Meeting Word -> callback(localId, peerSenderId, stream). Invoked when REQ arrives on TargetID=0.</summary>
-        private readonly ConcurrentDictionary<string, Action<int, int, Stream>> _serviceRegistry =
-            new ConcurrentDictionary<string, Action<int, int, Stream>>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, Action<int, int, Stream>> _serviceRegistry = new();
 
         /// <summary>
         /// REQ payloads queued per word when a discovery frame arrives before <see cref="RegisterService"/> was called
         /// (e.g. client calls <c>Connect(word)</c> before the server has registered the same word). Drained when the service registers.
         /// </summary>
-        private readonly ConcurrentDictionary<string, ConcurrentQueue<byte[]>> _pendingDiscoveryByWord =
-            new ConcurrentDictionary<string, ConcurrentQueue<byte[]>>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, ConcurrentQueue<byte[]>> _pendingDiscoveryByWord = new();
 
         private const int MaxPendingDiscoveryPerWord = 64;
 
@@ -101,6 +99,21 @@ namespace TauSync.Implementations.Management
             }
             return id;
         }
+
+
+        public IReadOnlyList<string> GetPeerWaitingWords()
+        {
+            var result = new List<string>();
+            foreach (var kvp in _pendingDiscoveryByWord)
+            {
+                if (kvp.Value.Count > 0)
+                    result.Add(kvp.Key);
+            }
+            return result;
+        }
+
+
+
 
         /// <summary>
         /// Releases ID: clears routing/target maps immediately, then schedules the ID

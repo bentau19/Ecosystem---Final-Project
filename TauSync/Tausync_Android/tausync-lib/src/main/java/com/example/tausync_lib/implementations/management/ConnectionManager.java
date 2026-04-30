@@ -10,7 +10,6 @@ import com.google.gson.Gson;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -86,10 +85,9 @@ public class ConnectionManager implements IConnectionManager {
     public CompletableFuture<TauSyncStream> connect(String word) {
         validateConnectState(word);
         String wordTrimmed = word.trim();
-        String wordKey = wordTrimmed.toUpperCase(Locale.ROOT);
 
-        LinkedBlockingQueue<TauSyncStream> wordChannel = getOrCreateWordChannel(wordKey);
-        registerWordListener(wordKey, wordChannel);
+        LinkedBlockingQueue<TauSyncStream> wordChannel = getOrCreateWordChannel(wordTrimmed);
+        registerWordListener(wordTrimmed, wordChannel);
 
         ConnectionContext ctx = ConnectionContext.getInstance();
         ConnectAttempt attempt = createConnectAttempt(ctx);
@@ -354,6 +352,14 @@ public class ConnectionManager implements IConnectionManager {
         if (disposed) return;
         disposed = true;
         incomingByWord.clear();
+    }
+
+    /**
+     * Snapshot of words the peer has fired REQ for but we have not yet paired
+     * with locally. Mirrors C# {@code ConnectionManager.GetPeerWaitingWords}.
+     */
+    public java.util.List<String> getPeerWaitingWords() {
+        return ConnectionContext.getInstance().getPeerWaitingWords();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────
