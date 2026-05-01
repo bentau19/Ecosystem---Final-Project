@@ -42,6 +42,3 @@ class DeviceInfoChannels(StrEnum):
 
     # The Windows version and build.
     PC_OS = "pc_os"
-
-    # The active network interface type (e.g., Wi-Fi, Ethernet).
-    CONNECTION_TYPE = "connection_type"

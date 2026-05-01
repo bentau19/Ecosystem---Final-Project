@@ -14,8 +14,11 @@ arrays behind a clean two-class API: **`TauSync`** and **`TauSyncStream`**.
 
 ## Installation
 
-first go to
+`tausync_py` wraps a compiled .NET assembly (`TauSync.Lib.dll`). Installation is two steps:
+build the DLL, then install the Python package. The DLL is bundled as package data, so once
+built it travels with the package automatically.
 
+<<<<<<< Updated upstream
 ```
 before all if you didnt compile the dll yet open the CMD on the main folder (the Ecosystem---Final-Project) and run the next line:
 dotnet build Tausync/Tausync_Windows/TauSync.Lib/TauSync.Lib.csproj
@@ -24,27 +27,109 @@ the next step is:
 pip install -e <path to the folder>\tausync_py
 e.g.
 PS C:\Users\User\Desktop\OneDrive\CS_BA\Third_Year\final_project\Ecosystem---Final-Project\windows\tests\ben_test\file_test> py -e pip install -e ..\..\..\tausync_py 
+=======
+### Prerequisites
+>>>>>>> Stashed changes
+
+- **Docker Desktop** — the DLL is compiled inside a .NET SDK container; no local .NET installation needed
+- **Python 3.9+** with `pip`
+- `pythonnet >= 3.0.0` — installed automatically as a package dependency
+
+---
+
+### Step 1 — Build the DLL
+
+Run Docker Compose from the **`TauSync/`** root (where `docker-compose.yml` lives):
+
+```bash
+cd TauSync/
+docker compose up
+```
+
+What this does:
+
+1. Builds a `mcr.microsoft.com/dotnet/sdk:8.0` image from `Tausync_Windows/Dockerfile`
+2. Copies the `TauSync.Lib/` C# project into the container
+3. Runs `dotnet publish -c Release -o /output` inside the container
+4. The `/output` volume is mounted to `windows/tausync_py/dll/` — so the compiled files
+   land directly inside the Python package
+
+After a successful build, these files appear in `TauSync/windows/tausync_py/dll/`:
 
 ```
-docker compose up  
-```
-and then 
-
-```
-pip install -e /path/to/windows/
+TauSync/windows/tausync_py/dll/
+├── TauSync.Lib.dll        ← the .NET assembly loaded by pythonnet at runtime
+├── TauSync.Lib.deps.json  ← .NET dependency manifest
+└── TauSync.Lib.pdb        ← debug symbols (optional, safe to delete)
 ```
 
-Or, if published to PyPI:
-```
-pip install tausync-py
+> **Without Docker:** If Docker is not available, install the [.NET 8 SDK](https://dotnet.microsoft.com/download)
+> locally and run:
+> ```bash
+> cd TauSync/Tausync_Windows/TauSync.Lib/
+> dotnet publish -c Release -o ../../../windows/tausync_py/dll/
+> ```
+> The output path must resolve to `tausync_py/dll/` inside the Python package.
+
+---
+
+### Step 2 — Install the Python package
+
+Install the package from local source. Editable mode (`-e`) is recommended during development
+so changes to `_core.py` take effect without reinstalling:
+
+```bash
+# From the repo root
+pip install -e TauSync/windows/
+
+# Or from inside TauSync/windows/ directly
+cd TauSync/windows/
+pip install -e .
 ```
 
-The package auto-discovers `TauSync.Lib.dll` by walking up from its own
-directory. If the DLL is elsewhere, pass the path explicitly:
+`pyproject.toml` declares `tausync_py/dll/*` as package data, so the DLL built in Step 1 is
+bundled automatically — you do not need to copy or move it manually.
+
+---
+
+### Step 3 — Verify
+
+```python
+from tausync_py import TauSync
+
+tau = TauSync()          # loads CoreCLR and the DLL on first call
+print(tau)               # <TauSync role=none target=None>
+print(tau.is_connected)  # False
+```
+
+If the DLL is missing you will see:
+
+```
+FileNotFoundError: TauSync.Lib.dll not found. Searched for <path>/tausync_py/dll/TauSync.Lib.dll.
+Pass dll_path= explicitly to TauSync() if the DLL is elsewhere.
+```
+
+Confirm Step 1 completed and that `tausync_py/dll/TauSync.Lib.dll` exists.
+
+---
+
+### Custom DLL path
+
+If you need to point at a DLL in a non-standard location (e.g. a PyInstaller bundle):
 
 ```python
 tau = TauSync(dll_path=r"C:\path\to\TauSync.Lib.dll")
 ```
+
+---
+
+### PyPI install (when published)
+
+```bash
+pip install tausync-py
+```
+
+The PyPI package includes a pre-built DLL — Step 1 is not required.
 
 ---
 
