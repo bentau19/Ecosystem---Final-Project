@@ -36,6 +36,20 @@
         </activity>
 
         <activity
+            android:name=".testing.getpeerwaitingwords.PeerWaitingServerActivity"
+            android:exported="true"
+            android:label="PeerWaiting Server"
+            android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+        </activity>
+
+        <activity
+            android:name=".testing.getpeerwaitingwords.PeerWaitingClientActivity"
+            android:exported="true"
+            android:label="PeerWaiting Client"
+            android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+        </activity>
+
+        <activity
             android:name=".ui.MainActivity"
             android:exported="true"
             android:label="@string/app_name"

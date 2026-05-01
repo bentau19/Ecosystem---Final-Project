@@ -15,7 +15,6 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -412,36 +411,6 @@ public class IntegrationTest {
         assertEquals(64, CoreConfig.MAX_PENDING_DISCOVERY_PER_WORD);
         assertEquals(1, CoreConfig.MIN_ID);
         assertEquals(0xFFFFFF, CoreConfig.MAX_ID);
-    }
-
-    // ── Locale-safe toUpperCase (Fix 1) ──────────────────────────────
-
-    @Test
-    public void localeRoot_turkishI_uppercasesCorrectly() {
-        String word = "file_transfer";
-        String expected = "FILE_TRANSFER";
-        assertEquals(expected, word.toUpperCase(Locale.ROOT));
-
-        String turkishI = "i\u0131";
-        assertEquals("I\u0131", turkishI.toUpperCase(Locale.ROOT));
-    }
-
-    @Test
-    public void localeRoot_asciiWords_matchCaseInsensitive() {
-        String[] words = {"main", "test_msg", "CLIPBOARD", "Data_Channel_1"};
-        for (String w : words) {
-            String key = w.trim().toUpperCase(Locale.ROOT);
-            assertEquals(w.toUpperCase(Locale.ROOT), key);
-        }
-    }
-
-    @Test
-    public void localeRoot_mixedCase_normalizedConsistently() {
-        String a = "MyWord".toUpperCase(Locale.ROOT);
-        String b = "myword".toUpperCase(Locale.ROOT);
-        String c = "MYWORD".toUpperCase(Locale.ROOT);
-        assertEquals(a, b);
-        assertEquals(b, c);
     }
 
     // ── SocketTransport disconnect join (Fix 3) ──────────────────────

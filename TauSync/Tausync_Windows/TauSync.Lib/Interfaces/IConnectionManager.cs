@@ -29,7 +29,7 @@ namespace TauSync.Interfaces
         /// Connects on a Meeting Word. Both sides call Connect with the same word; when two peers have called
         /// Connect with the same word they are paired and each gets a duplex stream to the other. No Listen or Accept.
         /// </summary>
-        /// <param name="word">Meeting Word (e.g. "CLIPBOARD"). Case-insensitive.</param>
+        /// <param name="word">Meeting Word (e.g. "CLIPBOARD"). Case-sensitive.</param>
         /// <returns>A duplex stream to the peer that connected on the same word.</returns>
         Task<Stream> Connect(string word);
 
