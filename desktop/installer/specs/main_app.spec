@@ -26,6 +26,7 @@ exe = EXE(
     upx=True,
     console=True,
     disable_windowed_traceback=False,
+    icon='../../resources/icons/logo.ico',
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,

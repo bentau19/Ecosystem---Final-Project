@@ -1,0 +1,62 @@
+/* ── File-handler notification dialog ─────────────────────────────────────────
+   Static tokens resolved via HandlerDialogColors.
+   Dynamic placeholders — {{ACCENT}}, {{STRIP_BG}}, {{ACCENT_HOVER}},
+   {{ACCENT_PRESSED}} — are injected at runtime in _BaseHandlerDialog._setup_style()
+   because they vary per dialog variant and cannot live in a static enum.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+QDialog#HandlerDialog {
+    background-color: {{BACKGROUND}};
+    border: 1px solid {{BORDER}};
+    border-radius: 12px;
+}
+
+/* Icon strip — full-width accent band at the top of the dialog */
+QLabel#IconStrip {
+    background-color: {{STRIP_BG}};
+    color: {{ACCENT}};
+    font-size: 28px;
+    border-bottom: 1px solid {{BORDER}};
+    /* 11px = 12px dialog radius minus 1px border inset, keeps strip flush */
+    border-top-left-radius: 11px;
+    border-top-right-radius: 11px;
+}
+
+/* Heading */
+QLabel#TitleLabel {
+    color: {{TEXT_PRIMARY}};
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    background: transparent;
+}
+
+/* Body copy */
+QLabel#MessageLabel {
+    color: {{TEXT_SECONDARY}};
+    font-size: 13px;
+    background: transparent;
+}
+
+/* Dismiss button */
+QPushButton#DismissButton {
+    background-color: {{ACCENT}};
+    color: {{BUTTON_TEXT}};
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    outline: none;
+}
+
+QPushButton#DismissButton:hover {
+    background-color: {{ACCENT_HOVER}};
+}
+
+QPushButton#DismissButton:pressed {
+    background-color: {{ACCENT_PRESSED}};
+}
+
+QPushButton#DismissButton:focus {
+    border: 2px solid {{ACCENT_HOVER}};
+}

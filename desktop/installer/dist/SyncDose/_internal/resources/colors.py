@@ -166,3 +166,18 @@ class LogoColors(ColorsEnum):
 
     GRADIENT_START = Palette.SILVER_300  # Start color for the gradient
     GRADIENT_END = Palette.SILVER_500  # End color for the gradient
+
+
+class HandlerDialogColors(ColorsEnum):
+    """Component-scoped color tokens for file-handler error dialogs.
+
+    Accent-derived tokens (strip background tint, button hover/pressed states)
+    are dynamic per dialog variant and are injected separately in the widget's
+    ``_setup_style`` method — they do not live here.
+    """
+
+    BACKGROUND     = Palette.DARK_900   # Dialog body background surface
+    BORDER         = Palette.GRAY_700   # Dialog border + icon-strip separator
+    TEXT_PRIMARY   = Palette.SLATE_100  # Bold heading text
+    TEXT_SECONDARY = Palette.SLATE_500  # Explanatory body text
+    BUTTON_TEXT    = Palette.DARK_900   # Foreground on the dismiss button
