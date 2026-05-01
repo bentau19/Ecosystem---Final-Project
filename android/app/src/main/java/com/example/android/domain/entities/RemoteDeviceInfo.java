@@ -1,6 +1,7 @@
 package com.example.android.domain.entities;
 
 import com.example.android.domain.enums.ConnectionType;
+import com.google.gson.annotations.SerializedName;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -11,6 +12,7 @@ import java.util.Map;
  */
 public class RemoteDeviceInfo {
     private final String pcName;
+    @SerializedName("ip")
     private final String ipAddress;
     private final ConnectionType connectionType;
 

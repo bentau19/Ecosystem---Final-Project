@@ -52,6 +52,21 @@
       "name": "IP",
       "value": "ip",
       "description": "Last known LAN IP address of the device, used to reconnect."
-    }
+    },
+    {
+  "name": "PC_NAME",
+  "value": "pc_name",
+  "description": "The human-readable name of the Windows PC."
+  },
+  {
+    "name": "PC_OS",
+    "value": "pc_os",
+    "description": "The Windows version and build."
+  },
+  {
+    "name": "CONNECTION_TYPE",
+    "value": "connection_type",
+    "description": "The active network interface type (e.g., Wi-Fi, Ethernet)."
+  }
   ]
 }

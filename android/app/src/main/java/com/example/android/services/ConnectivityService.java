@@ -8,34 +8,73 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
+import android.util.Log;
+
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 import com.example.android.R;
+import com.example.android.domain.entities.DeviceStorageStats;
+import com.example.android.enums.DeviceInfoChannels;
+import com.example.android.data.datasource.SystemDataSource;
+import com.example.tausync_lib.sdk.TauSync;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class ConnectivityService extends Service {
     private static final String CHANNEL_ID = "ConnectivityServiceChannel";
+    private TauSync tauSync;
+    private SystemDataSource systemDataSource;
+    private final ExecutorService backgroundExecutor = Executors.newCachedThreadPool();
 
     @Override
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
+        systemDataSource = new SystemDataSource(this);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        String appName = getString(R.string.app_name);
-        // יצירת הנוטיפיקציה שהמשתמש יראה למעלה
-        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle(appName + " is running")
-                .setContentText("Searching for PC connection...")
-                .setSmallIcon(R.drawable.ic_sync) // וודאי שיש לך אייקון כזה
-                .build();
+        // 1. חילוץ ה-IP שנשלח מה-QR
+        String targetIp = intent.getStringExtra("TARGET_IP");
 
-        // הפעלת הסרוויס כ-Foreground (זה מה שמונע מהמערכת לסגור אותו)
+        // 2. הצגת נוטיפיקציה ראשונית
+        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("SyncApp")
+                .setContentText("Connecting to " + targetIp + "...")
+                .setSmallIcon(R.drawable.ic_sync)
+                .build();
         startForeground(1, notification);
 
-        // כאן בהמשך יבוא הקוד של ה-Socket
+        // 3. ביצוע החיבור ב-Thread נפרד
+        if (targetIp != null) {
+            backgroundExecutor.execute(() -> {
+                try {
+                    tauSync = new TauSync();
+                    tauSync.connectTo(targetIp); // connect to PC
+
+                    // update ui- notification that connection is successful
+                    updateNotification("Connected to PC at " + targetIp);
+
+                    // 4. כאן נתחיל להריץ את שליחת הנתונים
+//                    startDataStreaming();
+
+                } catch (Exception e) {
+                    updateNotification("Connection failed: " + e.getMessage());
+                }
+            });
+        }
+
         return START_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        // סגירת החיבור וה-Threads כשמכבים את הסרוויס
+        if (tauSync != null) tauSync.dispose();
+        backgroundExecutor.shutdownNow();
     }
 
     private void createNotificationChannel() {

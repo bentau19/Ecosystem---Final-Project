@@ -36,3 +36,12 @@ class DeviceInfoChannels(StrEnum):
 
     # Last known LAN IP address of the device, used to reconnect.
     IP = "ip"
+
+    # The human-readable name of the Windows PC.
+    PC_NAME = "pc_name"
+
+    # The Windows version and build.
+    PC_OS = "pc_os"
+
+    # The active network interface type (e.g., Wi-Fi, Ethernet).
+    CONNECTION_TYPE = "connection_type"

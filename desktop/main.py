@@ -19,6 +19,10 @@ if __name__ == "__main__":
     # before QApplication exists causes Qt to emit the
     # "startTimer: event dispatcher already destroyed" warning.
     from windows.main_window import MainWindow
+    from utils.services_manager import services_manager
+
+
+    services_manager.connectivity_service._listen()
 
     main_window = MainWindow()
     main_window.show()
