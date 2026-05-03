@@ -1,6 +1,6 @@
-from datetime import datetime, date
-from entities.device_info import DeviceEntity
-from serializers.interfaces.base import ISerializer
+from datetime import datetime
+from domain.entities.device_info import DeviceEntity
+from serializers.serializer import ISerializer
 
 
 class DeviceSerializer(ISerializer[DeviceEntity | None, dict]):

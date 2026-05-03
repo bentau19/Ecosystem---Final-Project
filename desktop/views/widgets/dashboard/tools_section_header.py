@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout
 from resources.colors import DashboardColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from utils.repository_manger import repository_manager
+from app.app_state import app_state
 from utils.styles import load_stylesheet
 from viewmodels.tool import ToolViewModel
 
@@ -28,7 +28,7 @@ class ToolsSectionHeader(QWidget):
         self._title: QLabel
         self._tag: QLabel
 
-        self._tools_view_model: ToolViewModel = ToolViewModel(repository_manager.tools_repository)
+        self._tools_view_model: ToolViewModel = ToolViewModel(app_state.tools_repository)
 
         self._setup_ui()
         self._setup_style()

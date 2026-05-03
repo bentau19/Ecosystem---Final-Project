@@ -176,8 +176,8 @@ class HandlerDialogColors(ColorsEnum):
     ``_setup_style`` method — they do not live here.
     """
 
-    BACKGROUND     = Palette.DARK_900   # Dialog body background surface
-    BORDER         = Palette.GRAY_700   # Dialog border + icon-strip separator
-    TEXT_PRIMARY   = Palette.SLATE_100  # Bold heading text
-    TEXT_SECONDARY = Palette.SLATE_500  # Explanatory body text
-    BUTTON_TEXT    = Palette.DARK_900   # Foreground on the dismiss button
+    BACKGROUND       = Palette.DARK_900   # Dialog body background surface
+    BORDER           = Palette.GRAY_700   # Dialog border
+    TEXT_PRIMARY     = Palette.SLATE_100  # Bold heading text
+    TEXT_SECONDARY   = Palette.SLATE_500  # Explanatory body text
+    BTN_GRADIENT_END = "#0891b2"          # Try Again gradient end (sky-600)

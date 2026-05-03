@@ -1,8 +1,15 @@
 /* ── File-handler notification dialog ─────────────────────────────────────────
-   Static tokens resolved via HandlerDialogColors.
-   Dynamic placeholders — {{ACCENT}}, {{STRIP_BG}}, {{ACCENT_HOVER}},
-   {{ACCENT_PRESSED}} — are injected at runtime in _BaseHandlerDialog._setup_style()
-   because they vary per dialog variant and cannot live in a static enum.
+   Static tokens resolved via HandlerDialogColors:
+     {{BACKGROUND}}       — dialog body surface
+     {{BORDER}}           — dialog border + dismiss button border
+     {{TEXT_PRIMARY}}     — heading color
+     {{TEXT_SECONDARY}}   — body text + dismiss button text
+     {{BTN_GRADIENT_END}} — Try Again gradient end (sky-600, #0891b2)
+
+   Dynamic per-dialog tokens injected by _BaseHandlerDialog._apply_style():
+     {{ACCENT}}       — solid hex accent  (icon text, gradient start)
+     {{ICON_BG}}      — icon circle bg    (rgba, ~10 % opacity)
+     {{ICON_BORDER}}  — icon circle border(rgba, ~30 % opacity)
    ─────────────────────────────────────────────────────────────────────────── */
 
 QDialog#HandlerDialog {
@@ -11,23 +18,22 @@ QDialog#HandlerDialog {
     border-radius: 12px;
 }
 
-/* Icon strip — full-width accent band at the top of the dialog */
-QLabel#IconStrip {
-    background-color: {{STRIP_BG}};
+/* Centered accent circle containing the icon character */
+QLabel#IconCircle {
+    background-color: {{ICON_BG}};
+    border: 1px solid {{ICON_BORDER}};
+    border-radius: 26px;
     color: {{ACCENT}};
-    font-size: 28px;
-    border-bottom: 1px solid {{BORDER}};
-    /* 11px = 12px dialog radius minus 1px border inset, keeps strip flush */
-    border-top-left-radius: 11px;
-    border-top-right-radius: 11px;
+    font-size: 22px;
+    font-weight: 700;
 }
 
 /* Heading */
 QLabel#TitleLabel {
     color: {{TEXT_PRIMARY}};
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 600;
-    letter-spacing: 0.3px;
+    letter-spacing: -0.01em;
     background: transparent;
 }
 
@@ -38,25 +44,55 @@ QLabel#MessageLabel {
     background: transparent;
 }
 
-/* Dismiss button */
-QPushButton#DismissButton {
-    background-color: {{ACCENT}};
-    color: {{BUTTON_TEXT}};
+/* Try Again — primary gradient CTA */
+QPushButton#TryAgainButton {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 {{ACCENT}},
+        stop:1 {{BTN_GRADIENT_END}}
+    );
+    color: #ffffff;
     border: none;
-    border-radius: 6px;
+    border-radius: 8px;
     font-size: 13px;
     font-weight: 600;
+    letter-spacing: 0.01em;
+    outline: none;
+}
+
+QPushButton#TryAgainButton:hover {
+    /* Flatten to solid accent on hover — slightly lighter than the gradient */
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 {{ACCENT}},
+        stop:1 {{ACCENT}}
+    );
+}
+
+QPushButton#TryAgainButton:pressed {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 {{BTN_GRADIENT_END}},
+        stop:1 {{BTN_GRADIENT_END}}
+    );
+}
+
+/* Dismiss — secondary neutral */
+QPushButton#DismissButton {
+    background-color: transparent;
+    color: {{TEXT_SECONDARY}};
+    border: 1px solid {{BORDER}};
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
     outline: none;
 }
 
 QPushButton#DismissButton:hover {
-    background-color: {{ACCENT_HOVER}};
+    color: {{TEXT_PRIMARY}};
+    border-color: {{ACCENT}};
 }
 
 QPushButton#DismissButton:pressed {
-    background-color: {{ACCENT_PRESSED}};
-}
-
-QPushButton#DismissButton:focus {
-    border: 2px solid {{ACCENT_HOVER}};
+    background-color: transparent;
 }

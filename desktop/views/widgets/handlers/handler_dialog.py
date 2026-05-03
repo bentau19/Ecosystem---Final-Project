@@ -19,26 +19,28 @@ _QSS_REL_PATH: Final[str] = "styles/handlers/handler-dialog.qss"
 
 
 class _BaseHandlerDialog(QDialog):
-    """Dark-themed notification dialog base for file-handler error states.
+    """Dark-themed notification dialog for file-handler error states.
 
-    Renders an accent-colored icon strip, a bold heading, an explanatory body
-    message, and a single dismiss button.  Sub-classes supply the accent color,
-    icon character, title, and message — all structural and styling logic is
-    shared here.
+    Renders a centered accent circle icon, a bold heading, an explanatory
+    body message, a primary "Try Again" button, and a neutral "Dismiss"
+    button.  Sub-classes supply the accent color, icon character, title,
+    and message.
+
+    Clicking **Try Again** resolves the dialog as :attr:`QDialog.Accepted`.
+    Clicking **Dismiss** resolves it as :attr:`QDialog.Rejected`.
 
     Args:
-        accent: Six-digit hex color string (e.g. ``"#FF9800"``) applied to
-            the icon strip background tint and dismiss button.
-        icon_char: Emoji or single character rendered inside the icon strip.
-        title: Short, bold heading displayed below the strip.
+        accent: Six-digit hex color string (e.g. ``"#22D3EE"``) applied to
+            the icon circle and primary button gradient start.
+        icon_char: Single character rendered inside the icon circle.
+        title: Short, bold heading displayed below the circle.
         message: One-to-two sentence body text that guides the user.
         parent: Optional Qt parent widget.
     """
 
-    _DIALOG_WIDTH:  Final[int] = 400   # slightly wider canvas
-    _STRIP_HEIGHT:  Final[int] = 88    # emoji needs vertical breathing room
-    _BUTTON_HEIGHT: Final[int] = 40    # more substantial CTA
-    _BUTTON_WIDTH:  Final[int] = 144   # compact centered pill, not full-width
+    _DIALOG_WIDTH:  Final[int] = 340
+    _ICON_SIZE:     Final[int] = 52   # diameter of the icon circle in pixels
+    _BUTTON_HEIGHT: Final[int] = 40
 
     def __init__(
         self,
@@ -68,59 +70,54 @@ class _BaseHandlerDialog(QDialog):
         self.setWindowFlags(
             Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint
         )
-
         self._create_widgets()
         self._setup_layout()
 
     def _create_widgets(self) -> None:
         """Instantiate all child widgets and store as instance attributes."""
-        self._icon_strip: QLabel = self._create_icon_strip()
-        self._title_label: QLabel = self._create_title_label()
-        self._message_label: QLabel = self._create_message_label()
-        self._dismiss_button: QPushButton = self._create_dismiss_button()
+        self._icon_circle:      QLabel      = self._create_icon_circle()
+        self._title_label:      QLabel      = self._create_title_label()
+        self._message_label:    QLabel      = self._create_message_label()
+        self._try_again_button: QPushButton = self._create_try_again_button()
+        self._dismiss_button:   QPushButton = self._create_dismiss_button()
 
     def _setup_layout(self) -> None:
-        """Arrange child widgets in a vertical layout."""
+        """Arrange child widgets in a vertical layout matching the design spec."""
         root: QVBoxLayout = QVBoxLayout(self)
-        # bottom foot: XXL+SM = 32px
-        root.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.XXL + Spacing.SM)
+        # top: 32px  |  sides: 24px  |  bottom: 24px  (mirrors mockup padding)
+        root.setContentsMargins(
+            Spacing.XXL,
+            Spacing.XXL + Spacing.SM,
+            Spacing.XXL,
+            Spacing.XXL,
+        )
         root.setSpacing(Spacing.NONE)
 
-        root.addWidget(self._icon_strip)
-        root.addSpacing(Spacing.XXL)           # was XL (20px) → 24px
+        root.addWidget(self._icon_circle, 0, Qt.AlignmentFlag.AlignCenter)
+        root.addSpacing(Spacing.XL)          # 20px — icon → title
+        root.addWidget(self._title_label)
+        root.addSpacing(Spacing.SM)          # 8px  — title → message
+        root.addWidget(self._message_label)
+        root.addSpacing(Spacing.XXL)         # 24px — message → buttons
+        root.addWidget(self._try_again_button)
+        root.addSpacing(Spacing.SM)          # 8px gap between buttons
+        root.addWidget(self._dismiss_button)
 
-        body: QVBoxLayout = QVBoxLayout()
-        # side gutters: XXL+SM = 32px each side (was 24px)
-        body.setContentsMargins(Spacing.XXL + Spacing.SM, Spacing.NONE, Spacing.XXL + Spacing.SM, Spacing.NONE)
-        body.setSpacing(Spacing.NONE)
-        body.addWidget(self._title_label)
-        body.addSpacing(Spacing.MD)            # was SM (8px) → 12px
-        body.addWidget(self._message_label)
-        body.addSpacing(Spacing.XXL)           # was XL (20px) → 24px
-        # AlignCenter respects the button's fixed width and centers it
-        body.addWidget(self._dismiss_button, 0, Qt.AlignmentFlag.AlignCenter)
-
-        root.addLayout(body)
-
-    def _create_icon_strip(self) -> QLabel:
-        """Return the accent-colored strip containing the icon character.
+    def _create_icon_circle(self) -> QLabel:
+        """Return the fixed-size circle label containing the icon character.
 
         Returns:
-            A :class:`QLabel` fixed to :attr:`_STRIP_HEIGHT` pixels,
-            centered horizontally.
+            A :class:`QLabel` sized to :attr:`_ICON_SIZE` × :attr:`_ICON_SIZE`,
+            centered horizontally via the layout alignment flag.
         """
-        strip = QLabel(self._icon_char)
-        strip.setObjectName("IconStrip")
-        strip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        strip.setFixedHeight(self._STRIP_HEIGHT)
-        return strip
+        circle = QLabel(self._icon_char)
+        circle.setObjectName("IconCircle")
+        circle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        circle.setFixedSize(self._ICON_SIZE, self._ICON_SIZE)
+        return circle
 
     def _create_title_label(self) -> QLabel:
-        """Return the centered, word-wrapped heading label.
-
-        Returns:
-            A :class:`QLabel` with the dialog title text.
-        """
+        """Return the centered, word-wrapped heading label."""
         label = QLabel(self._title)
         label.setObjectName("TitleLabel")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -128,60 +125,75 @@ class _BaseHandlerDialog(QDialog):
         return label
 
     def _create_message_label(self) -> QLabel:
-        """Return the centered, word-wrapped body-text label.
-
-        Returns:
-            A :class:`QLabel` with the explanatory message text.
-        """
+        """Return the centered, word-wrapped body-text label."""
         label = QLabel(self._message)
         label.setObjectName("MessageLabel")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setWordWrap(True)
         return label
 
-    def _create_dismiss_button(self) -> QPushButton:
-        """Return the compact centered OK button.
+    def _create_try_again_button(self) -> QPushButton:
+        """Return the full-width primary gradient action button."""
+        btn = QPushButton("Try Again")
+        btn.setObjectName("TryAgainButton")
+        btn.setFixedHeight(self._BUTTON_HEIGHT)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        return btn
 
-        Returns:
-            A :class:`QPushButton` with fixed dimensions, centered by the
-            layout via :attr:`Qt.AlignmentFlag.AlignCenter`.
-        """
-        btn = QPushButton("OK")
+    def _create_dismiss_button(self) -> QPushButton:
+        """Return the full-width secondary neutral dismiss button."""
+        btn = QPushButton("Dismiss")
         btn.setObjectName("DismissButton")
         btn.setFixedHeight(self._BUTTON_HEIGHT)
-        btn.setFixedWidth(self._BUTTON_WIDTH)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         return btn
 
     # ── Styling ────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _to_rgba(hex_color: str, alpha: int) -> str:
+        """Convert ``#RRGGBB`` to a QSS-safe ``rgba(r, g, b, a)`` string.
+
+        Qt QSS reads 8-digit hex as ``#AARRGGBB``, not ``#RRGGBBAA``, so
+        appending alpha bytes to a hex accent produces the wrong color.
+        This helper emits the unambiguous ``rgba()`` form instead.
+
+        Args:
+            hex_color: Six-digit hex string prefixed with ``#``.
+            alpha: Alpha channel, 0 (transparent) – 255 (opaque).
+
+        Returns:
+            A QSS ``rgba(r, g, b, alpha)`` color string.
+        """
+        h = hex_color.lstrip('#')
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"rgba({r}, {g}, {b}, {alpha})"
+
     def _apply_style(self) -> None:
         """Load the QSS template from disk and inject accent-derived tokens.
 
-        Static color tokens are resolved by :func:`~utils.styles.load_stylesheet_disk`
-        via :class:`~resources.colors.HandlerDialogColors`.  Accent-derived
-        placeholders — ``{{ACCENT}}``, ``{{STRIP_BG}}``, ``{{ACCENT_HOVER}}``,
-        ``{{ACCENT_PRESSED}}`` — are replaced manually because they vary per
-        dialog variant and cannot live in a static enum.
+        Static tokens (BACKGROUND, BORDER, TEXT_*, BTN_GRADIENT_END) are
+        resolved by :func:`~utils.styles.load_stylesheet_disk` via
+        :class:`~resources.colors.HandlerDialogColors`.  The three
+        accent-derived placeholders below vary per dialog variant and are
+        injected manually.  All alpha-bearing tokens use ``rgba()`` so Qt
+        QSS parses them correctly (8-digit hex is ``#AARRGGBB`` in Qt).
         """
         qss: str = load_stylesheet_disk(_QSS_REL_PATH, [HandlerDialogColors])
-
-        # Inject accent-derived dynamic tokens
         qss = (
             qss
-            .replace("{{ACCENT}}",         self._accent)
-            .replace("{{STRIP_BG}}",        f"{self._accent}22")  # ~13 % opacity tint
-            .replace("{{ACCENT_HOVER}}",    f"{self._accent}CC")  # ~80 % opacity
-            .replace("{{ACCENT_PRESSED}}",  f"{self._accent}99")  # ~60 % opacity
+            .replace("{{ACCENT}}",      self._accent)
+            .replace("{{ICON_BG}}",     self._to_rgba(self._accent, 26))   # ~10 %
+            .replace("{{ICON_BORDER}}", self._to_rgba(self._accent, 77))   # ~30 %
         )
-
         self.setStyleSheet(qss)
 
     # ── Signals ────────────────────────────────────────────────────────────────
 
     def _connect_signals(self) -> None:
         """Wire widget signals to slots."""
-        self._dismiss_button.clicked.connect(self.accept)
+        self._try_again_button.clicked.connect(self.accept)   # → Accepted
+        self._dismiss_button.clicked.connect(self.reject)     # → Rejected
 
 
 # ── Concrete dialogs ───────────────────────────────────────────────────────────
@@ -190,14 +202,15 @@ class PhoneNotDetectedDialog(_BaseHandlerDialog):
     """Shown when the SyncDose named pipe is not open.
 
     This means either the main app is not running or the phone is not yet
-    connected.  Guides the user to open SyncDose, connect their phone, and retry.
+    connected.  Guides the user to open SyncDose, connect their phone, and
+    click Try Again.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialize with the phone-not-detected copy and orange accent."""
+        """Initialize with the phone-not-detected copy and cyan accent."""
         super().__init__(
-            accent=Palette.ORANGE_500,
-            icon_char="📵",
+            accent=Palette.CYAN_400,
+            icon_char="⊗",
             title="Phone Not Detected",
             message=(
                 "Make sure SyncDose is open and your phone is connected, "
@@ -215,10 +228,10 @@ class TransferErrorDialog(_BaseHandlerDialog):
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialize with the generic-error copy and pink accent."""
+        """Initialize with the generic-error copy and cyan accent."""
         super().__init__(
-            accent=Palette.PINK_500,
-            icon_char="⚠️",
+            accent=Palette.CYAN_400,
+            icon_char="!",
             title="An Error Occurred",
             message="Something went wrong while sending the file. Please try again.",
             parent=parent,

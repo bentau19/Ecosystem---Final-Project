@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
 
 import resources_qrc  # noqa: F401
 from resources.spacing import Spacing
-from utils import viewmodel_manager
+from app.app_state import app_state
 from views.widgets.dashboard.dashboard_content import DashboardContent
 from views.widgets.divider import Divider
 from views.widgets.navigation.sidebar import Sidebar

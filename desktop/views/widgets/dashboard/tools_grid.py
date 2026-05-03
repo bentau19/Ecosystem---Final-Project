@@ -2,12 +2,12 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import QLabel, QWidget
 
-from dto.tool import ToolDTO
-from layouts.flow_layout import FlowLayout
+from domain.dto.tool import ToolDTO
+from views.layouts.flow_layout import FlowLayout
 from resources.colors import Palette
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from utils.repository_manger import repository_manager
+from app.app_state import app_state
 from utils.styles import load_stylesheet
 from viewmodels.tool import ToolViewModel
 from views.widgets.dashboard.tool_card import ToolCard
@@ -37,7 +37,7 @@ class ToolsGrid(QWidget):
 
         self._active_tools: list[ToolCard] = []
 
-        self._tool_view_model: ToolViewModel = ToolViewModel(repository_manager.tools_repository)
+        self._tool_view_model: ToolViewModel = ToolViewModel(app_state.tools_repository)
         self._main_layout: FlowLayout
 
         self._setup_ui()

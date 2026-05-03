@@ -18,7 +18,7 @@ if __name__ == "__main__":
     # DeviceViewModel, QTimer …) at module-level; instantiating any QObject
     # before QApplication exists causes Qt to emit the
     # "startTimer: event dispatcher already destroyed" warning.
-    from windows.main_window import MainWindow
+    from views.main_window import MainWindow
 
     main_window = MainWindow()
     main_window.show()

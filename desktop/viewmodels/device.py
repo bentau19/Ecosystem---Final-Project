@@ -3,15 +3,15 @@ import uuid
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 from datetime import datetime
 
-from dto.device_info import (
+from domain.dto.device_info import (
     DeviceInfoDTO,
     DeviceNameDTO,
     DeviceOSDTO,
     DeviceBatteryDTO,
     DeviceStorageDTO,
 )
-from dto.previous_device import PreviousDeviceDTO
-from entities.device_info import DeviceEntity
+from domain.dto.previous_device import PreviousDeviceDTO
+from domain.entities.device_info import DeviceEntity
 from repositories.device import DeviceRepository
 from resources.paths import Icons
 from services.connectivity import ConnectivityService

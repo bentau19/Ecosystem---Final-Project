@@ -11,8 +11,8 @@ from datetime import date
 from PySide6.QtCore import QObject, Signal
 from tausync_py import TauSync
 
-from entities.device_info import DeviceEntity
-from enums.device_info_channels import DeviceInfoChannels
+from domain.entities.device_info import DeviceEntity
+from domain.enums.device_info_channels import DeviceInfoChannels
 from repositories.device import DeviceRepository
 from services.connectivity import ConnectivityService
 from utils import network

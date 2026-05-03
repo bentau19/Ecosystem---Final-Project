@@ -129,4 +129,4 @@ class ConnectivityService(QObject):
         # print("happened")
         # self._tau.connect_to("192.168.68.1")
         # self._tau.connect_to(ip)
-        # self.device_connected.emit()
+        self.device_connected.emit()

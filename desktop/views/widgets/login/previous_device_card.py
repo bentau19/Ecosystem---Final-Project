@@ -13,14 +13,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from dto.previous_device import PreviousDeviceDTO
-from enums.device_status import DeviceStatus
-from enums.screen import Screen
+from domain.dto.previous_device import PreviousDeviceDTO
+from domain.enums.device_status import DeviceStatus
+from domain.enums.screen import Screen
 from resources.colors import LoginColors
 from resources.paths import Icons
 from resources.spacing import Spacing
-from utils.viewmodel_manager import viewmodel_manager
-from utils.navigation_manager import navigation_manager
+from app.app_state import app_state
+from app.navigation_manager import navigation_manager
 from viewmodels.device import DeviceViewModel
 
 # Maps DeviceStatus → QSS object name for the badge widget
@@ -68,7 +68,7 @@ class PreviousDeviceCard(QWidget):
         self._status_widget: QWidget
         self._connect_btn: QPushButton
 
-        self._device_viewmodel: DeviceViewModel = viewmodel_manager.device_viewmodel
+        self._device_viewmodel: DeviceViewModel = app_state.device_viewmodel
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)

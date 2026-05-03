@@ -1,4 +1,4 @@
-from typing import List, Type
+from typing import List
 
 from PySide6.QtCore import Slot
 from PySide6.QtGui import QColor, QIcon
@@ -8,19 +8,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from dto.device_info import (
+from domain.dto.device_info import (
     DeviceInfoDTO,
     DeviceNameDTO,
     DeviceOSDTO,
     DeviceBatteryDTO,
     DeviceStorageDTO,
 )
-from enums.device_type import DeviceType
-from layouts.flow_layout import FlowLayout
+from domain.enums.device_type import DeviceType
+from views.layouts.flow_layout import FlowLayout
 from resources.colors import Palette
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from utils.viewmodel_manager import viewmodel_manager
+from app.app_state import app_state
 from utils.styles import load_stylesheet
 from viewmodels.device import DeviceViewModel
 from views.widgets.dashboard.battery_info import BatteryInfo
@@ -60,7 +60,7 @@ class PhoneDetailsRow(QWidget):
         self._card_width: int = card_width
         self._card_height: int = card_height
 
-        self._device_viewmodel: DeviceViewModel = viewmodel_manager.device_viewmodel
+        self._device_viewmodel: DeviceViewModel = app_state.device_viewmodel
 
         self._main_layout: FlowLayout
         self._cards: List[InfoCard] = []

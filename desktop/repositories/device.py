@@ -2,8 +2,8 @@ import sqlite3
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
-from entities.device_info import DeviceEntity
-from repositories.interfaces.base import IRepository
+from domain.entities.device_info import DeviceEntity
+from repositories.repository import IRepository
 from serializers.device import DeviceSerializer
 from utils.meta import ABCQObjectMeta
 

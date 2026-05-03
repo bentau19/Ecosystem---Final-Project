@@ -1,7 +1,7 @@
 from PySide6.QtCore import QObject, Signal, Slot
 
-from dto.tool import ToolDTO
-from entities.tool import ToolEntity
+from domain.dto.tool import ToolDTO
+from domain.entities.tool import ToolEntity
 from repositories.tool import ToolRepository
 
 

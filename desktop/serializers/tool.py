@@ -1,5 +1,5 @@
-from entities.tool import ToolEntity
-from serializers.interfaces.base import ISerializer
+from domain.entities.tool import ToolEntity
+from serializers.serializer import ISerializer
 
 
 class ToolSerializer(ISerializer[ToolEntity | None, tuple]):

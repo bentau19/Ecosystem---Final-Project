@@ -5,11 +5,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QVBoxLayout
 )
 
-from enums.screen import Screen
+from domain.enums.screen import Screen
 from resources.paths import Icons, Styles
 from resources.spacing import Spacing
-from utils.viewmodel_manager import viewmodel_manager
-from utils.navigation_manager import navigation_manager
+from app.app_state import app_state
+from app.navigation_manager import navigation_manager
 from utils.styles import load_stylesheet
 from viewmodels.device import DeviceViewModel
 
@@ -42,7 +42,7 @@ class Topbar(QWidget):
         self._title: str = title
         self._subtitle: str = subtitle
         self._topbar_height: int = topbar_height
-        self._device_viewmodel: DeviceViewModel = viewmodel_manager.device_viewmodel
+        self._device_viewmodel: DeviceViewModel = app_state.device_viewmodel
 
         self._title_block: QWidget
         self._disconnect_button: QPushButton

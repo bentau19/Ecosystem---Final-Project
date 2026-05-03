@@ -8,13 +8,12 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 import utils.styles
-from dto.previous_device import PreviousDeviceDTO
-from enums.screen import Screen
+from domain.dto.previous_device import PreviousDeviceDTO
 from resources.colors import Palette
 from resources.paths import Icons, LoginStyles
 from resources.spacing import Spacing
-from utils.viewmodel_manager import viewmodel_manager
-from utils.navigation_manager import NavigationManager, navigation_manager
+from app.app_state import app_state
+from app.navigation_manager import NavigationManager, navigation_manager
 from viewmodels.device import DeviceViewModel
 from views.widgets.login.previous_device_card import PreviousDeviceCard
 
@@ -34,7 +33,7 @@ class RightPanel(QWidget):
 
     Device cards are populated via :class:`~viewmodels.device.DeviceViewModel`;
     this panel owns no signals of its own — navigation is handled by
-    :data:`~utils.navigation_manager.navigation_manager` inside each card.
+    :data:`~app.navigation_manager.navigation_manager` inside each card.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -54,7 +53,7 @@ class RightPanel(QWidget):
         self._privacy_lbl: QLabel
         self._help_lbl: QLabel
 
-        self._device_viewmodel: DeviceViewModel = viewmodel_manager.device_viewmodel
+        self._device_viewmodel: DeviceViewModel = app_state.device_viewmodel
         self._navigation_manager: NavigationManager = navigation_manager
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
