@@ -1,5 +1,20 @@
 from types import TracebackType
-from typing import Any, Optional, Type
+from typing import Optional, Type
+
+
+class PipeError(RuntimeError):
+    """Base class for all pipe exceptions."""
+    ...
+
+
+class PipeConnectionError(PipeError):
+    """Raised when server pipe is not listening (phone not connected, app not running)."""
+    ...
+
+
+class PipeTransferError(PipeError):
+    """Raised when pipe was opened but I/O failed (server crashed, connection dropped)."""
+    ...
 
 
 class ServerNamedPipe:
@@ -27,3 +42,10 @@ class ClientNamedPipe:
     def write(self, data: bytes) -> None: ...
 
     def close(self) -> None: ...
+
+    def __enter__(self) -> 'ClientNamedPipe': ...
+
+    def __exit__(self,
+                 exc_type: Optional[Type[BaseException]],
+                 exc_val: Optional[BaseException],
+                 exc_tb: Optional[TracebackType]) -> None: ...

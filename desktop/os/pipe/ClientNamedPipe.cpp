@@ -79,11 +79,11 @@ void ClientNamedPipe::write(const std::string& data)
     while (totalBytesWritten < data.length())
     {
         DWORD bytesWritten = 0;
-DWORD chunkSize = std::min(
-    (DWORD)(data.size() - totalBytesWritten),
-    (DWORD)outputBufferSize
-);
-if (!WriteFile(hPipe, data.data() + totalBytesWritten, chunkSize, &bytesWritten, nullptr))
+        DWORD chunkSize = std::min(
+            (DWORD)(data.size() - totalBytesWritten),
+            (DWORD)outputBufferSize
+        );
+        if (!WriteFile(hPipe, data.data() + totalBytesWritten, chunkSize, &bytesWritten, nullptr))
         {
             throw PipeException("Failed to write to pipe.", PipeErrorCode::WriteFailed);
         }

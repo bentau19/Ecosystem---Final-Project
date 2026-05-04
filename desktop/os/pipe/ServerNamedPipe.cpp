@@ -1,8 +1,9 @@
-    #include "ServerNamedPipe.h"
-    #include "PipeException.h"
-    #include <vector>
+#include "ServerNamedPipe.h"
+#include "PipeException.h"
+#include <vector>
+
 std::wstring ServerNamedPipe::StringToWstring(const std::string& str) {
-     if (str.empty()) return std::wstring();
+    if (str.empty()) return std::wstring();
 
     int size_needed = MultiByteToWideChar(
         CP_UTF8, 0,
@@ -25,8 +26,8 @@ std::wstring ServerNamedPipe::StringToWstring(const std::string& str) {
 
 }
 
-    ServerNamedPipe::ServerNamedPipe(int inputBufferSize, int outputBufferSize, const std::string &pipeName)
-    {
+ServerNamedPipe::ServerNamedPipe(int inputBufferSize, int outputBufferSize, const std::string &pipeName)
+{
         this->inputBufferSize = inputBufferSize;
         this->outputBufferSize = outputBufferSize;
         std::wstring w_string = StringToWstring(pipeName);
@@ -43,27 +44,27 @@ std::wstring ServerNamedPipe::StringToWstring(const std::string& str) {
         );
 
 
-            if (hPipe != INVALID_HANDLE_VALUE){
-            return; // SUCCESS case
-            }
+    if (hPipe != INVALID_HANDLE_VALUE){
+        return; // SUCCESS case
+    }
     DWORD err = GetLastError();
 
     switch (err)
-{
-    case ERROR_FILE_NOT_FOUND:
-        throw PipeException("Pipe not found", PipeErrorCode::ConnectionFailed);
-
-    case ERROR_ACCESS_DENIED:
-        throw PipeException("Access denied", PipeErrorCode::AccessDenied);
-
-    case ERROR_PIPE_BUSY:
-        throw PipeException("Pipe busy", PipeErrorCode::ConnectionFailed);
-}
-    }
-
-    void ServerNamedPipe::waitForClient()
     {
-      BOOL ok = ConnectNamedPipe(hPipe, nullptr);
+        case ERROR_FILE_NOT_FOUND:
+            throw PipeException("Pipe not found", PipeErrorCode::ConnectionFailed);
+
+        case ERROR_ACCESS_DENIED:
+            throw PipeException("Access denied", PipeErrorCode::AccessDenied);
+
+        case ERROR_PIPE_BUSY:
+            throw PipeException("Pipe busy", PipeErrorCode::ConnectionFailed);
+    }
+}
+
+void ServerNamedPipe::waitForClient()
+{
+    BOOL ok = ConnectNamedPipe(hPipe, nullptr);
 
     if (ok)
     {
@@ -85,34 +86,34 @@ std::wstring ServerNamedPipe::StringToWstring(const std::string& str) {
 
 
 
-    std::string ServerNamedPipe::read()
+std::string ServerNamedPipe::read()
+{
+    DWORD read = 0;
+    std::vector<char> buffer(this->outputBufferSize);
+    if (!ReadFile(hPipe, buffer.data(), buffer.size(), &read, nullptr))
     {
-        DWORD read = 0;
-        std::vector<char> buffer(this->outputBufferSize);
-        if (!ReadFile(hPipe, buffer.data(), buffer.size(), &read, nullptr))
-        {
-            throw PipeException("Read failed", PipeErrorCode::ReadFailed);
-        }
-
-        return std::string(buffer.data(), read);
+        throw PipeException("Read failed", PipeErrorCode::ReadFailed);
     }
 
-    void ServerNamedPipe::close()
-    {
-        if (hPipe != INVALID_HANDLE_VALUE)
-        {
-            CloseHandle(hPipe);
-            hPipe = INVALID_HANDLE_VALUE;
-        }
-    }
+    return std::string(buffer.data(), read);
+}
 
-    void ServerNamedPipe::disconnect()
+void ServerNamedPipe::close()
+{
+    if (hPipe != INVALID_HANDLE_VALUE)
     {
-        DisconnectNamedPipe(hPipe);
+        CloseHandle(hPipe);
+        hPipe = INVALID_HANDLE_VALUE;
     }
+}
 
-    ServerNamedPipe::~ServerNamedPipe()
-    {
-        disconnect();
-        close();
-    }
+void ServerNamedPipe::disconnect()
+{
+    DisconnectNamedPipe(hPipe);
+}
+
+ServerNamedPipe::~ServerNamedPipe()
+{
+    disconnect();
+    close();
+}

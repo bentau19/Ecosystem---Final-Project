@@ -18,7 +18,7 @@ from typing import Final
 from PySide6.QtCore import QCoreApplication
 from PySide6.QtWidgets import QApplication, QDialog
 
-from pipe import Client
+from pipe import Client, PipeConnectionError, PipeTransferError
 from views.widgets.handlers.handler_dialog import (
     PhoneNotDetectedDialog,
     TransferErrorDialog,
@@ -27,10 +27,6 @@ from views.widgets.handlers.handler_dialog import (
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 PIPE_NAME: Final[str] = r'\\.\pipe\FileSend'
-
-# Windows error code returned by CreateFile when the named pipe server is not
-# listening (i.e. SyncDose is not running or the phone is not connected).
-_WINERROR_PIPE_NOT_FOUND: Final[int] = 2  # ERROR_FILE_NOT_FOUND
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -59,16 +55,13 @@ def send_via_pipe(file_path: str) -> None:
             client.write(file_path.encode('utf-8'))
             client.close()
             return
-        except ConnectionError as exc:
+
+        except PipeConnectionError:
             _ensure_app()
-            dialog: QDialog = (
-                PhoneNotDetectedDialog()
-                if exc.winerror == _WINERROR_PIPE_NOT_FOUND
-                else TransferErrorDialog()
-            )
-            if dialog.exec() != QDialog.DialogCode.Accepted:
+            if PhoneNotDetectedDialog().exec() != QDialog.DialogCode.Accepted:
                 return
-        except Exception:
+
+        except PipeTransferError:
             _ensure_app()
             if TransferErrorDialog().exec() != QDialog.DialogCode.Accepted:
                 return
@@ -77,6 +70,6 @@ def send_via_pipe(file_path: str) -> None:
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        sys.exit(1)
-    send_via_pipe(sys.argv[1])
+    # if len(sys.argv) < 2:
+    #     sys.exit(1)
+    send_via_pipe(PIPE_NAME)

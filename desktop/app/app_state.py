@@ -6,6 +6,7 @@ from services.connectivity import ConnectivityService
 from services.device_info import DeviceInfoService
 from services.file_transfer import FileTransferService
 from viewmodels.device import DeviceViewModel
+from viewmodels.file_transfer import FileTransferViewModel
 
 
 class AppState:
@@ -37,6 +38,10 @@ class AppState:
             self.device_repository,
             self.connectivity_service,
             self.device_info_service,
+        )
+        self.file_transfer_viewmodel: Final[FileTransferViewModel] = FileTransferViewModel(
+            file_transfer_service=self.file_transfer_service,
+            connectivity_service=self.connectivity_service,
         )
 
 
