@@ -21,6 +21,18 @@ public class DeviceRepository {
     // LiveData holds the unified connection state
     private final MutableLiveData<DeviceConnectionState> connectionState = new MutableLiveData<>();
 
+    public DeviceConnectionState getCurrentConnectionState() {
+        return connectionState.getValue();
+    }
+
+    public void notifyStatusChanged() {
+        DeviceConnectionState current = connectionState.getValue();
+        if (current != null) {
+            // postValue דואג לעדכן את כל ה-Observers (ה-UI) מה-Thread של הרקע
+            connectionState.postValue(current);
+        }
+    }
+
     private DeviceRepository(String deviceId, String modelName) {
         // Initialize local device data with REAL values
         LocalDeviceInfo initialLocal = new LocalDeviceInfo(

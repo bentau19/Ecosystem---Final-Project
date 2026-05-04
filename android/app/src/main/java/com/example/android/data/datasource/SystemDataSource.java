@@ -40,6 +40,14 @@ public class SystemDataSource {
         return DeviceUtils.getDeviceId(context);
     }
 
+    /**
+     * Checks if the device is currently plugged into a power source.
+     * Useful for the desktop dashboard to show charging status.
+     */
+    public boolean isDeviceCharging() {
+        return DeviceUtils.isCharging(context);
+    }
+
     public String getDeviceModel() {
         return DeviceUtils.getDeviceModel();
     }
