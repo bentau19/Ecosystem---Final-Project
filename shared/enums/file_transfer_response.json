@@ -1,0 +1,17 @@
+{
+  "name": "FileTransferResponse",
+  "description": "Accepted/rejected tokens exchanged over the REGULAR_FILE_RESPONSE channel. Both PC and Android must write and compare these exact strings — define them here once and generate both sides.",
+  "type": "string",
+  "members": [
+    {
+      "name": "ACCEPTED",
+      "value": "accept",
+      "description": "Receiver accepted the incoming file — sender may open REGULAR_FILE_DATA and stream bytes."
+    },
+    {
+      "name": "REJECTED",
+      "value": "reject",
+      "description": "Receiver rejected the incoming file — sender must abort without opening REGULAR_FILE_DATA."
+    }
+  ]
+}

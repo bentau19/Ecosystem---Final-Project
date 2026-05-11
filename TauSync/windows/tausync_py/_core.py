@@ -12,9 +12,7 @@ from __future__ import annotations
 import ctypes
 import ipaddress
 import os
-import sys
 import threading
-from idlelib import parenmatch
 from pathlib import Path
 from typing import Optional
 
@@ -93,6 +91,8 @@ def _ensure_clr(dll_path: Optional[str] = None) -> None:
         from System import Array, Byte  # pyright: ignore[reportMissingImports]
         from System.Runtime.InteropServices import GCHandle, GCHandleType  # pyright: ignore[reportMissingImports]
         from TauSync.Implementations.Management import ConnectionManager as _CM  # pyright: ignore[reportMissingImports]
+        from System import Nullable, Int32
+        from System import TimeoutException
 
         _Array = Array
         _Byte = Byte
@@ -100,10 +100,6 @@ def _ensure_clr(dll_path: Optional[str] = None) -> None:
         _GCHandleType = GCHandleType
         _ConnectionManagerCls = _CM
         _clr_ready = True
-
-
-
-        
 
 
 # ---------------------------------------------------------------------------
@@ -573,7 +569,6 @@ class TauSync:
         self._manager = _ConnectionManagerCls()
         self._disposed = False
 
-
     def get_peer_waiting_words(self) -> list[str]:
         """Get a snapshot of the peer's pending discovery words.
 
@@ -595,9 +590,10 @@ class TauSync:
         #         "Call listen() or connect_to() first."
         #     )
         return list(self._manager.GetPeerWaitingWords())
+
     # -- transport ---------------------------------------------------------
 
-    def listen(self) -> None:
+    def listen(self, timeout_seconds: int | None = None) -> None:
         """Start listening for an incoming TCP connection (server mode).
 
         Blocks until a remote peer connects.  Only needs to be called once
@@ -620,14 +616,20 @@ class TauSync:
             TauSync._global_role = _ROLE_SERVER
             TauSync._global_target = "0.0.0.0 (listening)"
         try:
-            self._manager.ConnectTransport("").GetAwaiter().GetResult()
+            self._manager.ConnectTransport("", timeout_seconds).GetAwaiter().GetResult()
+        except TimeoutException as exc:
+            with TauSync._global_role_lock:
+                TauSync._global_role = _ROLE_NONE
+                TauSync._global_target = None
+            raise TimeoutError(str(exc))
         except Exception:
             with TauSync._global_role_lock:
                 TauSync._global_role = _ROLE_NONE
                 TauSync._global_target = None
+
             raise
 
-    def connect_to(self, ip: str) -> None:
+    def connect_to(self, ip: str, timeout_seconds: int | None = None) -> None:
         """Connect to a remote TauSync server, or listen if *ip* is empty.
 
         Passing an empty string (``""``) is equivalent to calling
@@ -637,12 +639,14 @@ class TauSync:
         Args:
             ip: Server IP address (e.g. ``"192.168.1.50"``), or ``""``
                 to listen (server mode).
+            timeout_seconds: Optional timeout in seconds for the connection attempt.
 
         Raises:
             RuntimeError: If the transport was already established in
                 the opposite role, or already connected to a different
                 address.
         """
+
         ipaddress.IPv4Address(ip)
         self._check_not_disposed()
         ip = ip.strip() if ip else ""
@@ -670,7 +674,12 @@ class TauSync:
             TauSync._global_role = _ROLE_CLIENT
             TauSync._global_target = ip
         try:
-            self._manager.ConnectTransport(ip).GetAwaiter().GetResult()
+            self._manager.ConnectTransport(ip, timeout_seconds).GetAwaiter().GetResult()
+        except TimeoutException as exc:
+            with TauSync._global_role_lock:
+                TauSync._global_role = _ROLE_NONE
+                TauSync._global_target = None
+            raise TimeoutError(str(exc))
         except Exception:
             with TauSync._global_role_lock:
                 TauSync._global_role = _ROLE_NONE
@@ -680,7 +689,7 @@ class TauSync:
     @property
     def is_connected(self) -> bool:
         """Whether the underlying TCP transport is up."""
-        if self._manager.IsConnected():
+        if not self._manager.IsConnected():
             return False
         return TauSync._global_role != _ROLE_NONE
 
@@ -695,6 +704,7 @@ class TauSync:
             self,
             word: str,
             chunk_size: int = 65536,
+            timeout_seconds: int | None = None,
     ) -> TauSyncStream:
         """Open a named duplex stream (meeting-word handshake).
 
@@ -724,8 +734,13 @@ class TauSync:
         if not isinstance(word, str) or not word.strip():
             raise ValueError("word must be a non-empty, non-blank string")
         _validate_chunk_size(chunk_size, "chunk_size")
-        dotnet_stream = self._manager.Connect(word).GetAwaiter().GetResult()
-        return TauSyncStream(dotnet_stream, word=word, default_chunk_size=chunk_size)
+        try:
+            dotnet_stream = self._manager.Connect(word, timeout_seconds).GetAwaiter().GetResult()
+            return TauSyncStream(dotnet_stream, word=word, default_chunk_size=chunk_size)
+        except TimeoutException as exc:
+            raise TimeoutError(str(exc))
+        except Exception as exc:
+            raise RuntimeError(f"Failed to connect to word {word!r}: {exc}") from exc
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -740,6 +755,7 @@ class TauSync:
         self._disposed = True
         try:
             self._manager.Dispose()
+            self._global_role = _ROLE_NONE
         except Exception:
             pass
 

@@ -18,7 +18,7 @@ namespace TauSync.Interfaces
         /// <summary>
         /// Connects at transport level. Pass null or empty for server (listen for one client); otherwise client to that address.
         /// </summary>
-        Task ConnectTransport(string? targetId);
+        Task ConnectTransport(string? targetId, int? timeoutSeconds);
 
         /// <summary>
         /// Returns whether the underlying transport is connected.
@@ -31,7 +31,7 @@ namespace TauSync.Interfaces
         /// </summary>
         /// <param name="word">Meeting Word (e.g. "CLIPBOARD"). Case-sensitive.</param>
         /// <returns>A duplex stream to the peer that connected on the same word.</returns>
-        Task<Stream> Connect(string word);
+        Task<Stream> Connect(string word, int? timeoutSeconds = null);
 
         /// <summary>
         /// Fired when an error occurs (e.g. handshake timeout, reject, dispatch failure).

@@ -45,19 +45,21 @@ def tool_another_enabled() -> ToolEntity:
 
 
 @pytest.fixture()
-def mock_repo() -> MagicMock:
-    repo = MagicMock()
-    repo.entity_saved = MagicMock()
-    repo.entity_saved.connect = MagicMock()
-    repo.entity_deleted = MagicMock()
-    repo.entity_deleted.connect = MagicMock()
-    repo.get_all_enabled.return_value = []
-    return repo
+def mock_service() -> MagicMock:
+    """Mock ToolService with wired signal stubs."""
+    service = MagicMock()
+    service.tool_added = MagicMock()
+    service.tool_added.connect = MagicMock()
+    service.tool_deleted = MagicMock()
+    service.tool_deleted.connect = MagicMock()
+    service.all_enabled_tools_fetched = MagicMock()
+    service.all_enabled_tools_fetched.connect = MagicMock()
+    return service
 
 
 @pytest.fixture()
-def view_model(mock_repo: MagicMock) -> ToolViewModel:
-    return ToolViewModel(tool_repository=mock_repo)
+def view_model(mock_service: MagicMock) -> ToolViewModel:
+    return ToolViewModel(tool_service=mock_service)
 
 
 # ---------------------------------------------------------------------------
@@ -83,22 +85,58 @@ def test_convert_to_dto_preserves_is_enabled_false(tool_disabled: ToolEntity):
     assert result.is_enabled is False
 
 
-def test_init_loads_enabled_tools_from_repo(
-        mock_repo: MagicMock,
+def test_init_enabled_tools_starts_empty(mock_service: MagicMock) -> None:
+    vm = ToolViewModel(tool_service=mock_service)
+
+    assert vm._enabled_tools == []
+
+
+def test_init_calls_start_and_fetch_all_enabled(mock_service: MagicMock) -> None:
+    ToolViewModel(tool_service=mock_service)
+
+    mock_service.start.assert_called_once()
+    mock_service.fetch_all_enabled.assert_called_once()
+
+
+def test_init_connects_to_service_signals(mock_service: MagicMock) -> None:
+    ToolViewModel(tool_service=mock_service)
+
+    mock_service.tool_added.connect.assert_called_once()
+    mock_service.tool_deleted.connect.assert_called_once()
+    mock_service.all_enabled_tools_fetched.connect.assert_called_once()
+
+
+def test_on_all_enabled_fetched_populates_enabled_tools(
+        view_model: ToolViewModel,
         tool_enabled: ToolEntity,
         tool_another_enabled: ToolEntity,
-):
-    mock_repo.get_all_enabled.return_value = [tool_enabled, tool_another_enabled]
-    vm = ToolViewModel(tool_repository=mock_repo)
+) -> None:
+    view_model._on_all_enabled_fetched([tool_enabled, tool_another_enabled])
 
-    assert len(vm._enabled_tools) == 2
+    assert len(view_model._enabled_tools) == 2
 
 
-def test_init_connects_to_repo_signals(mock_repo: MagicMock):
-    ToolViewModel(tool_repository=mock_repo)
+def test_on_all_enabled_fetched_emits_tool_count_changed(
+        view_model: ToolViewModel,
+        tool_enabled: ToolEntity,
+        tool_another_enabled: ToolEntity,
+) -> None:
+    received: list[int] = []
+    view_model.tool_count_changed.connect(lambda count: received.append(count))
 
-    mock_repo.entity_saved.connect.assert_called_once()
-    mock_repo.entity_deleted.connect.assert_called_once()
+    view_model._on_all_enabled_fetched([tool_enabled, tool_another_enabled])
+
+    assert received == [2]
+
+
+def test_on_all_enabled_fetched_with_empty_list_clears_tools(
+        view_model: ToolViewModel,
+        tool_enabled: ToolEntity,
+) -> None:
+    view_model._on_all_enabled_fetched([tool_enabled])
+    view_model._on_all_enabled_fetched([])
+
+    assert view_model._enabled_tools == []
 
 
 def test_load_enabled_tools_emits_tools_loaded_signal(
@@ -113,31 +151,29 @@ def test_load_enabled_tools_emits_tools_loaded_signal(
 
 
 def test_load_enabled_tools_emits_correct_tools(
-        mock_repo: MagicMock,
+        view_model: ToolViewModel,
         tool_enabled: ToolEntity,
-):
-    mock_repo.get_all_enabled.return_value = [tool_enabled]
-    vm = ToolViewModel(tool_repository=mock_repo)
+) -> None:
+    view_model._on_all_enabled_fetched([tool_enabled])
 
     received = []
-    vm.tools_loaded.connect(lambda tools: received.append(tools))
-    vm.load_enabled_tools()
+    view_model.tools_loaded.connect(lambda tools: received.append(tools))
+    view_model.load_enabled_tools()
 
     assert len(received[0]) == 1
     assert received[0][0].title == tool_enabled.title
 
 
 def test_load_enabled_tools_emits_tool_count_changed_signal(
-        mock_repo: MagicMock,
+        view_model: ToolViewModel,
         tool_enabled: ToolEntity,
         tool_another_enabled: ToolEntity,
-):
-    mock_repo.get_all_enabled.return_value = [tool_enabled, tool_another_enabled]
-    vm = ToolViewModel(tool_repository=mock_repo)
+) -> None:
+    view_model._on_all_enabled_fetched([tool_enabled, tool_another_enabled])
 
     received = []
-    vm.tool_count_changed.connect(lambda count: received.append(count))
-    vm.load_enabled_tools()
+    view_model.tool_count_changed.connect(lambda count: received.append(count))
+    view_model.load_enabled_tools()
 
     assert received == [2]
 
@@ -176,10 +212,10 @@ def test_on_tool_added_appends_tool_to_enabled_tools(
 
 def test_on_tool_added_emits_tool_count_changed_signal(
         view_model: ToolViewModel,
-        mock_repo: MagicMock,
+        mock_service: MagicMock,
         tool_enabled: ToolEntity,
         tool_another_enabled: ToolEntity,
-):
+) -> None:
     received = []
     view_model.tool_count_changed.connect(lambda count: received.append(count))
 

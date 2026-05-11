@@ -15,11 +15,6 @@ from viewmodels.device import DeviceViewModel
 
 
 @pytest.fixture()
-def mock_repo() -> MagicMock:
-    return MagicMock()
-
-
-@pytest.fixture()
 def mock_connectivity() -> MagicMock:
     return MagicMock()
 
@@ -30,101 +25,96 @@ def mock_device_info_service() -> MagicMock:
 
 
 @pytest.fixture()
-def view_model(qtbot, mock_repo: MagicMock, mock_connectivity: MagicMock, mock_device_info_service: MagicMock) -> DeviceViewModel:
-    return DeviceViewModel(repository=mock_repo, connectivity_service=mock_connectivity, device_info_service=mock_device_info_service)
+def view_model(qtbot, mock_connectivity: MagicMock, mock_device_info_service: MagicMock) -> DeviceViewModel:
+    return DeviceViewModel(connectivity_service=mock_connectivity, device_info_service=mock_device_info_service)
 
 
 # ---------------------------------------------------------------------------
-# load_devices
+# load_devices / _on_all_devices_fetched
 # ---------------------------------------------------------------------------
 
 
-def test_load_devices_emits_previous_devices_updated(
+def test_load_devices_calls_fetch_all_devices(
     view_model: DeviceViewModel,
-    mock_repo: MagicMock,
+    mock_device_info_service: MagicMock,
+) -> None:
+    view_model.load_devices()
+
+    mock_device_info_service.fetch_all_devices.assert_called_once()
+
+
+def test_on_all_devices_fetched_emits_previous_devices_updated(
+    view_model: DeviceViewModel,
     previous_device_online: DeviceEntity,
     previous_device_recent: DeviceEntity,
 ) -> None:
-    mock_repo.get_all.return_value = [previous_device_online, previous_device_recent]
     received: list = []
     view_model.previous_devices_updated.connect(lambda dtos: received.append(dtos))
 
-    view_model.load_devices()
+    view_model._on_all_devices_fetched([previous_device_online, previous_device_recent])
 
     assert len(received) == 1
 
 
-def test_load_devices_emits_all_entities_as_dtos(
+def test_on_all_devices_fetched_emits_all_entities_as_dtos(
     view_model: DeviceViewModel,
-    mock_repo: MagicMock,
     previous_device_online: DeviceEntity,
     previous_device_recent: DeviceEntity,
     previous_device_idle: DeviceEntity,
 ) -> None:
-    mock_repo.get_all.return_value = [
-        previous_device_online,
-        previous_device_recent,
-        previous_device_idle,
-    ]
     received: list[PreviousDeviceDTO] = []
     view_model.previous_devices_updated.connect(lambda dtos: received.extend(dtos))
 
-    view_model.load_devices()
+    view_model._on_all_devices_fetched(
+        [previous_device_online, previous_device_recent, previous_device_idle]
+    )
 
     assert len(received) == 3
 
 
-def test_load_devices_emits_empty_list_when_repo_empty(
+def test_on_all_devices_fetched_emits_empty_list_when_no_devices(
     view_model: DeviceViewModel,
-    mock_repo: MagicMock,
 ) -> None:
-    mock_repo.get_all.return_value = []
     received: list = []
     view_model.previous_devices_updated.connect(lambda dtos: received.append(dtos))
 
-    view_model.load_devices()
+    view_model._on_all_devices_fetched([])
 
     assert received == [[]]
 
 
-def test_load_devices_converts_entities_to_previous_device_dtos(
+def test_on_all_devices_fetched_converts_entities_to_previous_device_dtos(
     view_model: DeviceViewModel,
-    mock_repo: MagicMock,
     previous_device_online: DeviceEntity,
 ) -> None:
-    mock_repo.get_all.return_value = [previous_device_online]
     received: list[PreviousDeviceDTO] = []
     view_model.previous_devices_updated.connect(lambda dtos: received.extend(dtos))
 
-    view_model.load_devices()
+    view_model._on_all_devices_fetched([previous_device_online])
 
     assert isinstance(received[0], PreviousDeviceDTO)
 
 
-def test_load_devices_dto_id_matches_entity(
+def test_on_all_devices_fetched_dto_id_matches_entity(
     view_model: DeviceViewModel,
-    mock_repo: MagicMock,
     previous_device_online: DeviceEntity,
 ) -> None:
-    mock_repo.get_all.return_value = [previous_device_online]
     received: list[PreviousDeviceDTO] = []
     view_model.previous_devices_updated.connect(lambda dtos: received.extend(dtos))
 
-    view_model.load_devices()
+    view_model._on_all_devices_fetched([previous_device_online])
 
     assert received[0].id == previous_device_online.id
 
 
-def test_load_devices_dto_fields_match_entity(
+def test_on_all_devices_fetched_dto_fields_match_entity(
     view_model: DeviceViewModel,
-    mock_repo: MagicMock,
     previous_device_online: DeviceEntity,
 ) -> None:
-    mock_repo.get_all.return_value = [previous_device_online]
     received: list[PreviousDeviceDTO] = []
     view_model.previous_devices_updated.connect(lambda dtos: received.extend(dtos))
 
-    view_model.load_devices()
+    view_model._on_all_devices_fetched([previous_device_online])
 
     dto = received[0]
     assert dto.name == previous_device_online.name
@@ -133,16 +123,14 @@ def test_load_devices_dto_fields_match_entity(
     assert dto.last_connected == previous_device_online.last_connected
 
 
-def test_load_devices_single_entity_emits_single_dto(
+def test_on_all_devices_fetched_single_entity_emits_single_dto(
     view_model: DeviceViewModel,
-    mock_repo: MagicMock,
     previous_device_idle: DeviceEntity,
 ) -> None:
-    mock_repo.get_all.return_value = [previous_device_idle]
     received: list[PreviousDeviceDTO] = []
     view_model.previous_devices_updated.connect(lambda dtos: received.extend(dtos))
 
-    view_model.load_devices()
+    view_model._on_all_devices_fetched([previous_device_idle])
 
     assert len(received) == 1
     assert received[0].id == "dev-003"

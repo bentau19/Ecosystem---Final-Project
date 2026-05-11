@@ -5,8 +5,11 @@ from repositories.tool import ToolRepository
 from services.connectivity import ConnectivityService
 from services.device_info import DeviceInfoService
 from services.file_transfer import FileTransferService
+from services.phone_request import PhoneRequestService
+from services.tool import ToolService
 from viewmodels.device import DeviceViewModel
 from viewmodels.file_transfer import FileTransferViewModel
+from viewmodels.tool import ToolViewModel
 
 
 class AppState:
@@ -32,16 +35,25 @@ class AppState:
         self.file_transfer_service: Final[FileTransferService] = FileTransferService(
             connectivity=self.connectivity_service,
         )
+        self.tool_service: Final[ToolService] = ToolService(
+            repository=self.tools_repository,
+        )
 
         # ViewModels
         self.device_viewmodel: Final[DeviceViewModel] = DeviceViewModel(
-            self.device_repository,
-            self.connectivity_service,
-            self.device_info_service,
+            connectivity_service=self.connectivity_service,
+            device_info_service=self.device_info_service,
         )
         self.file_transfer_viewmodel: Final[FileTransferViewModel] = FileTransferViewModel(
             file_transfer_service=self.file_transfer_service,
             connectivity_service=self.connectivity_service,
+        )
+        self.tool_viewmodel: Final[ToolViewModel] = ToolViewModel(
+            tool_service=self.tool_service,
+        )
+        self.phone_request_service: Final[PhoneRequestService] = PhoneRequestService(
+            connectivity_service=self.connectivity_service,
+            file_transfer_service=self.file_transfer_service,
         )
 
 

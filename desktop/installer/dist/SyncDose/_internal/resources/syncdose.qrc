@@ -44,4 +44,8 @@
         <file alias="tray-menu.qss">styles/tray-menu.qss</file>
     </qresource>
 
+    <qresource prefix="/styles/toasts">
+        <file alias="file-received.qss">styles/toasts/file-received.qss</file>
+    </qresource>
+
 </RCC>

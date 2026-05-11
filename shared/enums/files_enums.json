@@ -4,14 +4,34 @@
   "type": "string",
   "members": [
     {
-      "name": "REGULAR_FILE_METADATA",
-      "value": "file_meta",
-      "description": "Metadata channel for a regular file transfer — carries JSON with the filename and byte-count before the data channel opens."
+      "name": "REGULAR_FILE_METADATA_PC_TO_ANDROID",
+      "value": "file_meta_pc",
+      "description": "PC sends file metadata when PC initiates a file transfer to Android."
     },
     {
-      "name": "REGULAR_FILE_DATA",
-      "value": "file_data",
-      "description": "Data channel for a regular file transfer — carries raw file bytes, exactly the byte-count declared in the metadata channel."
+      "name": "REGULAR_FILE_METADATA_ANDROID_TO_PC",
+      "value": "file_meta_android",
+      "description": "Android sends file metadata when Android initiates a file transfer to PC."
+    },
+    {
+      "name": "REGULAR_FILE_DATA_PC_TO_ANDROID",
+      "value": "file_data_pc",
+      "description": "PC streams raw file bytes when PC initiates a file transfer to Android."
+    },
+    {
+      "name": "REGULAR_FILE_DATA_ANDROID_TO_PC",
+      "value": "file_data_android",
+      "description": "Android streams raw file bytes when Android initiates a file transfer to PC."
+    },
+    {
+      "name": "REGULAR_FILE_RESPONSE_FROM_ANDROID",
+      "value": "file_response_android",
+      "description": "Android writes ACCEPTED or REJECTED response when PC initiates a file transfer."
+    },
+    {
+      "name": "REGULAR_FILE_RESPONSE_FROM_PC",
+      "value": "file_response_pc",
+      "description": "PC writes ACCEPTED or REJECTED response when Android initiates a file transfer."
     }
   ]
 }

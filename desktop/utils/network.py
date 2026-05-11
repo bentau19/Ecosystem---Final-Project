@@ -28,7 +28,7 @@ def get_pc_name() -> str:
     return platform.node()
 
 
-def read_from_channel(tau: TauSync, channel: str) -> str:
+def read_string_from_channel(tau: TauSync, channel: str) -> str:
     """Open a named TauSync channel, read all incoming data, and return it as a string.
 
     Opens the stream via a meeting-word handshake, reads until the remote peer
@@ -47,7 +47,7 @@ def read_from_channel(tau: TauSync, channel: str) -> str:
         return stream.read_all().decode("utf-8")
 
 
-def write_to_channel(tau: TauSync, channel: str, data: str) -> None:
+def write_string_to_channel(tau: TauSync, channel: str, data: str) -> None:
     """Open a named TauSync channel, write *data*, flush, and close.
 
     Encodes *data* as UTF-8, writes the full payload into the channel, flushes

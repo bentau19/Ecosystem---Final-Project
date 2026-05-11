@@ -5,12 +5,9 @@ Manages the TauSync TCP connection lifecycle on a background thread,
 emitting Qt signals when a device connects or disconnects.
 """
 import threading
-from typing import Callable
 
 from PySide6.QtCore import QObject, Signal
 from tausync_py import TauSync
-
-from utils.decorators import threaded
 
 
 class ConnectivityService(QObject):
@@ -55,6 +52,10 @@ class ConnectivityService(QObject):
         super().__init__(parent)
         self._tau: TauSync = TauSync()
         self._threads: list[threading.Thread] = []
+        self._is_running = threading.Event()
+
+        self._lifecycle_lock = threading.Lock()
+        self._threads_lock = threading.Lock()
 
     # ── Public read-only access to the transport ──────────────────────────────
 
@@ -67,51 +68,59 @@ class ConnectivityService(QObject):
         """
         return self._tau
 
-    # ── Connection lifecycle ───────────────────────────────────────────────────
+    @property
+    def connected(self) -> bool:
+        return self._tau.is_connected
 
-    def start_listening(self) -> None:
-        """Begin waiting for an incoming device connection on a background thread.
+    # ── Public API ───────────────────────────────────────────────────
 
-        Safe to call from the main thread; the blocking ``TauSync.listen()``
-        call runs on a daemon thread so the UI remains responsive.
-        """
-        self._listen()
+    def start(self) -> None:
+        threading.Thread(target=self._start, daemon=True).start()
 
-    @threaded
-    def _listen(self) -> None:
-        """Block until a remote device connects, then emit ``device_connected``.
+    def stop(self) -> None:
+        threading.Thread(target=self._stop, daemon=True).start()
 
-        Runs on a background :class:`threading.Thread`. Emits ``connection_error``
-        on failure so the error surfaces to the UI instead of being swallowed.
+    def connect_to_device(self, ip: str) -> None:
+        if not self._is_running.is_set():
+            return
+        self._spawn(self._connect_to_device, ip)
 
-        Emits:
-            device_connected: When the TauSync server accepts a connection.
-            connection_error: With the exception message string if listening fails.
-        """
-        try:
-            self._tau.listen()
-            self.device_connected.emit()
-        except Exception as exc:
-            self.connection_error.emit(str(exc))
+    # ── Private Functions ───────────────────────────────────────────────────
 
-    def disconnect_device(self) -> None:
-        """Dispose the TauSync connection and emit ``device_disconnected``.
+    def _start(self) -> None:
+        with self._lifecycle_lock:
+            if self._is_running.is_set():
+                return
+            self._is_running.set()
+            self._tau = TauSync()
+            self._spawn(self._listen)
 
-        Joins all background threads with a 2-second timeout each before
-        clearing the thread registry, giving in-flight reads a chance to finish.
+    def _stop(self) -> None:
+        with self._lifecycle_lock:
+            if not self._is_running.is_set():
+                return
+            self._is_running.clear()
+            self._disconnect_device()
+            pending_threads: list[threading.Thread] = self._get_pending_threads()
+            for t in pending_threads:
+                if t == threading.current_thread():
+                    continue
+                t.join()
 
-        Emits:
-            device_disconnected: After all threads are joined and TauSync is disposed.
-        """
+    def _spawn(self, target, *args):
+        """All thread creation must go through here."""
+        if not self._is_running.is_set():
+            return  # reject new spawns during teardown
+        t = threading.Thread(target=target, args=args, daemon=True)
+        with self._threads_lock:
+            self._threads.append(t)
+        t.start()
+
+    def _disconnect_device(self):
         self._tau.dispose()
-        for thread in self._threads:
-            if thread.is_alive():
-                thread.join(timeout=2)
-        self._threads.clear()
         self.device_disconnected.emit()
 
-    @threaded
-    def connect_to_device(self, ip: str) -> None:
+    def _connect_to_device(self, ip: str) -> None:
         """Connect to a remote device by IP address.
 
         Currently, a stub — emits ``device_connected`` immediately while the
@@ -124,9 +133,39 @@ class ConnectivityService(QObject):
             device_connected: Immediately (stub behaviour).
         """
         # TODO: connect via Bluetooth using the previously stored device ID.
-        # self._tau.dispose()
-        # self._tau = TauSync()
-        # print("happened")
-        # self._tau.connect_to("192.168.68.1")
-        # self._tau.connect_to(ip)
+
+        # pass
+        # try:
+        #     self._tau.connect_to("192.168.68.27")
         self.device_connected.emit()
+        # except TimeoutError as ex:
+        #     print(ex)
+
+    def _listen(self) -> None:
+        """Block until a remote device connects, then emit ``device_connected``.
+
+        Runs on a background :class:`threading.Thread`. Emits ``connection_error``
+        on failure so the error surfaces to the UI instead of being swallowed.
+
+        Emits:
+            device_connected: When the TauSync server accepts a connection.
+            connection_error: With the exception message string if listening fails.
+        """
+        while self._is_running.is_set() and not self.connected:
+            try:
+                self._tau.listen(timeout_seconds=10)
+                self.device_connected.emit()
+            except TimeoutError:
+                continue
+            except Exception as exc:
+                print(exc)
+                self.connection_error.emit(str(exc))
+
+    def _get_pending_threads(self) -> list[threading.Thread]:
+        threads: list[threading.Thread] = []
+        while True:
+            with self._threads_lock:
+                pending_threads = [t for t in self._threads if t.is_alive()]
+                if not pending_threads:
+                    return threads
+                threads.extend(pending_threads)

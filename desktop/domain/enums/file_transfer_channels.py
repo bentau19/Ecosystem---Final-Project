@@ -7,8 +7,20 @@ from enum import StrEnum
 class FileTransferChannels(StrEnum):
     """TauSync meeting-word identifiers for the file transfer protocol. Both PC and Android must call tau.connect() with the exact same string — define it here once and generate both sides."""
 
-    # Metadata channel for a regular file transfer — carries JSON with the filename and byte-count before the data channel opens.
-    REGULAR_FILE_METADATA = "file_meta"
+    # PC sends file metadata when PC initiates a file transfer to Android.
+    REGULAR_FILE_METADATA_PC_TO_ANDROID = "file_meta_pc"
 
-    # Data channel for a regular file transfer — carries raw file bytes, exactly the byte-count declared in the metadata channel.
-    REGULAR_FILE_DATA = "file_data"
+    # Android sends file metadata when Android initiates a file transfer to PC.
+    REGULAR_FILE_METADATA_ANDROID_TO_PC = "file_meta_android"
+
+    # PC streams raw file bytes when PC initiates a file transfer to Android.
+    REGULAR_FILE_DATA_PC_TO_ANDROID = "file_data_pc"
+
+    # Android streams raw file bytes when Android initiates a file transfer to PC.
+    REGULAR_FILE_DATA_ANDROID_TO_PC = "file_data_android"
+
+    # Android writes ACCEPTED or REJECTED response when PC initiates a file transfer.
+    REGULAR_FILE_RESPONSE_FROM_ANDROID = "file_response_android"
+
+    # PC writes ACCEPTED or REJECTED response when Android initiates a file transfer.
+    REGULAR_FILE_RESPONSE_FROM_PC = "file_response_pc"

@@ -6,11 +6,14 @@ from PySide6.QtWidgets import (
 )
 
 import utils.styles
+from app.app_state import app_state
 from domain.enums.screen import Screen
 from resources.paths import Icons, Styles
 from app.navigation_manager import navigation_manager, NavigationManager
 from views.screens.dashboard import DashboardScreen
 from views.screens.login import LoginScreen
+from views.widgets.dialogs.file_handler import TransferErrorDialog
+from views.widgets.toasts.file_received import FileReceivedToast
 
 
 class MainWindow(QMainWindow):
@@ -22,7 +25,7 @@ class MainWindow(QMainWindow):
     class decides *when* to change screens.
 
     Also manages the system tray icon so the user can reopen the window after
-    minimising it, and hides the window to the tray on minimise rather than
+    minimizing it, and hides the window to the tray on minimize rather than
     closing it.
 
     Navigation is driven by :data:`~app.navigation_manager.navigation_manager`.
@@ -42,6 +45,8 @@ class MainWindow(QMainWindow):
 
         self._navigation_manager: NavigationManager = navigation_manager
         self._screens: dict[Screen, QWidget]
+
+        self._file_transfer_vm = app_state.file_transfer_viewmodel
 
         self._setup_ui()
         self._connect_signals()
@@ -84,6 +89,8 @@ class MainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         """Wire the navigation managers navigate signal to the page-change slot."""
         self._navigation_manager.navigate.connect(self._change_page)
+        self._file_transfer_vm.receive_error.connect(self._on_file_receive_error)
+        self._file_transfer_vm.metadata_received.connect(self._on_file_received_metadata)
 
     def changeEvent(self, event: QEvent) -> None:
         """Intercept minimize events and hide the window to the system tray.
@@ -98,6 +105,11 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
 
     # ── Slots ──────────────────────────────────────────────────────────────────
+
+    @Slot(str,int)
+    def _on_file_received_metadata(self,filename: str, file_size: int) -> None:
+        self._toast = FileReceivedToast(filename, file_size)
+        self._toast.show_toast()
 
     @Slot(int)
     def _change_page(self, index: int) -> None:
@@ -125,3 +137,7 @@ class MainWindow(QMainWindow):
         """
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._restore_window()
+
+    @Slot()
+    def _on_file_receive_error(self, error: str) -> None:
+        TransferErrorDialog()

@@ -63,3 +63,9 @@ class IndicatorStyles(PathsEnum):
     """Qt virtual paths to indicator-widget QSS stylesheets."""
 
     CONNECTION_PILL = ":/styles/indicators/connection_pill.qss"
+
+
+class ToastStyles(PathsEnum):
+    """Qt virtual paths to toast-widget QSS stylesheets."""
+
+    FILE_RECEIVED = ":/styles/toasts/file-received.qss"

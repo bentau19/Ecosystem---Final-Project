@@ -11,6 +11,8 @@ START_FILE = "./main.py"
 TESTS_DIR = "."
 
 
+
+
 def compile_resources() -> None:
     """Compile the Qt resource file (syncdose.qrc) into resources_qrc.py.
 
@@ -60,6 +62,9 @@ def run_app() -> None:
 
 
 if __name__ == "__main__":
+
+    import hashlib
+
     print("Using Python:", sys.executable)
 
     compile_resources()

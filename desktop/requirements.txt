@@ -2,5 +2,7 @@ pyside6>=6.5.0
 pytest>=8.3.4
 pytest-qt>=4.4.0
 qrcode>= 7.4.2
+pillow >= 12.2.0
 pyinstaller>=5.11.0
 tausync-py>= 0.1.0
+jsonschema>= 4.17.3

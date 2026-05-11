@@ -168,6 +168,22 @@ class LogoColors(ColorsEnum):
     GRADIENT_END = Palette.SILVER_500  # End color for the gradient
 
 
+class FileReceivedToastColors(ColorsEnum):
+    """Component-scoped color tokens for the file-received toast notification."""
+
+    BACKGROUND         = Palette.DARK_750   # Elevated card surface
+    BORDER             = Palette.GRAY_640   # Card border default
+    TITLE              = Palette.SLATE_100  # Primary heading text
+    FILENAME           = Palette.SLATE_500  # Secondary / muted filename text
+    ICON_BG            = Palette.CYAN_900   # Deep cyan tint — icon circle bg
+    ICON_BORDER        = Palette.CYAN_800   # Mid cyan tint — icon circle border
+    ICON_COLOR         = Palette.CYAN_400   # Cyan accent — icon character
+    DOWNLOAD_BTN       = Palette.CYAN_400   # Primary action text (default)
+    DOWNLOAD_BTN_HOVER = Palette.TEAL_200   # Primary action text (hover)
+    CANCEL_BTN         = Palette.SLATE_500  # Neutral secondary text (default)
+    CANCEL_BTN_HOVER   = Palette.SLATE_100  # Neutral secondary text (hover)
+
+
 class HandlerDialogColors(ColorsEnum):
     """Component-scoped color tokens for file-handler error dialogs.
 
@@ -176,8 +192,8 @@ class HandlerDialogColors(ColorsEnum):
     ``_setup_style`` method — they do not live here.
     """
 
-    BACKGROUND     = Palette.DARK_900   # Dialog body background surface
-    BORDER         = Palette.GRAY_700   # Dialog border + icon-strip separator
-    TEXT_PRIMARY   = Palette.SLATE_100  # Bold heading text
-    TEXT_SECONDARY = Palette.SLATE_500  # Explanatory body text
-    BUTTON_TEXT    = Palette.DARK_900   # Foreground on the dismiss button
+    BACKGROUND       = Palette.DARK_900   # Dialog body background surface
+    BORDER           = Palette.GRAY_700   # Dialog border
+    TEXT_PRIMARY     = Palette.SLATE_100  # Bold heading text
+    TEXT_SECONDARY   = Palette.SLATE_500  # Explanatory body text
+    BTN_GRADIENT_END = "#0891b2"          # Try Again gradient end (sky-600)

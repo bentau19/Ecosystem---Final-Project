@@ -9,7 +9,6 @@ from resources.paths import DashboardStyles
 from resources.spacing import Spacing
 from app.app_state import app_state
 from utils.styles import load_stylesheet
-from viewmodels.tool import ToolViewModel
 from views.widgets.dashboard.tool_card import ToolCard
 
 
@@ -37,7 +36,7 @@ class ToolsGrid(QWidget):
 
         self._active_tools: list[ToolCard] = []
 
-        self._tool_view_model: ToolViewModel = ToolViewModel(app_state.tools_repository)
+        self._tool_view_model = app_state.tool_viewmodel
         self._main_layout: FlowLayout
 
         self._setup_ui()

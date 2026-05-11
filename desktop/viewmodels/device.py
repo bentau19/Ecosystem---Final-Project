@@ -1,5 +1,6 @@
 import random
 import uuid
+
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 from datetime import datetime
 
@@ -12,7 +13,6 @@ from domain.dto.device_info import (
 )
 from domain.dto.previous_device import PreviousDeviceDTO
 from domain.entities.device_info import DeviceEntity
-from repositories.device import DeviceRepository
 from resources.paths import Icons
 from services.connectivity import ConnectivityService
 from services.device_info import DeviceInfoService
@@ -49,33 +49,37 @@ class DeviceViewModel(QObject):
 
     def __init__(
             self,
-            repository: DeviceRepository,
             connectivity_service: ConnectivityService,
             device_info_service: DeviceInfoService,
             parent: QObject | None = None,
     ) -> None:
-        """Initialize the ViewModel and wire up repository and service signals.
+        """Initialize the ViewModel and wire up service signals.
 
         Args:
-            repository: The device repository used to persist and retrieve
-                :class:`~entities.device_info.DeviceEntity` objects.
             connectivity_service: The service that manages the TauSync
                 connection and emits device lifecycle signals.
             device_info_service: The service that reads device metadata from
-                TauSync channels and emits a populated DeviceEntity.
+                TauSync channels, persists entities, and exposes repository
+                read operations.
             parent: Optional Qt parent object for memory management.
         """
         super().__init__(parent)
-        self._device_repository: DeviceRepository = repository
         self._connectivity_service: ConnectivityService = connectivity_service
         self._device_info_service: DeviceInfoService = device_info_service
 
         self._connectivity_service.device_connected.connect(self._on_device_connected)
-        self._connectivity_service.device_disconnected.connect(self.device_disconnected)
+        self._connectivity_service.device_disconnected.connect(self._on_device_disconnected)
         self._device_info_service.device_info_ready.connect(self._on_device_info_ready)
+        self._device_info_service.device_fetched.connect(self._on_device_fetched)
+        self._device_info_service.all_devices_fetched.connect(self._on_all_devices_fetched)
+
+        # Start both services so DB reads (fetch_device_by_id / fetch_all_devices)
+        # are available immediately at app startup, before any device connects.
+        self._device_info_service.start()
+        self._connectivity_service.start()
 
         # Mock device, until connectivity in phone side will be established
-        self._device_repository.save(
+        self._device_info_service.save(
             DeviceEntity(
                 id="1",
                 name=str(uuid.uuid4()),
@@ -99,31 +103,30 @@ class DeviceViewModel(QObject):
     # ── Public API ────────────────────────────────────────────────────────────
 
     def load_device_info(self) -> None:
-        """Load the current device from the repository and emit ``device_infos_updated``.
+        """Request the current device from the service on a background thread.
 
-        If the device ID does not match any stored entity, the method returns
-        without emitting so the view retains its previous state.
+        The result arrives asynchronously via :attr:`device_infos_updated`
+        once :meth:`~services.device_info.DeviceInfoService.fetch_device_by_id`
+        completes and :meth:`_on_device_fetched` handles the response.
 
         Emits:
-            device_infos_updated: With ``list[DeviceInfoDTO]`` if the current
-                device is found in the repository.
+            device_infos_updated: Asynchronously, with ``list[DeviceInfoDTO]``
+                if the current device is found in the repository.
         """
-        device_entity = self._device_repository.get_by_id(self._current_device_connected_id)
-        if device_entity is None:
-            return
-
-        self.device_infos_updated.emit(self._to_device_info_dtos(entity=device_entity))
+        self._device_info_service.fetch_device_by_id(self._current_device_connected_id)
 
     def load_devices(self) -> None:
-        """Load all previous devices from the repository and emit ``previous_devices_updated``.
+        """Request all stored devices from the service on a background thread.
+
+        The result arrives asynchronously via :attr:`previous_devices_updated`
+        once :meth:`~services.device_info.DeviceInfoService.fetch_all_devices`
+        completes and :meth:`_on_all_devices_fetched` handles the response.
 
         Emits:
-            previous_devices_updated: With ``list[PreviousDeviceDTO]`` containing
-                every device currently persisted in the repository.
+            previous_devices_updated: Asynchronously, with
+                ``list[PreviousDeviceDTO]`` for every persisted device.
         """
-        previous_devices = self._device_repository.get_all()
-        previous_device_dtos = [self._to_prev_device_dto(device) for device in previous_devices]
-        self.previous_devices_updated.emit(previous_device_dtos)
+        self._device_info_service.fetch_all_devices()
 
     def update_device_info(self) -> None:
         """Trigger a manual refresh of the current device's info.
@@ -145,7 +148,7 @@ class DeviceViewModel(QObject):
 
     def disconnect_device(self) -> None:
         """Disconnect the currently connected device via the connectivity service."""
-        self._connectivity_service.disconnect_device()
+        self._connectivity_service.stop()
 
     # ── Private helpers ────────────────────────────────────────────────────────
 
@@ -159,8 +162,9 @@ class DeviceViewModel(QObject):
     def _on_device_info_ready(self, entity: DeviceEntity) -> None:
         """Handle a freshly assembled DeviceEntity from the device-info service.
 
-        Persists the entity to the repository, updates the tracked ID, and
-        emits the DTO list so the view refreshes.
+        The entity is already persisted by :class:`~services.device_info.DeviceInfoService`
+        before this signal fires, so the slot only needs to update the tracked
+        ID and emit the DTO list so the view refreshes.
 
         Args:
             entity: The :class:`~entities.device_info.DeviceEntity` assembled
@@ -170,8 +174,38 @@ class DeviceViewModel(QObject):
             device_infos_updated: With the converted ``list[DeviceInfoDTO]``.
         """
         self._current_device_connected_id = entity.id
-        self._device_repository.save(entity)
         self.device_infos_updated.emit(self._to_device_info_dtos(entity))
+
+    @Slot(object)
+    def _on_device_fetched(self, entity: DeviceEntity | None) -> None:
+        """Handle the async result of :meth:`~services.device_info.DeviceInfoService.fetch_device_by_id`.
+
+        Args:
+            entity: The fetched :class:`~domain.entities.device_info.DeviceEntity`,
+                or ``None`` if no match was found in the repository.
+
+        Emits:
+            device_infos_updated: With ``list[DeviceInfoDTO]`` if *entity* is
+                not ``None``.
+        """
+        if entity is None:
+            return
+        self.device_infos_updated.emit(self._to_device_info_dtos(entity))
+
+    @Slot(list)
+    def _on_all_devices_fetched(self, devices: list[DeviceEntity]) -> None:
+        """Handle the async result of :meth:`~services.device_info.DeviceInfoService.fetch_all_devices`.
+
+        Args:
+            devices: All :class:`~domain.entities.device_info.DeviceEntity`
+                objects currently stored in the repository.
+
+        Emits:
+            previous_devices_updated: With the converted
+                ``list[PreviousDeviceDTO]``.
+        """
+        dtos = [self._to_prev_device_dto(d) for d in devices]
+        self.previous_devices_updated.emit(dtos)
 
     @Slot(object)
     def _on_entity_saved(self, entity: DeviceEntity) -> None:
@@ -195,8 +229,16 @@ class DeviceViewModel(QObject):
         Emits:
             device_connected: To signal views that a device is now connected.
         """
+        self._device_info_service.start()
+        self._device_info_service.fetch_device_info()
         self.device_connected.emit()
-        self._request_device_info_refresh()
+
+    @Slot()
+    def _on_device_disconnected(self):
+        """Handle a device disconnection event from the connectivity service."""
+        self._device_info_service.stop()
+        self._connectivity_service.start()
+        self.device_disconnected.emit()
 
     # ── Conversion ────────────────────────────────────────────────────────────
 

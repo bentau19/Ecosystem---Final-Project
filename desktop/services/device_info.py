@@ -5,18 +5,17 @@ Reads device metadata from TauSync named channels on a background thread
 and emits a fully-populated DeviceEntity so the ViewModel can persist and
 display it without touching the network layer directly.
 """
+import threading
 import uuid
 from datetime import date
 
 from PySide6.QtCore import QObject, Signal
-from tausync_py import TauSync
 
 from domain.entities.device_info import DeviceEntity
 from domain.enums.device_info_channels import DeviceInfoChannels
 from repositories.device import DeviceRepository
 from services.connectivity import ConnectivityService
 from utils import network
-from utils.decorators import threaded
 
 
 class DeviceInfoService(QObject):
@@ -40,7 +39,10 @@ class DeviceInfoService(QObject):
     """
 
     device_info_ready = Signal(object)
+    device_saved = Signal(object)
     read_error = Signal(str)
+    device_fetched = Signal(object)       # DeviceEntity | None
+    all_devices_fetched = Signal(list)    # list[DeviceEntity]
 
     def __init__(
             self,
@@ -61,14 +63,127 @@ class DeviceInfoService(QObject):
             parent: Optional parent QObject for Qt memory management.
         """
         super().__init__(parent)
-        self._tau: TauSync = connectivity.tau
+        self._connectivity: ConnectivityService = connectivity
         self._device_repository: DeviceRepository = repository
-        self._threads: list = []
+        self._threads: list[threading.Thread] = []
+
+        self._lifecycle_lock: threading.Lock = threading.Lock()
+        self._is_running: threading.Event = threading.Event()
+        self._threads_lock: threading.Lock = threading.Lock()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    @threaded
+    def save(self, entity: DeviceEntity) -> None:
+        """Persist *entity* to the repository and emit :attr:`device_saved`.
+
+        Args:
+            entity: The :class:`~domain.entities.device_info.DeviceEntity` to
+                persist.  Delegates directly to the underlying repository.
+
+        Emits:
+            device_saved: With the saved entity after the repository write.
+        """
+        if not self._is_running.is_set():
+            return
+        self._spawn(self._save, entity)
+
+    def fetch_device_by_id(self, device_id: str) -> None:
+        """Fetch a stored device by ID on a background thread.
+
+        Gated on :attr:`_is_running` for lifecycle consistency.  Call
+        :meth:`start` before invoking this method — ``DeviceViewModel``
+        does so during construction so DB reads at app startup are safe.
+
+        Args:
+            device_id: The UUID of the device to retrieve.
+
+        Emits:
+            device_fetched: With the matching
+                :class:`~domain.entities.device_info.DeviceEntity`, or
+                ``None`` if no such device exists in the repository.
+        """
+        if not self._is_running.is_set():
+            return
+        self._spawn(self._fetch_device_by_id, device_id)
+
+    def fetch_all_devices(self) -> None:
+        """Fetch all stored devices on a background thread.
+
+        Gated on :attr:`_is_running` for lifecycle consistency.  Call
+        :meth:`start` before invoking this method — ``DeviceViewModel``
+        does so during construction so DB reads at app startup are safe.
+
+        Emits:
+            all_devices_fetched: With the full
+                ``list[DeviceEntity]`` currently stored in the repository.
+        """
+        if not self._is_running.is_set():
+            return
+        self._spawn(self._fetch_all_devices)
+
+    def start(self) -> None:
+        """Start the service on a background thread."""
+        threading.Thread(target=self._start, daemon=True).start()
+
+    def stop(self) -> None:
+        """Stop the service on a background thread, joining all pending workers."""
+        threading.Thread(target=self._stop, daemon=True).start()
+
+    def _start(self) -> None:
+        with self._lifecycle_lock:
+            if self._is_running.is_set():
+                return
+            self._is_running.set()
+
+    def _stop(self) -> None:
+        with self._lifecycle_lock:
+            if not self._is_running.is_set():
+                return
+            self._is_running.clear()
+            pending_threads: list[threading.Thread] = self._get_pending_threads()
+            for t in pending_threads:
+                if t == threading.current_thread():
+                    continue
+                t.join()
+
     def fetch_device_info(self) -> None:
+        if not self._is_running.is_set():
+            return
+        self._spawn(self._get_device_info)
+
+    # ── Private helpers ────────────────────────────────────────────────────────
+
+    def _spawn(self, target, *args):
+        """All thread creation must go through here."""
+        if not self._is_running.is_set():
+            return  # reject new spawns during teardown
+        t = threading.Thread(target=target, args=args, daemon=True)
+        with self._threads_lock:
+            self._threads.append(t)
+        t.start()
+
+    def _save(self, entity: DeviceEntity) -> None:
+        self._device_repository.save(entity)
+        self.device_saved.emit(entity)
+
+    def _fetch_device_by_id(self, device_id: str) -> None:
+        entity = self._device_repository.get_by_id(device_id)
+        self.device_fetched.emit(entity)
+
+    def _fetch_all_devices(self) -> None:
+        devices = self._device_repository.get_all()
+        self.all_devices_fetched.emit(devices)
+
+    def _get_pending_threads(self) -> list[threading.Thread]:
+        threads: list[threading.Thread] = []
+        while True:
+            with self._threads_lock:
+                pending_threads = [t for t in self._threads if t.is_alive()]
+                if not pending_threads:
+                    return threads
+                threads.extend(pending_threads)
+
+    def _get_device_info(self) -> None:
         """Read all device fields from TauSync channels and emit a DeviceEntity.
 
         Runs on a background thread. Silently no-ops if TauSync is not currently
@@ -81,7 +196,8 @@ class DeviceInfoService(QObject):
                 reads complete successfully.
             read_error: With the exception message string if a read fails.
         """
-        if not self._tau.is_connected:
+        tau = self._connectivity.tau
+        if not tau.is_connected:
             return
         try:
             entity = DeviceEntity(
@@ -100,11 +216,10 @@ class DeviceInfoService(QObject):
                 ),
                 ip=self._read_channel_string(DeviceInfoChannels.IP),
             )
+            self.save(entity)
             self.device_info_ready.emit(entity)
         except Exception as exc:
             self.read_error.emit(str(exc))
-
-    # ── Private helpers ────────────────────────────────────────────────────────
 
     def _read_channel_string(self, channel: DeviceInfoChannels) -> str:
         """Read the full payload from a named TauSync channel as a UTF-8 string.
@@ -117,7 +232,7 @@ class DeviceInfoService(QObject):
             The decoded payload string, which may be empty if the remote peer
             sent nothing before closing the stream.
         """
-        return network.read_from_channel(self._tau, channel)
+        return network.read_string_from_channel(self._connectivity.tau, channel.value)
 
     def _read_device_id(self) -> str:
         """Read the device ID from the TauSync ID channel, generating one if absent.

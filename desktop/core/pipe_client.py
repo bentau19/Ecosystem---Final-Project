@@ -6,9 +6,9 @@ Standalone Windows process launched by the OS when the user invokes the
 path as ``sys.argv[1]``, writes it to the SyncDose named pipe, and exits.
 
 If the pipe is not found (main app not running or phone not connected) a
-:class:`~views.widgets.handlers.handler_dialog.PhoneNotDetectedDialog` is shown.
+:class:`~views.widgets.dialogs.handler_dialog.PhoneNotDetectedDialog` is shown.
 Any other failure shows a
-:class:`~views.widgets.handlers.handler_dialog.TransferErrorDialog`.
+:class:`~views.widgets.dialogs.handler_dialog.TransferErrorDialog`.
 In both cases the user may click **Try Again** to retry the send, or
 **Dismiss** to abort.
 """
@@ -18,8 +18,8 @@ from typing import Final
 from PySide6.QtCore import QCoreApplication
 from PySide6.QtWidgets import QApplication, QDialog
 
-from pipe import Client, PipeConnectionError, PipeTransferError
-from views.widgets.handlers.handler_dialog import (
+from native.windows.pipe import Client
+from views.widgets.dialogs.file_handler import (
     PhoneNotDetectedDialog,
     TransferErrorDialog,
 )
@@ -43,7 +43,7 @@ def send_via_pipe(file_path: str) -> None:
 
     Attempts to open the pipe and write the encoded path.  On success the
     function returns immediately.  On failure the appropriate error dialog is
-    shown modally; if the user clicks **Try Again** the write is retried,
+    shown modally; if the user clicks **Try Again** to write is retried,
     otherwise the function returns without sending.
 
     Args:
@@ -56,13 +56,13 @@ def send_via_pipe(file_path: str) -> None:
             client.close()
             return
 
-        except PipeConnectionError:
+        except ConnectionError:
             _ensure_app()
             if PhoneNotDetectedDialog().exec() != QDialog.DialogCode.Accepted:
                 return
-
-        except PipeTransferError:
+        except Exception as exe:
             _ensure_app()
+            print(exe)
             if TransferErrorDialog().exec() != QDialog.DialogCode.Accepted:
                 return
 
@@ -70,6 +70,6 @@ def send_via_pipe(file_path: str) -> None:
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # if len(sys.argv) < 2:
-    #     sys.exit(1)
-    send_via_pipe(PIPE_NAME)
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    send_via_pipe(sys.argv[1])

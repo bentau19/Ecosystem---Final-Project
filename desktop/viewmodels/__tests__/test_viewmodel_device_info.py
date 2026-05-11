@@ -37,11 +37,6 @@ def entity() -> DeviceEntity:
 
 
 @pytest.fixture()
-def mock_repo() -> MagicMock:
-    return MagicMock()
-
-
-@pytest.fixture()
 def mock_connectivity() -> MagicMock:
     return MagicMock()
 
@@ -54,73 +49,64 @@ def mock_device_info_service() -> MagicMock:
 @pytest.fixture()
 def view_model(
     qtbot,
-    mock_repo: MagicMock,
     mock_connectivity: MagicMock,
     mock_device_info_service: MagicMock,
 ) -> DeviceViewModel:
     return DeviceViewModel(
-        repository=mock_repo,
         connectivity_service=mock_connectivity,
         device_info_service=mock_device_info_service,
     )
 
 
 # ---------------------------------------------------------------------------
-# load_device_info
+# load_device_info / _on_device_fetched
 # ---------------------------------------------------------------------------
 
 
-def test_load_device_info_emits_device_infos_updated_when_entity_found(
+def test_load_device_info_calls_fetch_device_by_id_with_current_id(
     view_model: DeviceViewModel,
-    mock_repo: MagicMock,
+    mock_device_info_service: MagicMock,
+) -> None:
+    view_model.load_device_info()
+
+    mock_device_info_service.fetch_device_by_id.assert_called_with(
+        view_model._current_device_connected_id
+    )
+
+
+def test_on_device_fetched_emits_device_infos_updated_when_entity_found(
+    view_model: DeviceViewModel,
     entity: DeviceEntity,
 ) -> None:
-    mock_repo.get_by_id.return_value = entity
     received: list = []
     view_model.device_infos_updated.connect(lambda dtos: received.append(dtos))
 
-    view_model.load_device_info()
+    view_model._on_device_fetched(entity)
 
     assert len(received) == 1
 
 
-def test_load_device_info_does_not_emit_when_entity_not_found(
+def test_on_device_fetched_does_not_emit_when_entity_is_none(
     view_model: DeviceViewModel,
-    mock_repo: MagicMock,
 ) -> None:
-    mock_repo.get_by_id.return_value = None
     received: list = []
     view_model.device_infos_updated.connect(lambda dtos: received.append(dtos))
 
-    view_model.load_device_info()
+    view_model._on_device_fetched(None)
 
     assert received == []
 
 
-def test_load_device_info_emits_four_dtos(
+def test_on_device_fetched_emits_four_dtos(
     view_model: DeviceViewModel,
-    mock_repo: MagicMock,
     entity: DeviceEntity,
 ) -> None:
-    mock_repo.get_by_id.return_value = entity
     received: list = []
     view_model.device_infos_updated.connect(lambda dtos: received.extend(dtos))
 
-    view_model.load_device_info()
+    view_model._on_device_fetched(entity)
 
     assert len(received) == 4
-
-
-def test_load_device_info_queries_current_connected_id(
-    view_model: DeviceViewModel,
-    mock_repo: MagicMock,
-    entity: DeviceEntity,
-) -> None:
-    mock_repo.get_by_id.return_value = entity
-
-    view_model.load_device_info()
-
-    mock_repo.get_by_id.assert_called_once_with(view_model._current_device_connected_id)
 
 
 # ---------------------------------------------------------------------------
@@ -185,19 +171,21 @@ def test_on_entity_saved_storage_dto_fields_match_entity(
 # ---------------------------------------------------------------------------
 
 
-def test_on_device_info_ready_saves_entity_to_repo(
+def test_on_device_info_ready_does_not_save_again(
     view_model: DeviceViewModel,
-    mock_repo: MagicMock,
+    mock_device_info_service: MagicMock,
     entity: DeviceEntity,
 ) -> None:
+    # DeviceInfoService already persists the entity before emitting device_info_ready;
+    # the VM slot must not call save a second time.
+    mock_device_info_service.save.reset_mock()   # clear the call made in __init__
     view_model._on_device_info_ready(entity)
 
-    mock_repo.save.assert_called_with(entity)
+    mock_device_info_service.save.assert_not_called()
 
 
 def test_on_device_info_ready_updates_current_connected_id(
     view_model: DeviceViewModel,
-    mock_repo: MagicMock,
     entity: DeviceEntity,
 ) -> None:
     view_model._on_device_info_ready(entity)
@@ -207,7 +195,6 @@ def test_on_device_info_ready_updates_current_connected_id(
 
 def test_on_device_info_ready_emits_device_infos_updated(
     view_model: DeviceViewModel,
-    mock_repo: MagicMock,
     entity: DeviceEntity,
 ) -> None:
     received: list = []

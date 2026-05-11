@@ -1,9 +1,15 @@
+import os
+
 a = Analysis(
-    ['../../handlers/file.py'],
-    pathex=[],
-    binaries=[],
+    ['../../core/pipe_client.py'],
+    # SPECPATH = desktop/installer/specs  →  ../../ = desktop/
+    # Needed so PyInstaller can find the `native`, `views`, etc. packages
+    # whose root is desktop/, not desktop/core/ (the entry-script dir).
+    pathex=[os.path.normpath(os.path.join(SPECPATH, '..', '..'))],
+    binaries=[("../../native/windows/pipe/*.pyd", "native/windows/pipe")],
+
     datas=[("../../resources/", "resources/")],
-    hiddenimports=[],
+    hiddenimports=["native", "native.windows", "native.windows.pipe", "native.windows.pipe.pipe_module"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -168,6 +168,22 @@ class LogoColors(ColorsEnum):
     GRADIENT_END = Palette.SILVER_500  # End color for the gradient
 
 
+class FileReceivedToastColors(ColorsEnum):
+    """Component-scoped color tokens for the file-received toast notification."""
+
+    BACKGROUND         = Palette.DARK_750   # Elevated card surface
+    BORDER             = Palette.GRAY_640   # Card border default
+    TITLE              = Palette.SLATE_100  # Primary heading text
+    FILENAME           = Palette.SLATE_500  # Secondary / muted filename text
+    ICON_BG            = Palette.CYAN_900   # Deep cyan tint — icon circle bg
+    ICON_BORDER        = Palette.CYAN_800   # Mid cyan tint — icon circle border
+    ICON_COLOR         = Palette.CYAN_400   # Cyan accent — icon character
+    DOWNLOAD_BTN       = Palette.CYAN_400   # Primary action text (default)
+    DOWNLOAD_BTN_HOVER = Palette.TEAL_200   # Primary action text (hover)
+    CANCEL_BTN         = Palette.SLATE_500  # Neutral secondary text (default)
+    CANCEL_BTN_HOVER   = Palette.SLATE_100  # Neutral secondary text (hover)
+
+
 class HandlerDialogColors(ColorsEnum):
     """Component-scoped color tokens for file-handler error dialogs.
 

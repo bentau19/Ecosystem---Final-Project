@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal
@@ -54,7 +55,9 @@ class ToolRepository(
         """
         super().__init__(parent)
         self._serializer = ToolSerializer()
-        self._db_path = Path(__file__).parent.parent / "data" / "app.db"
+        self._db_path =  Path(os.environ.get("APPDATA")) / "SyncDose" / "app.db"
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._db_path.touch(exist_ok=True)
         self._configure_db()
 
     def _configure_db(self) -> None:

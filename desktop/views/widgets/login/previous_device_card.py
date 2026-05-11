@@ -195,7 +195,7 @@ class PreviousDeviceCard(QWidget):
         pass
 
     def _connect_signals(self) -> None:
-        """Wire the Connect button and ViewModel signals to their handlers."""
+        """Wire the Connect button and ViewModel signals to their dialogs."""
         self._connect_btn.clicked.connect(self._on_button_clicked)
         self._device_viewmodel.device_connected.connect(self._on_device_connected)
 

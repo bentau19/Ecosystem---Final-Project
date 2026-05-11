@@ -62,14 +62,13 @@ namespace TauSync.Implementations.Management
             _wifiTransport = new SocketTransport();
         }
 
-        public async Task InitializeTransports(string?targetId)
+        public async Task InitializeTransports(string?targetId, int? timeoutSeconds = null)
         {
             if (_wifiTransport.IsConnected())
                 throw new InvalidOperationException("Transport already connected.");
             if (_wifiTransport == null)
                 throw new InvalidOperationException("Not initialized.");
-            await _wifiTransport.Connect(targetId).ConfigureAwait(false);
-            
+            await _wifiTransport.Connect(targetId, timeoutSeconds).ConfigureAwait(false);     
         }
 
         public ITransport? GetWifiTransport() => _wifiTransport as ITransport;

@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from entities.device_info import DeviceEntity
+from domain.entities.device_info import DeviceEntity
 
 @pytest.fixture()
 def previous_device_online() -> DeviceEntity:

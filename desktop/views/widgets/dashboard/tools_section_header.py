@@ -6,7 +6,6 @@ from resources.paths import DashboardStyles
 from resources.spacing import Spacing
 from app.app_state import app_state
 from utils.styles import load_stylesheet
-from viewmodels.tool import ToolViewModel
 
 
 class ToolsSectionHeader(QWidget):
@@ -28,7 +27,7 @@ class ToolsSectionHeader(QWidget):
         self._title: QLabel
         self._tag: QLabel
 
-        self._tools_view_model: ToolViewModel = ToolViewModel(app_state.tools_repository)
+        self._tools_view_model = app_state.tool_viewmodel
 
         self._setup_ui()
         self._setup_style()
