@@ -52,6 +52,15 @@ namespace TauSync.Implementations.Management
         /// <inheritdoc />
         public bool IsConnected() => _wifiTransport?.IsConnected() ?? false;
 
+
+        public void Disconnect()  {
+            if (_disposed || !IsConnected()) {
+                    return;
+            }
+            _wifiTransport.Disconnect();
+
+        }
+
         /// <inheritdoc />
         public async Task<Stream> Connect(string word, int? timeoutSeconds = null)
         {
@@ -377,6 +386,7 @@ namespace TauSync.Implementations.Management
             if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
             return _readStream.Read(buffer, offset, count);
         }
+
 
         public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {

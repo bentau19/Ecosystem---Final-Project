@@ -75,8 +75,8 @@ class DeviceViewModel(QObject):
 
         # Start both services so DB reads (fetch_device_by_id / fetch_all_devices)
         # are available immediately at app startup, before any device connects.
-        self._device_info_service.start()
         self._connectivity_service.start()
+        self._device_info_service.start()
 
         # Mock device, until connectivity in phone side will be established
         self._device_info_service.save(

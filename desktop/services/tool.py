@@ -33,7 +33,7 @@ class ToolService(QObject):
 
     tool_added: Signal = Signal(object)
     tool_deleted: Signal = Signal(str)
-    all_enabled_tools_fetched: Signal = Signal(list)    # list[ToolEntity]
+    all_enabled_tools_fetched: Signal = Signal(list)  # list[ToolEntity]
 
     def __init__(
             self,
@@ -117,15 +117,8 @@ class ToolService(QObject):
         t.start()
 
     def _get_pending_threads(self) -> list[threading.Thread]:
-        threads: list[threading.Thread] = []
-        while True:
-            with self._threads_lock:
-                pending_threads = [t for t in self._threads if t.is_alive()]
-                if not pending_threads:
-                    return threads
-                threads.extend(pending_threads)
-
-    # ── Private helpers ────────────────────────────────────────────────────────
+        with self._threads_lock:
+            return [t for t in self._threads if t.is_alive()]
 
     def _fetch_all_enabled(self) -> None:
         tools = self._repository.get_all_enabled()

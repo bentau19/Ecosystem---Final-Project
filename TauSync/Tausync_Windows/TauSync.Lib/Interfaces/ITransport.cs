@@ -17,6 +17,7 @@ namespace TauSync.Interfaces
         /// <returns>Task that completes when connected.</returns>
         Task Connect(string? targetId, int? timeoutSeconds = null);
 
+        public void Disconnect();
         /// <summary>
         /// Sends raw binary data (full TPack: 8-byte header + payload). No extra length prefix.
         /// </summary>

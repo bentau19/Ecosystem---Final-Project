@@ -25,6 +25,10 @@ namespace TauSync.Interfaces
         /// </summary>
         bool IsConnected();
 
+
+        public void Disconnect();
+
+
         /// <summary>
         /// Connects on a Meeting Word. Both sides call Connect with the same word; when two peers have called
         /// Connect with the same word they are paired and each gets a duplex stream to the other. No Listen or Accept.

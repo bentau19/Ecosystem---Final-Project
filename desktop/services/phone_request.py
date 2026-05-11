@@ -83,14 +83,10 @@ class PhoneRequestService:
             self._threads.append(t)
         t.start()
 
+
     def _get_pending_threads(self) -> list[threading.Thread]:
-        threads: list[threading.Thread] = []
-        while True:
-            with self._threads_lock:
-                pending_threads = [t for t in self._threads if t.is_alive()]
-                if not pending_threads:
-                    return threads
-                threads.extend(pending_threads)
+        with self._threads_lock:
+            return [t for t in self._threads if t.is_alive()]
 
     def _listen_to_channels(self) -> None:
         """Read the peer's waiting channels and dispatch to registered handlers.

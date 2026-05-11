@@ -93,7 +93,7 @@ class ConnectivityService(QObject):
                 return
             self._is_running.set()
             self._tau = TauSync()
-            self._spawn(self._listen)
+        self._spawn(self._listen)
 
     def _stop(self) -> None:
         with self._lifecycle_lock:
@@ -117,7 +117,7 @@ class ConnectivityService(QObject):
         t.start()
 
     def _disconnect_device(self):
-        self._tau.dispose()
+        self._tau.disconnect()
         self.device_disconnected.emit()
 
     def _connect_to_device(self, ip: str) -> None:
@@ -162,10 +162,5 @@ class ConnectivityService(QObject):
                 self.connection_error.emit(str(exc))
 
     def _get_pending_threads(self) -> list[threading.Thread]:
-        threads: list[threading.Thread] = []
-        while True:
-            with self._threads_lock:
-                pending_threads = [t for t in self._threads if t.is_alive()]
-                if not pending_threads:
-                    return threads
-                threads.extend(pending_threads)
+        with self._threads_lock:
+            return [t for t in self._threads if t.is_alive()]

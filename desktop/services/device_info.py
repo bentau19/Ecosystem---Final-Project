@@ -41,8 +41,8 @@ class DeviceInfoService(QObject):
     device_info_ready = Signal(object)
     device_saved = Signal(object)
     read_error = Signal(str)
-    device_fetched = Signal(object)       # DeviceEntity | None
-    all_devices_fetched = Signal(list)    # list[DeviceEntity]
+    device_fetched = Signal(object)  # DeviceEntity | None
+    all_devices_fetched = Signal(list)  # list[DeviceEntity]
 
     def __init__(
             self,
@@ -145,6 +145,7 @@ class DeviceInfoService(QObject):
                 if t == threading.current_thread():
                     continue
                 t.join()
+        print("stopped")
 
     def fetch_device_info(self) -> None:
         if not self._is_running.is_set():
@@ -175,13 +176,8 @@ class DeviceInfoService(QObject):
         self.all_devices_fetched.emit(devices)
 
     def _get_pending_threads(self) -> list[threading.Thread]:
-        threads: list[threading.Thread] = []
-        while True:
-            with self._threads_lock:
-                pending_threads = [t for t in self._threads if t.is_alive()]
-                if not pending_threads:
-                    return threads
-                threads.extend(pending_threads)
+        with self._threads_lock:
+            return [t for t in self._threads if t.is_alive()]
 
     def _get_device_info(self) -> None:
         """Read all device fields from TauSync channels and emit a DeviceEntity.

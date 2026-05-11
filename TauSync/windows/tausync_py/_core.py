@@ -92,7 +92,6 @@ def _ensure_clr(dll_path: Optional[str] = None) -> None:
         from System.Runtime.InteropServices import GCHandle, GCHandleType  # pyright: ignore[reportMissingImports]
         from TauSync.Implementations.Management import ConnectionManager as _CM  # pyright: ignore[reportMissingImports]
         from System import Nullable, Int32
-        from System import TimeoutException
 
         _Array = Array
         _Byte = Byte
@@ -603,6 +602,8 @@ class TauSync:
             RuntimeError: If the transport was already established in
                 client mode, or if already listening.
         """
+        from System import TimeoutException
+
         self._check_not_disposed()
         with TauSync._global_role_lock:
             if TauSync._global_role == _ROLE_CLIENT:
@@ -646,6 +647,8 @@ class TauSync:
                 the opposite role, or already connected to a different
                 address.
         """
+
+        from System import TimeoutException
 
         ipaddress.IPv4Address(ip)
         self._check_not_disposed()
@@ -725,6 +728,8 @@ class TauSync:
                 manager has been disposed.
             ValueError: If *word* is empty/blank or *chunk_size* is invalid.
         """
+        from System import TimeoutException
+
         self._check_not_disposed()
         if TauSync._global_role == _ROLE_NONE:
             raise RuntimeError(
@@ -755,9 +760,20 @@ class TauSync:
         self._disposed = True
         try:
             self._manager.Dispose()
-            self._global_role = _ROLE_NONE
+            TauSync._global_role = _ROLE_NONE
         except Exception:
             pass
+
+    def disconnect(self) -> None:
+        if not self.is_connected:
+            return
+        self._check_not_disposed()
+
+        try:
+            self._manager.Disconnect()
+        except Exception as e:
+            print(e)
+            raise
 
     def new_manager(self) -> "TauSync":
         """Create another ``TauSync`` instance sharing the same singleton socket.

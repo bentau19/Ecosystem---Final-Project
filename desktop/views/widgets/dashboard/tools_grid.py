@@ -95,6 +95,7 @@ class ToolsGrid(QWidget):
         Args:
             tools: The list of enabled tool DTOs emitted by the ViewModel.
         """
+        print(tools)
         for tool in tools:
             description_label: QLabel = self._create_description_widget(tool.description)
             tool_card: ToolCard = ToolCard(

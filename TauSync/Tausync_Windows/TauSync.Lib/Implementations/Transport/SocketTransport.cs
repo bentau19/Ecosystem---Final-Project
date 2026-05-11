@@ -244,14 +244,22 @@ namespace TauSync.Implementations.Transport
         public void Disconnect()
         {
             if (!_isConnected) return;
-            _isConnected = false;
-            _receiveCts?.Cancel();
+           _receiveCts?.Cancel();
             try { _receiveTask?.Wait(TimeSpan.FromSeconds(2)); } catch { }
-            _stream?.Close();
+                try { _acceptTask?.Wait(TimeSpan.FromSeconds(1)); } catch { }
+              _tcpListener?.Stop();
+             _stream?.Close();
             _tcpClient?.Close();
+
+             _tcpListener = null;
             _stream = null;
-            _tcpClient = null;
-            _targetId = null;
+             _tcpClient = null;
+             _isConnected = false;
+            _receiveCts = null;
+             _timeoutCts = null;
+            _receiveTask = null;
+            _acceptTask = null;
+            _connectionTcs = null;
         }
 
         private async Task AcceptLoopAsync(CancellationToken ct)
