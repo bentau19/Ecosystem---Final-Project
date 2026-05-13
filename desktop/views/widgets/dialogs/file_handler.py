@@ -11,9 +11,10 @@ from typing import Final
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout, QWidget, QApplication
 
-from resources.colors import HandlerDialogColors, Palette
+from app.theme_manager import theme_manager
+from resources.colors import HandlerDialogColors, LightHandlerDialogColors, Palette
 from resources.spacing import Spacing
-from utils.styles import load_stylesheet_disk
+from utils.styles import load_stylesheet_disk, themed
 
 # Path to the shared QSS template, relative to the resources/ directory.
 _QSS_REL_PATH: Final[str] = "styles/handlers/handler-dialog.qss"
@@ -64,7 +65,6 @@ class _BaseHandlerDialog(QDialog):
     # ── UI construction ────────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
-        """Configure window properties, then create widgets and layout."""
         self.setObjectName("HandlerDialog")
         self.setWindowTitle("SyncDose")
         self.setFixedWidth(self._DIALOG_WIDTH)
@@ -75,7 +75,6 @@ class _BaseHandlerDialog(QDialog):
         self._setup_layout()
 
     def _create_widgets(self) -> None:
-        """Instantiate all child widgets and store as instance attributes."""
         self._icon_circle: QLabel = self._create_icon_circle()
         self._title_label: QLabel = self._create_title_label()
         self._message_label: QLabel = self._create_message_label()
@@ -83,7 +82,6 @@ class _BaseHandlerDialog(QDialog):
         self._dismiss_button: QPushButton = self._create_dismiss_button()
 
     def _setup_layout(self) -> None:
-        """Arrange child widgets in a vertical layout matching the design spec."""
         root: QVBoxLayout = QVBoxLayout(self)
         # top: 32px  |  sides: 24px  |  bottom: 24px  (mirrors mockup padding)
         root.setContentsMargins(
@@ -105,12 +103,6 @@ class _BaseHandlerDialog(QDialog):
         root.addWidget(self._dismiss_button)
 
     def _create_icon_circle(self) -> QLabel:
-        """Return the fixed-size circle label containing the icon character.
-
-        Returns:
-            A :class:`QLabel` sized to :attr:`_ICON_SIZE` × :attr:`_ICON_SIZE`,
-            centered horizontally via the layout alignment flag.
-        """
         circle = QLabel(self._icon_char)
         circle.setObjectName("IconCircle")
         circle.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -118,7 +110,6 @@ class _BaseHandlerDialog(QDialog):
         return circle
 
     def _create_title_label(self) -> QLabel:
-        """Return the centered, word-wrapped heading label."""
         label = QLabel(self._title)
         label.setObjectName("TitleLabel")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -126,7 +117,6 @@ class _BaseHandlerDialog(QDialog):
         return label
 
     def _create_message_label(self) -> QLabel:
-        """Return the centered, word-wrapped body-text label."""
         label = QLabel(self._message)
         label.setObjectName("MessageLabel")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -134,7 +124,6 @@ class _BaseHandlerDialog(QDialog):
         return label
 
     def _create_try_again_button(self) -> QPushButton:
-        """Return the full-width primary gradient action button."""
         btn = QPushButton("Try Again")
         btn.setObjectName("TryAgainButton")
         btn.setFixedHeight(self._BUTTON_HEIGHT)
@@ -142,7 +131,6 @@ class _BaseHandlerDialog(QDialog):
         return btn
 
     def _create_dismiss_button(self) -> QPushButton:
-        """Return the full-width secondary neutral dismiss button."""
         btn = QPushButton("Dismiss")
         btn.setObjectName("DismissButton")
         btn.setFixedHeight(self._BUTTON_HEIGHT)
@@ -153,34 +141,17 @@ class _BaseHandlerDialog(QDialog):
 
     @staticmethod
     def _to_rgba(hex_color: str, alpha: int) -> str:
-        """Convert ``#RRGGBB`` to a QSS-safe ``rgba(r, g, b, a)`` string.
-
-        Qt QSS reads 8-digit hex as ``#AARRGGBB``, not ``#RRGGBBAA``, so
-        appending alpha bytes to a hex accent produces the wrong color.
-        This helper emits the unambiguous ``rgba()`` form instead.
-
-        Args:
-            hex_color: Six-digit hex string prefixed with ``#``.
-            alpha: Alpha channel, 0 (transparent) – 255 (opaque).
-
-        Returns:
-            A QSS ``rgba(r, g, b, alpha)`` color string.
-        """
+        # Qt QSS parses 8-digit hex as #AARRGGBB, not #RRGGBBAA, so rgba() is
+        # the only unambiguous way to express a hex color with an alpha channel.
         h = hex_color.lstrip('#')
         r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
         return f"rgba({r}, {g}, {b}, {alpha})"
 
     def _apply_style(self) -> None:
-        """Load the QSS template from disk and inject accent-derived tokens.
-
-        Static tokens (BACKGROUND, BORDER, TEXT_*, BTN_GRADIENT_END) are
-        resolved by :func:`~utils.styles.load_stylesheet_disk` via
-        :class:`~resources.colors.HandlerDialogColors`.  The three
-        accent-derived placeholders below vary per dialog variant and are
-        injected manually.  All alpha-bearing tokens use ``rgba()`` so Qt
-        QSS parses them correctly (8-digit hex is ``#AARRGGBB`` in Qt).
-        """
-        qss: str = load_stylesheet_disk(_QSS_REL_PATH, [HandlerDialogColors])
+        qss: str = load_stylesheet_disk(
+            _QSS_REL_PATH,
+            themed([HandlerDialogColors], [LightHandlerDialogColors], theme_manager.is_dark),
+        )
         qss = (
             qss
             .replace("{{ACCENT}}", self._accent)
@@ -192,9 +163,9 @@ class _BaseHandlerDialog(QDialog):
     # ── Signals ────────────────────────────────────────────────────────────────
 
     def _connect_signals(self) -> None:
-        """Wire widget signals to slots."""
         self._try_again_button.clicked.connect(self.accept)  # → Accepted
         self._dismiss_button.clicked.connect(self.reject)  # → Rejected
+        theme_manager.theme_changed.connect(self._apply_style)
 
 
 # ── Concrete dialogs ───────────────────────────────────────────────────────────

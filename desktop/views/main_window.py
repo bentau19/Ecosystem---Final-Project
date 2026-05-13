@@ -7,6 +7,9 @@ from PySide6.QtWidgets import (
 
 import utils.styles
 from app.app_state import app_state
+from app.theme_manager import theme_manager
+from resources.colors import Colors, LightColors
+from utils.styles import themed
 from domain.enums.screen import Screen
 from resources.paths import Icons, Styles
 from app.navigation_manager import navigation_manager, NavigationManager
@@ -42,6 +45,7 @@ class MainWindow(QMainWindow):
         self._login_screen: LoginScreen
         self._dashboard_screen: DashboardScreen
         self._tray_icon: QSystemTrayIcon
+        self._tray_menu: QMenu
 
         self._navigation_manager: NavigationManager = navigation_manager
         self._screens: dict[Screen, QWidget]
@@ -53,7 +57,6 @@ class MainWindow(QMainWindow):
 
     # ── Setup ──────────────────────────────────────────────────────────────────
     def _setup_ui(self) -> None:
-        """Build the stacked widget, register both screens, and set up the tray."""
         self._stack = QStackedWidget(self)
 
         self._screens = {
@@ -68,29 +71,28 @@ class MainWindow(QMainWindow):
         self._setup_tray()
 
     def _setup_tray(self) -> None:
-        """Create the system tray icon with a context menu."""
         self._tray_icon = QSystemTrayIcon(QIcon(Icons.LOGO), parent=self)
         self._tray_icon.setToolTip("SyncDose")
 
         # Context menu: Open + Quit
-        tray_menu = QMenu()
-        tray_menu.setStyleSheet(utils.styles.load_stylesheet(Styles.TRAY_MENU))
-        open_action = tray_menu.addAction("Open SyncDose")
-        tray_menu.addSeparator()
-        quit_action = tray_menu.addAction("Quit")
+        self._tray_menu = QMenu()
+        self._restyle_tray()
+        open_action = self._tray_menu.addAction("Open SyncDose")
+        self._tray_menu.addSeparator()
+        quit_action = self._tray_menu.addAction("Quit")
 
         open_action.triggered.connect(self._restore_window)
         quit_action.triggered.connect(QApplication.quit)
 
-        self._tray_icon.setContextMenu(tray_menu)
+        self._tray_icon.setContextMenu(self._tray_menu)
         self._tray_icon.activated.connect(self._on_tray_activated)
         self._tray_icon.show()
 
     def _connect_signals(self) -> None:
-        """Wire the navigation managers navigate signal to the page-change slot."""
         self._navigation_manager.navigate.connect(self._change_page)
         self._file_transfer_vm.receive_error.connect(self._on_file_receive_error)
         self._file_transfer_vm.metadata_received.connect(self._on_file_received_metadata)
+        theme_manager.theme_changed.connect(self._restyle_tray)
 
     def changeEvent(self, event: QEvent) -> None:
         """Intercept minimize events and hide the window to the system tray.
@@ -113,30 +115,27 @@ class MainWindow(QMainWindow):
 
     @Slot(int)
     def _change_page(self, index: int) -> None:
-        """Switch the stacked widget to the screen at the given index.
-
-        Args:
-            index: Zero-based index of the target screen in the stack,
-                corresponding to the insertion order in :meth:`_setup_ui`.
-        """
         self._stack.setCurrentIndex(index)
 
     @Slot()
     def _restore_window(self) -> None:
-        """Show and bring the main window to the foreground."""
         self.showNormal()
         self.activateWindow()
         self.raise_()
 
     @Slot(QSystemTrayIcon.ActivationReason)
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        """Restore the window on double-click of the tray icon.
-
-        Args:
-            reason: The activation reason provided by the tray icon event.
-        """
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._restore_window()
+
+    @Slot()
+    def _restyle_tray(self) -> None:
+        self._tray_menu.setStyleSheet(
+            utils.styles.load_stylesheet(
+                Styles.TRAY_MENU,
+                themed([Colors], [LightColors], theme_manager.is_dark),
+            )
+        )
 
     @Slot()
     def _on_file_receive_error(self, error: str) -> None:

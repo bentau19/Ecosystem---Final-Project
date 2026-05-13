@@ -11,6 +11,7 @@ from datetime import date
 
 from PySide6.QtCore import QObject, Signal
 
+import utils
 from domain.entities.device_info import DeviceEntity
 from domain.enums.device_info_channels import DeviceInfoChannels
 from repositories.device import DeviceRepository
@@ -145,7 +146,6 @@ class DeviceInfoService(QObject):
                 if t == threading.current_thread():
                     continue
                 t.join()
-        print("stopped")
 
     def fetch_device_info(self) -> None:
         if not self._is_running.is_set():
@@ -155,7 +155,6 @@ class DeviceInfoService(QObject):
     # ── Private helpers ────────────────────────────────────────────────────────
 
     def _spawn(self, target, *args):
-        """All thread creation must go through here."""
         if not self._is_running.is_set():
             return  # reject new spawns during teardown
         t = threading.Thread(target=target, args=args, daemon=True)
@@ -180,82 +179,50 @@ class DeviceInfoService(QObject):
             return [t for t in self._threads if t.is_alive()]
 
     def _get_device_info(self) -> None:
-        """Read all device fields from TauSync channels and emit a DeviceEntity.
-
-        Runs on a background thread. Silently no-ops if TauSync is not currently
-        connected. Emits ``read_error`` if any channel read raises an exception
-        so the caller is notified rather than left in an unknown state.
-
-        Emits:
-            device_info_ready: With the assembled
-                :class:`~entities.device_info.DeviceEntity` once all channel
-                reads complete successfully.
-            read_error: With the exception message string if a read fails.
-        """
         tau = self._connectivity.tau
         if not tau.is_connected:
             return
         try:
             entity = DeviceEntity(
                 id=self._read_device_id(),
-                tag=self._read_channel_string(DeviceInfoChannels.TAG) or "default",
-                name=self._read_channel_string(DeviceInfoChannels.NAME),
-                os=self._read_channel_string(DeviceInfoChannels.OS),
-                battery_level=int(self._read_channel_string(DeviceInfoChannels.BATTERY_LEVEL)),
+                tag=utils.network.read_string_from_channel(tau, DeviceInfoChannels.TAG_FROM_ANDROID.value) or "default",
+                name=utils.network.read_string_from_channel(tau, DeviceInfoChannels.NAME_FROM_ANDROID.value),
+                os=utils.network.read_string_from_channel(tau, DeviceInfoChannels.OS_FROM_ANDROID.value),
+                battery_level=int(utils.network.read_string_from_channel(tau, DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.value)),
                 battery_charging=(
-                        self._read_channel_string(DeviceInfoChannels.BATTERY_CHARGING).lower() == "true"
+                        utils.network.read_string_from_channel(tau,
+                                                               DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.value).lower() == "true"
                 ),
-                storage_total=int(self._read_channel_string(DeviceInfoChannels.STORAGE_TOTAL)),
-                storage_used=int(self._read_channel_string(DeviceInfoChannels.STORAGE_USED)),
+                storage_total=int(utils.network.read_string_from_channel(tau, DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.value)),
+                storage_used=int(utils.network.read_string_from_channel(tau, DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.value)),
                 last_connected=date.fromisoformat(
-                    self._read_channel_string(DeviceInfoChannels.LAST_SEEN)
+                    utils.network.read_string_from_channel(tau, DeviceInfoChannels.LAST_SEEN_FROM_ANDROID.value)
                 ),
-                ip=self._read_channel_string(DeviceInfoChannels.IP),
+                ip=utils.network.read_string_from_channel(tau, DeviceInfoChannels.IP_FROM_ANDROID.value),
             )
+            print(entity)
             self.save(entity)
             self.device_info_ready.emit(entity)
         except Exception as exc:
             self.read_error.emit(str(exc))
 
-    def _read_channel_string(self, channel: DeviceInfoChannels) -> str:
-        """Read the full payload from a named TauSync channel as a UTF-8 string.
-
-        Args:
-            channel: The :class:`~enums.device_info_channels.DeviceInfoChannels`
-                member identifying the channel to read from.
-
-        Returns:
-            The decoded payload string, which may be empty if the remote peer
-            sent nothing before closing the stream.
-        """
-        return network.read_string_from_channel(self._connectivity.tau, channel.value)
-
     def _read_device_id(self) -> str:
-        """Read the device ID from the TauSync ID channel, generating one if absent.
+        tau = self._connectivity.tau
 
-        If the remote device sends an empty string on the ID channel (i.e. it
-        has no previously assigned ID), a new UUID is generated that is
-        guaranteed to be absent from the local repository.
+        device_id: str
+        with tau.connect(DeviceInfoChannels.ID.value) as stream:
+            resp = stream.read_line().decode("utf-8").replace("\n", "")
 
-        Returns:
-            The device ID provided by the remote device, or a freshly generated
-            UUID that is unique within the local repository.
-        """
-        device_id = self._read_channel_string(DeviceInfoChannels.ID)
-        if device_id == "":
-            return self._generate_unique_id()
+            # Empty string means the remote device has no previously assigned ID.
+            if resp == "":
+                device_id = self._generate_unique_id()
+            else:
+                device_id = resp
+            stream.write_string(device_id)
         return device_id
 
     def _generate_unique_id(self) -> str:
-        """Generate a UUID that does not already exist in the device repository.
-
-        Loops until a candidate UUID is absent from the local database,
-        guaranteeing uniqueness before the ID is assigned to a new device.
-
-        Returns:
-            A UUID string guaranteed to be absent from the local database.
-        """
         while True:
-            candidate_id = str(uuid.uuid4())
+            candidate_id = str(uuid.uuid4().hex)
             if not self._device_repository.id_exists(candidate_id):
                 return candidate_id

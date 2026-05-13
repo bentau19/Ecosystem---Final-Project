@@ -2,10 +2,11 @@ from PySide6.QtCore import QPropertyAnimation, QEasingCurve, Signal
 from PySide6.QtGui import QColor, QMouseEvent, Qt, QIcon, QPixmap
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget, QFrame
 
-from resources.colors import InfoCardColors
+from app.theme_manager import theme_manager
+from resources.colors import InfoCardColors, LightInfoCardColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 
 
 class InfoCard(QFrame):
@@ -43,6 +44,7 @@ class InfoCard(QFrame):
 
         self._setup_ui()
         self._setup_style()
+        self._connect_signals()
 
     def _setup_ui(self) -> None:
         """
@@ -83,12 +85,17 @@ class InfoCard(QFrame):
         layout.addStretch()
 
     def _setup_style(self) -> None:
-        """
-        Apply the stylesheet to the dashboard card.
-        """
-        qss: str = load_stylesheet(DashboardStyles.INFO_CARD, [InfoCardColors])
+        """Apply the stylesheet to the dashboard card."""
+        qss: str = load_stylesheet(
+            DashboardStyles.INFO_CARD,
+            themed([InfoCardColors], [LightInfoCardColors], theme_manager.is_dark),
+        )
         qss += f'#icon {{ background: {self._icon_background.name().upper()}; }}'
         self.setStyleSheet(qss)
+
+    def _connect_signals(self) -> None:
+        """Wire theme changes to re-apply the stylesheet."""
+        theme_manager.theme_changed.connect(self._setup_style)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         """

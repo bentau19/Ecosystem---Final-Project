@@ -1,10 +1,11 @@
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QVBoxLayout, QLabel, QFrame, QWidget
 
-from resources.colors import DashboardColors, StorageBarColors
+from app.theme_manager import theme_manager
+from resources.colors import Colors, LightColors, StorageBarColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 from views.widgets.bar import Bar
 
 
@@ -42,6 +43,7 @@ class StorageInfo(QFrame):
 
         self._setup_ui()
         self._setup_style()
+        self._connect_signals()
 
     def _setup_ui(self) -> None:
         """Create and configure the vertical layout for the storage card."""
@@ -72,13 +74,16 @@ class StorageInfo(QFrame):
         layout.addStretch()
 
     def _setup_style(self) -> None:
-        """Apply card styling to the storage card.
-
-        Sets the background, border, and border-radius to create a card appearance
-        using the application's color scheme.
-        """
-        qss: str = load_stylesheet(DashboardStyles.STORAGE_INFO, [DashboardColors])
+        """Apply card styling to the storage card."""
+        qss: str = load_stylesheet(
+            DashboardStyles.STORAGE_INFO,
+            themed([Colors], [LightColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
+
+    def _connect_signals(self) -> None:
+        """Wire theme changes to re-apply the stylesheet."""
+        theme_manager.theme_changed.connect(self._setup_style)
 
     def _create_value_label(self) -> QLabel:
         """Create the storage usage value label.

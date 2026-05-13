@@ -65,6 +65,34 @@ def load_stylesheet(
     return qss
 
 
+def themed(
+        dark_classes: list[type[ColorsEnum]],
+        light_classes: list[type[ColorsEnum]],
+        is_dark: bool,
+) -> list[type[ColorsEnum]]:
+    """Return *dark_classes* or *light_classes* based on the current theme.
+
+    Designed to be used inline with :func:`load_stylesheet`::
+
+        from app.theme_manager import theme_manager
+        from utils.styles import load_stylesheet, themed
+
+        qss = load_stylesheet(
+            DashboardStyles.INFO_CARD,
+            themed([InfoCardColors], [LightInfoCardColors], theme_manager.is_dark),
+        )
+
+    Args:
+        dark_classes: Color enum classes to use when dark mode is active.
+        light_classes: Color enum classes to use when light mode is active.
+        is_dark: Whether the current system theme is dark.
+
+    Returns:
+        The appropriate list of color classes for the active theme.
+    """
+    return dark_classes if is_dark else light_classes
+
+
 def load_stylesheet_disk(
         rel_path: str, color_classes: list[type[ColorsEnum]] | None = None
 ) -> str:

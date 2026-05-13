@@ -2,10 +2,11 @@ from PySide6.QtCore import Signal, QPropertyAnimation, QEasingCurve, QPoint, QEv
 from PySide6.QtGui import QColor, QMouseEvent, QPixmap, Qt, QIcon, QEnterEvent
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget, QFrame
 
-from resources.colors import ToolCardColors
+from app.theme_manager import theme_manager
+from resources.colors import ToolCardColors, LightToolCardColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 
 
 class ToolCard(QFrame):
@@ -54,6 +55,7 @@ class ToolCard(QFrame):
 
         self._setup_ui()
         self._setup_style()
+        self._connect_signals()
 
     def _setup_ui(self) -> None:
         """
@@ -96,12 +98,17 @@ class ToolCard(QFrame):
         layout.addStretch()
 
     def _setup_style(self) -> None:
-        """
-        Apply the stylesheet to the dashboard card.
-        """
-        qss: str = load_stylesheet(DashboardStyles.TOOL_CARD, [ToolCardColors])
+        """Apply the stylesheet to the dashboard card."""
+        qss: str = load_stylesheet(
+            DashboardStyles.TOOL_CARD,
+            themed([ToolCardColors], [LightToolCardColors], theme_manager.is_dark),
+        )
         qss += f"#icon {{ background: {self._icon_background.name().upper()}; }}"
         self.setStyleSheet(qss)
+
+    def _connect_signals(self) -> None:
+        """Wire theme changes to re-apply the stylesheet."""
+        theme_manager.theme_changed.connect(self._setup_style)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         """

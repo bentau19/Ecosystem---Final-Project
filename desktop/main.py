@@ -18,6 +18,12 @@ if __name__ == "__main__":
     # DeviceViewModel, QTimer …) at module-level; instantiating any QObject
     # before QApplication exists causes Qt to emit the
     # "startTimer: event dispatcher already destroyed" warning.
+
+    # ThemeManager must be initialised before any widget is constructed so
+    # that theme_manager.is_dark is already correct when the first _setup_style()
+    # runs.  It is a lightweight QObject singleton — no side-effects beyond
+    # reading QGuiApplication.styleHints().
+    from app.theme_manager import theme_manager  # noqa: F401 — triggers singleton init
     from views.main_window import MainWindow
 
     main_window = MainWindow()

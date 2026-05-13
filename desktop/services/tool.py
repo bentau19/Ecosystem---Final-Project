@@ -108,7 +108,6 @@ class ToolService(QObject):
                 t.join()
 
     def _spawn(self, target, *args) -> None:
-        """All thread creation must go through here."""
         if not self._is_running.is_set():
             return  # reject new spawns during teardown
         t = threading.Thread(target=target, args=args, daemon=True)

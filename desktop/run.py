@@ -62,9 +62,6 @@ def run_app() -> None:
 
 
 if __name__ == "__main__":
-
-    import hashlib
-
     print("Using Python:", sys.executable)
 
     compile_resources()

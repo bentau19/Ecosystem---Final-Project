@@ -112,9 +112,10 @@ class NavigationColors(ColorsEnum):
 class DashboardColors(ColorsEnum):
     """Component-scoped color tokens for dashboard-level containers."""
 
-    BORDER = Colors.ACCENT_PRIMARY  # Border color of the dashboard card
+    BORDER          = Colors.ACCENT_PRIMARY     # Border color of the dashboard card
     CARD_BACKGROUND = Colors.SURFACE_SECONDARY  # Background color of the dashboard card
-    CARD_BORDER = Colors.BORDER_DEFAULT  # Border color of the dashboard card
+    CARD_BORDER     = Colors.BORDER_DEFAULT     # Border color of the dashboard card
+    TAG_BACKGROUND  = "#1E2A38"                 # Tools-section tag pill background
 
 
 class StorageBarColors(ColorsEnum):
@@ -153,12 +154,16 @@ class ToolCardColors(ColorsEnum):
 class LoginColors(ColorsEnum):
     """Component-scoped color tokens for the login screen panels and device cards."""
 
-    LEFT_PANEL_BG = Palette.DARK_950  # Left-panel body background
-    LEFT_PANEL_BORDER = Palette.GRAY_720  # Left-panel right-edge separator
-    CARD_BG = Palette.DARK_750  # Device card resting background
-    CARD_BORDER = Palette.GRAY_640  # Device card resting border
-    CARD_HOVER_BG = Palette.DARK_720  # Device card hover background
-    ICON_BG = Palette.BLUE_700  # Device icon rounded-square background
+    LEFT_PANEL_BG     = Palette.DARK_950   # Left-panel body background
+    LEFT_PANEL_BORDER = Palette.GRAY_720   # Left-panel right-edge separator
+    CARD_BG           = Palette.DARK_750   # Device card resting background
+    CARD_BORDER       = Palette.GRAY_640   # Device card resting border
+    CARD_HOVER_BG     = Palette.DARK_720   # Device card hover background
+    ICON_BG           = Palette.BLUE_700   # Device icon rounded-square background
+    # Right-panel extended tokens
+    TEXT_FAINT        = Palette.SLATE_600  # Device timestamp, idle badge, footer link
+    TEXT_FOOTER       = Palette.SLATE_700  # Very muted footer body text
+    ACCENT_HOVER      = "#67E8F9"          # Lighter cyan for ConnectBtn hover (sky-300)
 
 
 class LogoColors(ColorsEnum):
@@ -197,3 +202,233 @@ class HandlerDialogColors(ColorsEnum):
     TEXT_PRIMARY     = Palette.SLATE_100  # Bold heading text
     TEXT_SECONDARY   = Palette.SLATE_500  # Explanatory body text
     BTN_GRADIENT_END = "#0891b2"          # Try Again gradient end (sky-600)
+
+
+class TopbarColors(ColorsEnum):
+    """Component-scoped color tokens for the top navigation bar (dark mode)."""
+
+    BACKGROUND     = Palette.DARK_950   # #0d1117 — deepest bg, matches login left-panel
+    TITLE_COLOR    = Palette.SLATE_100  # #E2E8F0 near-white title
+    SUBTITLE_COLOR = Palette.SLATE_500  # #64748B muted subtitle
+    # Disconnect button — danger red, theme-invariant
+    BTN_BG_0    = "#7F1D1D"
+    BTN_BG_1    = "#991B1B"
+    BTN_BORDER  = "#DC2626"
+    BTN_COLOR   = "#FCA5A5"
+    BTN_HOVER_0 = "#991B1B"
+    BTN_HOVER_1 = "#B91C1C"
+    BTN_PRESSED = "#7F1D1D"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Light-mode palette & semantic tokens
+# ══════════════════════════════════════════════════════════════════════════════
+
+class LightPalette(ColorsEnum):
+    """Raw hex color values for the light theme.
+
+    Mirror of :class:`Palette` — identical member names, light-appropriate values.
+    Layer 1 of the light design-token hierarchy.
+    """
+
+    DARK_950 = "#FFFFFF"   # Deepest background surface (login left panel)
+    DARK_900 = "#F8FAFC"   # Primary background color
+    DARK_800 = "#F1F5F9"   # Secondary background color
+    DARK_750 = "#E8F0F8"   # Elevated card surface
+    DARK_720 = "#DDE8F4"   # Elevated card hover surface
+
+    GRAY_720 = "#CBD5E1"   # Subtle divider / left-panel border
+    GRAY_700 = "#94A3B8"   # Border color for the default state
+    GRAY_640 = "#CBD5E1"   # Card border default
+    GRAY_600 = "#BAC6D6"   # Border color for the hover state
+    GRAY_500 = "#A0B0C4"   # Border color for the active state
+    GRAY_400 = "#0E4F5C"   # Border color for the hover state (accent-tinted, same as dark)
+
+    SLATE_700 = "#94A3B8"  # Very muted / footer text
+    SLATE_600 = "#64748B"  # Muted text
+    SLATE_500 = "#475569"  # Primary text color (inverted — dark on light)
+    SLATE_200 = "#1E293B"  # Light tertiary text (inverted)
+    SLATE_100 = "#0F172A"  # Secondary text color (inverted — near-black)
+
+    # Accent hues are identical in both themes
+    CYAN_400   = "#22D3EE"
+    VIOLET_500 = "#7B61FF"
+    PINK_500   = "#FF5C87"
+
+    TEAL_700 = "#009980"
+    TEAL_400 = "#00d4aa"
+    TEAL_200 = "#00ffcc"
+
+    GREEN_400 = "#00E676"
+    GREEN_200 = "#00C853"
+
+    ORANGE_500 = "#FF9800"
+
+    BLUE_700 = "#0369a1"
+
+    SILVER_300 = "#D4D7DD"
+    SILVER_500 = "#6E7583"
+    SILVER_600 = "#6e7681"
+
+    PURPLE_500 = "#7B61FF"
+    PURPLE_400 = "#6959F0"
+
+    # Light-mode tint backgrounds for icon containers (inverted from dark)
+    CYAN_900   = "#D0F4FA"  # Light cyan tint — icon container bg
+    CYAN_800   = "#A5E8F5"  # Mid cyan tint — icon container border
+    VIOLET_900 = "#EDE9FE"
+    VIOLET_800 = "#DDD6FE"
+    PINK_900   = "#FCE7F3"
+    GREEN_900  = "#DCFCE7"
+
+
+class LightColors(ColorsEnum):
+    """Semantic color aliases for the light theme.
+
+    Mirror of :class:`Colors` — identical member names, resolved via :class:`LightPalette`.
+    Layer 2 of the light design-token hierarchy.
+    """
+
+    SURFACE_PRIMARY   = LightPalette.DARK_900
+    SURFACE_SECONDARY = LightPalette.DARK_800
+
+    BORDER_DEFAULT = LightPalette.GRAY_700
+    BORDER_SUBTLE  = LightPalette.GRAY_600
+    BORDER_ACTIVE  = LightPalette.GRAY_500
+    BORDER_HOVER   = LightPalette.GRAY_400
+
+    TEXT_PRIMARY   = LightPalette.SLATE_100
+    TEXT_SECONDARY = LightPalette.SLATE_500
+    TEXT_TERTIARY  = LightPalette.SLATE_200
+    TEXT_MUTED     = LightPalette.SILVER_600
+
+    ACCENT_PRIMARY      = LightPalette.CYAN_400
+    ACCENT_SECONDARY    = LightPalette.VIOLET_500
+    ACCENT_TERTIARY     = LightPalette.PINK_500
+    ACCENT_TEAL         = LightPalette.TEAL_400
+    ACCENT_TEAL_HOVER   = LightPalette.TEAL_200
+    ACCENT_TEAL_PRESSED = LightPalette.TEAL_700
+
+    GREEN = LightPalette.GREEN_400
+
+
+# ── Light component color tokens ───────────────────────────────────────────────
+
+class LightSidebarColors(ColorsEnum):
+    """Light-mode component tokens for the navigation sidebar."""
+
+    BACKGROUND = LightColors.SURFACE_PRIMARY
+    BORDER     = LightColors.BORDER_DEFAULT
+
+
+class LightNavigationColors(ColorsEnum):
+    """Light-mode component tokens for individual navigation items."""
+
+    ITEM_HOVER  = LightColors.BORDER_SUBTLE
+    ITEM_ACTIVE = LightColors.BORDER_ACTIVE
+
+
+class LightDashboardColors(ColorsEnum):
+    """Light-mode component tokens for dashboard-level containers."""
+
+    BORDER          = LightColors.ACCENT_PRIMARY
+    CARD_BACKGROUND = LightColors.SURFACE_SECONDARY
+    CARD_BORDER     = LightColors.BORDER_DEFAULT
+    TAG_BACKGROUND  = LightPalette.DARK_800   # #F1F5F9 — light equivalent of tag pill
+
+
+class LightStorageBarColors(ColorsEnum):
+    """Light-mode component tokens for the storage progress bar (gradient unchanged)."""
+
+    GRADIENT_START = Palette.PURPLE_500
+    GRADIENT_END   = Palette.PURPLE_400
+
+
+class LightBatteryBarColors(ColorsEnum):
+    """Light-mode component tokens for the battery progress bar (gradient unchanged)."""
+
+    GRADIENT_START = Palette.GREEN_400
+    GRADIENT_END   = Palette.GREEN_200
+
+
+class LightInfoCardColors(ColorsEnum):
+    """Light-mode component tokens for device info cards on the dashboard."""
+
+    BACKGROUND   = LightColors.SURFACE_SECONDARY
+    BORDER       = LightColors.BORDER_DEFAULT
+    TITLE        = LightColors.TEXT_SECONDARY
+    BORDER_HOVER = LightColors.BORDER_HOVER
+
+
+class LightToolCardColors(ColorsEnum):
+    """Light-mode component tokens for tool cards on the dashboard."""
+
+    BACKGROUND   = LightColors.SURFACE_SECONDARY
+    BORDER       = LightColors.BORDER_DEFAULT
+    TITLE        = LightColors.TEXT_PRIMARY
+    DESCRIPTION  = LightColors.TEXT_SECONDARY
+    BORDER_HOVER = LightColors.ACCENT_PRIMARY
+
+
+class LightLoginColors(ColorsEnum):
+    """Light-mode component tokens for the login screen panels and device cards."""
+
+    LEFT_PANEL_BG     = LightPalette.DARK_950   # pure white left panel
+    LEFT_PANEL_BORDER = LightPalette.GRAY_720   # cool gray separator
+    CARD_BG           = LightPalette.DARK_750   # light blue-tinted card bg
+    CARD_BORDER       = LightPalette.GRAY_640   # light gray card border
+    CARD_HOVER_BG     = LightPalette.DARK_720   # slightly deeper on hover
+    ICON_BG           = Palette.BLUE_700        # icon container bg (unchanged)
+    # Right-panel extended tokens
+    TEXT_FAINT        = LightPalette.SLATE_600  # device timestamp, idle badge, footer link
+    TEXT_FOOTER       = LightPalette.SLATE_700  # very muted footer body text
+    ACCENT_HOVER      = "#67E8F9"               # sky-300 lighter cyan — theme-invariant
+
+
+class LightLogoColors(ColorsEnum):
+    """Light-mode component tokens for the logo gradient (unchanged — looks good on both)."""
+
+    GRADIENT_START = Palette.SILVER_300
+    GRADIENT_END   = Palette.SILVER_500
+
+
+class LightFileReceivedToastColors(ColorsEnum):
+    """Light-mode component tokens for the file-received toast notification."""
+
+    BACKGROUND         = LightPalette.DARK_750
+    BORDER             = LightPalette.GRAY_640
+    TITLE              = LightPalette.SLATE_100
+    FILENAME           = LightPalette.SLATE_500
+    ICON_BG            = LightPalette.CYAN_900
+    ICON_BORDER        = LightPalette.CYAN_800
+    ICON_COLOR         = Palette.CYAN_400
+    DOWNLOAD_BTN       = Palette.CYAN_400
+    DOWNLOAD_BTN_HOVER = Palette.TEAL_200
+    CANCEL_BTN         = LightPalette.SLATE_500
+    CANCEL_BTN_HOVER   = LightPalette.SLATE_100
+
+
+class LightHandlerDialogColors(ColorsEnum):
+    """Light-mode component tokens for file-handler error dialogs."""
+
+    BACKGROUND       = LightPalette.DARK_900
+    BORDER           = LightPalette.GRAY_700
+    TEXT_PRIMARY     = LightPalette.SLATE_100
+    TEXT_SECONDARY   = LightPalette.SLATE_500
+    BTN_GRADIENT_END = "#0891b2"  # sky-600 — works on both themes
+
+
+class LightTopbarColors(ColorsEnum):
+    """Light-mode component tokens for the top navigation bar."""
+
+    BACKGROUND     = LightPalette.DARK_900   # #F8FAFC clean light surface
+    TITLE_COLOR    = LightPalette.SLATE_100  # #0F172A near-black title
+    SUBTITLE_COLOR = LightPalette.SLATE_500  # #475569 muted subtitle
+    # Disconnect button — same danger red on both themes
+    BTN_BG_0    = "#7F1D1D"
+    BTN_BG_1    = "#991B1B"
+    BTN_BORDER  = "#DC2626"
+    BTN_COLOR   = "#FCA5A5"
+    BTN_HOVER_0 = "#991B1B"
+    BTN_HOVER_1 = "#B91C1C"
+    BTN_PRESSED = "#7F1D1D"

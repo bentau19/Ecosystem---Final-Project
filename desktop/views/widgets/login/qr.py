@@ -5,7 +5,7 @@ import qrcode
 from PIL.ImageQt import ImageQt
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QPaintEvent, QResizeEvent
-from PySide6.QtWidgets import QLabel, QWidget
+from PySide6.QtWidgets import QLabel, QWidget, QSizePolicy
 
 from resources.colors import Palette
 from resources.spacing import Spacing
@@ -50,7 +50,6 @@ class QR(QLabel):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        """Set the generated QR Pixmap on the label."""
         self.setPixmap(self._pixmap)
 
     def refresh_qr(self) -> None:
@@ -59,8 +58,6 @@ class QR(QLabel):
         self.setPixmap(self._pixmap)
 
     def _load_qr(self) -> None:
-        """Generate the QR code encoding the device's local IP address."""
-
         ip: str = network.get_ip()
 
         data: dict[str, str] = {DataKey.IP.value: ip}
@@ -119,12 +116,6 @@ class QR(QLabel):
         painter.end()
 
     def _draw_corner_brackets(self, painter: QPainter) -> None:
-        """
-        Draw teal L-shaped brackets at all four corners of the widget.
-
-        Args:
-            painter: Active QPainter for this widget.
-        """
         pen = QPen(
             _BRACKET_COLOR,
             _BRACKET_WIDTH,
@@ -156,11 +147,7 @@ class QR(QLabel):
             painter.drawPath(path)
 
     def _update_scaled_pixmap(self) -> None:
-        """Rescale the cached Pixmap to fit the current widget size.
-
-        Uses the smaller of width/height to keep the QR square. Skips
-        the rescale if the Pixmap is null or the widget has no area yet.
-        """
+        # Uses the smaller dimension to keep the QR square; no-ops if null or zero-size.
         if self._pixmap.isNull():
             return
 
@@ -181,6 +168,15 @@ class QR(QLabel):
         Args:
             event: The resize event carrying old and new sizes.
         """
-        event.accept()
+        super().resizeEvent(event)
+
         min_size = min(self.width(), self.height())
+        if self.width() != self.height():
+            self.resize(min_size, min_size)
+
         self.resize(min_size, min_size)
+
+        frame = self.frameGeometry()
+        center = self.screen().availableGeometry().center()
+        frame.moveCenter(center)
+        # self.move(frame.topLeft())

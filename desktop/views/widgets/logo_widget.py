@@ -32,19 +32,16 @@ class LogoWidget(QFrame):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        """Initialize child widgets, layout, and apply stylesheet."""
         self.setObjectName("logoFrame")
         self._create_widgets()
         self._setup_layout()
         self._apply_styles()
 
     def _create_widgets(self) -> None:
-        """Create the logo icon and application name label widgets."""
         self._app_name_label = self._create_name_label()
         self._logo_icon = self._create_logo_icon()
 
     def _setup_layout(self) -> None:
-        """Set up a horizontal layout with margins, spacing, and stretch."""
         layout: QHBoxLayout = QHBoxLayout(self)
         layout.setContentsMargins(Spacing.SM, Spacing.LG, Spacing.SM, Spacing.LG)
         layout.setSpacing(Spacing.SM)
@@ -53,26 +50,15 @@ class LogoWidget(QFrame):
         layout.addStretch()
 
     def _create_logo_icon(self) -> "Logo":
-        """Create and return the circular logo widget.
-
-        Returns:
-            A :class:`Logo` instance sized to ``_logo_size``.
-        """
         return Logo(self._logo_size)
 
     @staticmethod
     def _create_name_label() -> "LogoNameLabel":
-        """Create a label displaying the application name with gradient text.
-
-        Returns:
-            A :class:`LogoNameLabel` instance with the ``logoText`` object name.
-        """
         label: LogoNameLabel = LogoNameLabel()
         label.setObjectName("logoText")
         return label
 
     def _apply_styles(self) -> None:
-        """Load and apply the QSS stylesheet for this widget."""
         qss: str = load_stylesheet(Styles.LOGO_WIDGET)
         self.setStyleSheet(qss)
 
@@ -90,7 +76,6 @@ class LogoNameLabel(QLabel):
         self._init_ui()
 
     def _init_ui(self) -> None:
-        """Set the application name text."""
         self.setText(self.tr("SyncDose"))
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -135,7 +120,8 @@ class Logo(QLabel):
         self._apply_style()
 
     def _setup_logo(self) -> None:
-        """Render the SVG into a clipped circular pixmap and apply it to the label."""
+        # Render the SVG into a square pixmap, then clip to an ellipse so the
+        # icon appears circular regardless of the SVG's original dimensions.
         pixmap: QPixmap = QPixmap(self._logo_size, self._logo_size)
         pixmap.fill(Qt.GlobalColor.transparent)
 
@@ -156,6 +142,5 @@ class Logo(QLabel):
         self.setObjectName("logoIcon")
 
     def _apply_style(self) -> None:
-        """Load and apply the QSS stylesheet for this widget."""
         qss: str = load_stylesheet(Styles.LOGO_WIDGET)
         self.setStyleSheet(qss)

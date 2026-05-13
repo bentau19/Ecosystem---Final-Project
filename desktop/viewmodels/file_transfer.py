@@ -142,21 +142,11 @@ class FileTransferViewModel(QObject):
 
     @Slot()
     def _on_device_connected(self) -> None:
-        """Mark the device as connected and notify the view.
-
-        Emits:
-            device_ready_changed: With ``True``.
-        """
         self._is_device_connected = True
         self._service.start()
 
     @Slot()
     def _on_device_disconnected(self) -> None:
-        """Mark the device as disconnected and notify the view.
-
-        Emits:
-            device_ready_changed: With ``False``.
-        """
         self._is_device_connected = False
         self._service.stop()
 

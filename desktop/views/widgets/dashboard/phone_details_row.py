@@ -17,11 +17,12 @@ from domain.dto.device_info import (
 )
 from domain.enums.device_type import DeviceType
 from views.layouts.flow_layout import FlowLayout
-from resources.colors import Palette
+from app.app_state import app_state
+from app.theme_manager import theme_manager
+from resources.colors import Palette, Colors, LightColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from app.app_state import app_state
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 from viewmodels.device import DeviceViewModel
 from views.widgets.dashboard.battery_info import BatteryInfo
 from views.widgets.dashboard.info_card import InfoCard
@@ -180,12 +181,16 @@ class PhoneDetailsRow(QWidget):
 
     def _setup_style(self) -> None:
         """Apply the stylesheet to the widget."""
-        qss: str = load_stylesheet(DashboardStyles.DEVICE_STATUS_ROW)
+        qss: str = load_stylesheet(
+            DashboardStyles.DEVICE_STATUS_ROW,
+            themed([Colors], [LightColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
 
     def _setup_signals(self) -> None:
         """Connect ViewModel signals to view slots."""
         self._device_viewmodel.device_infos_updated.connect(self._set_device_infos)
+        theme_manager.theme_changed.connect(self._setup_style)
 
     @Slot(list)
     def _set_device_infos(self, device_infos: List[DeviceInfoDTO]) -> None:

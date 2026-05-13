@@ -3,7 +3,8 @@ from PySide6.QtWidgets import (
     QWidget, QScrollArea, QFrame, QVBoxLayout
 )
 
-from resources.colors import Palette
+from app.theme_manager import theme_manager
+from resources.colors import Palette, LightPalette
 from resources.spacing import Spacing
 from views.widgets.dashboard.phone_details_row import PhoneDetailsRow
 from views.widgets.dashboard.tools_grid import ToolsGrid
@@ -31,11 +32,12 @@ class DashboardContent(QScrollArea):
         self._tools_grid: ToolsGrid
 
         self._setup_ui()
+        self._setup_style()
+        self._connect_signals()
 
     def _setup_ui(self) -> None:
         """Configure the scroll area and build child widgets and layout."""
         self.setObjectName("dashboardContent")
-        self.viewport().setStyleSheet(f"background-color: {Palette.DARK_950};")
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -68,6 +70,15 @@ class DashboardContent(QScrollArea):
         layout.addStretch()
 
         self.setWidget(inner)
+
+    def _setup_style(self) -> None:
+        """Apply the themed viewport background color."""
+        bg = Palette.DARK_950 if theme_manager.is_dark else LightPalette.DARK_950
+        self.viewport().setStyleSheet(f"background-color: {bg};")
+
+    def _connect_signals(self) -> None:
+        """Wire theme changes to re-apply the viewport background."""
+        theme_manager.theme_changed.connect(self._setup_style)
 
     @staticmethod
     def _create_device_status_row() -> PhoneDetailsRow:

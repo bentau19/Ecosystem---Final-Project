@@ -32,7 +32,6 @@ PIPE_NAME: Final[str] = r'\\.\pipe\FileSend'
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _ensure_app() -> QCoreApplication | QApplication:
-    """Return the existing :class:`QApplication` or create a new one."""
     return QApplication.instance() or QApplication(sys.argv)
 
 

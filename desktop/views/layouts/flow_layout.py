@@ -149,16 +149,6 @@ class FlowLayout(QLayout):
         return size
 
     def _do_layout(self, rect: QRect, test_only: bool) -> int:
-        """Arrange all child items within ``rect``, or measure the required height.
-
-        Args:
-            rect: The bounding rectangle available for layout.
-            test_only: When ``True``, only calculates the required height without
-                repositioning any child widgets (used by ``heightForWidth``).
-
-        Returns:
-            The total height needed to fit all items inside ``rect``.
-        """
         if not self._item_list:
             return 0
 

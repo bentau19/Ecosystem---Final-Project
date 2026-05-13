@@ -4,11 +4,12 @@ from PySide6.QtWidgets import QLabel, QWidget
 
 from domain.dto.tool import ToolDTO
 from views.layouts.flow_layout import FlowLayout
-from resources.colors import Palette
+from app.app_state import app_state
+from app.theme_manager import theme_manager
+from resources.colors import Palette, Colors, LightColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from app.app_state import app_state
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 from views.widgets.dashboard.tool_card import ToolCard
 
 
@@ -73,7 +74,10 @@ class ToolsGrid(QWidget):
 
     def _setup_style(self) -> None:
         """Load and apply the QSS stylesheet for the tools grid."""
-        qss: str = load_stylesheet(DashboardStyles.TOOLS_GRID)
+        qss: str = load_stylesheet(
+            DashboardStyles.TOOLS_GRID,
+            themed([Colors], [LightColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
@@ -87,6 +91,7 @@ class ToolsGrid(QWidget):
         # self._tool_view_model.tool_added.connect(self._on_tool_added)
         # self._tool_view_model.tool_deleted.connect(self._on_tool_deleted)
         self._tool_view_model.tools_loaded.connect(self._load_tools)
+        theme_manager.theme_changed.connect(self._setup_style)
 
     @Slot(list)
     def _load_tools(self, tools: list[ToolDTO]) -> None:

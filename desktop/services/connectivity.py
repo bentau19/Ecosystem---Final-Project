@@ -4,9 +4,13 @@ Device connectivity service.
 Manages the TauSync TCP connection lifecycle on a background thread,
 emitting Qt signals when a device connects or disconnects.
 """
+import socket
 import threading
 
 from PySide6.QtCore import QObject, Signal
+
+import utils.network
+from domain.enums.session_channels import SessionChannels
 from tausync_py import TauSync
 
 
@@ -80,10 +84,10 @@ class ConnectivityService(QObject):
     def stop(self) -> None:
         threading.Thread(target=self._stop, daemon=True).start()
 
-    def connect_to_device(self, ip: str) -> None:
+    def connect_to_device(self, hostname: str) -> None:
         if not self._is_running.is_set():
             return
-        self._spawn(self._connect_to_device, ip)
+        self._spawn(self._connect_to_device, hostname)
 
     # ── Private Functions ───────────────────────────────────────────────────
 
@@ -100,7 +104,7 @@ class ConnectivityService(QObject):
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            self._disconnect_device()
+            self.disconnect_device()
             pending_threads: list[threading.Thread] = self._get_pending_threads()
             for t in pending_threads:
                 if t == threading.current_thread():
@@ -108,7 +112,7 @@ class ConnectivityService(QObject):
                 t.join()
 
     def _spawn(self, target, *args):
-        """All thread creation must go through here."""
+        # All thread creation must go through here so teardown can join every worker.
         if not self._is_running.is_set():
             return  # reject new spawns during teardown
         t = threading.Thread(target=target, args=args, daemon=True)
@@ -116,41 +120,50 @@ class ConnectivityService(QObject):
             self._threads.append(t)
         t.start()
 
-    def _disconnect_device(self):
+    def disconnect_device(self) -> None:
+        """Close the TauSync transport and emit ``device_disconnected``.
+
+        Raw close only — does not send any notification to the phone.
+        This is the shared tear-down primitive used by both the PC-initiated
+        path (:meth:`_stop`) and the phone-initiated path
+        (:class:`~services.phone_request.PhoneRequestService`).  When the PC
+        is initiating the disconnect, call :meth:`_notify_phone_of_disconnect`
+        first so the phone can tear down gracefully before the transport closes.
+
+        Emits:
+            device_disconnected: After the transport is closed.
+        """
+        if SessionChannels.DISCONNECT_FROM_PHONE.value in self._tau.get_peer_waiting_words():
+            read = utils.network.read_string_from_channel(self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value)
+        else:
+            self._notify_phone_of_disconnect()
+
         self._tau.disconnect()
         self.device_disconnected.emit()
 
-    def _connect_to_device(self, ip: str) -> None:
-        """Connect to a remote device by IP address.
+    def _notify_phone_of_disconnect(self) -> None:
+        # Failures are swallowed so a missing/gone phone never blocks our own teardown.
+        try:
+            with self._tau.connect(SessionChannels.DISCONNECT_FROM_PC.value) as stream:
+                stream.write_string("disconnect")
+        except Exception:
+            pass
 
-        Currently, a stub — emits ``device_connected`` immediately while the
-        real phone-side implementation is pending.
-
-        Args:
-            ip: The IP address of the remote TauSync server.
-
-        Emits:
-            device_connected: Immediately (stub behaviour).
-        """
+    def _connect_to_device(self, hostname: str) -> None:
         # TODO: connect via Bluetooth using the previously stored device ID.
 
-        # pass
-        # try:
-        #     self._tau.connect_to("192.168.68.27")
-        self.device_connected.emit()
-        # except TimeoutError as ex:
-        #     print(ex)
+        try:
+            self._stop()
+            ip = utils.network.get_ip_by_hostname(hostname)
+            self._tau.connect_to(ip)
+            self.device_connected.emit()
+        except TimeoutError as ex:
+            print(ex)
+        except socket.gaierror as ex:
+            print(ex)
 
     def _listen(self) -> None:
-        """Block until a remote device connects, then emit ``device_connected``.
-
-        Runs on a background :class:`threading.Thread`. Emits ``connection_error``
-        on failure so the error surfaces to the UI instead of being swallowed.
-
-        Emits:
-            device_connected: When the TauSync server accepts a connection.
-            connection_error: With the exception message string if listening fails.
-        """
+        # Retries on timeout; surfaces unexpected exceptions via connection_error.
         while self._is_running.is_set() and not self.connected:
             try:
                 self._tau.listen(timeout_seconds=10)

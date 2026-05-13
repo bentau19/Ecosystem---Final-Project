@@ -21,10 +21,11 @@ from PySide6.QtWidgets import (
 )
 
 from app.app_state import app_state
-from resources.colors import FileReceivedToastColors
+from app.theme_manager import theme_manager
+from resources.colors import FileReceivedToastColors, LightFileReceivedToastColors
 from resources.paths import ToastStyles
 from resources.spacing import Spacing
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 from viewmodels.file_transfer import FileTransferViewModel
 
 # Minimum width for the toast banner — expands to fit longer filenames.
@@ -36,12 +37,6 @@ _SCREEN_MARGIN: int = 20
 
 
 def _play_notification_sound() -> None:
-    """Play the OS notification sound in a non-blocking, cross-platform way.
-
-    - **Windows** — plays the ``SystemNotification`` alias via ``winsound``.
-    - **macOS** — plays ``Glass.aiff`` via ``afplay`` in a detached subprocess.
-    - **Linux / other** — tries ``paplay``; falls back to :meth:`QApplication.beep`.
-    """
     system = platform.system()
     if system == "Windows":
         import winsound  # stdlib on Windows only — import guarded intentionally
@@ -125,12 +120,10 @@ class FileReceivedToast(QWidget):
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
-        """Create all child widgets and arrange them in the layout."""
         self._create_widgets()
         self._setup_layout()
 
     def _create_widgets(self) -> None:
-        """Instantiate and store all child widgets."""
         self._icon_circle: QLabel = self._create_icon_circle()
         self._title_label: QLabel = self._create_title_label()
         self._separator_dot: QLabel = self._create_separator_dot()
@@ -140,7 +133,6 @@ class FileReceivedToast(QWidget):
 
     @staticmethod
     def _create_icon_circle() -> QLabel:
-        """Return the fixed-size circle label containing the download arrow."""
         lbl = QLabel("↓")
         lbl.setObjectName("IconCircle")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -149,20 +141,17 @@ class FileReceivedToast(QWidget):
 
     @staticmethod
     def _create_title_label() -> QLabel:
-        """Return the "File Received" heading label."""
         lbl = QLabel("File Received")
         lbl.setObjectName("TitleLabel")
         return lbl
 
     @staticmethod
     def _create_separator_dot() -> QLabel:
-        """Return the muted mid-dot separator between title and filename."""
         lbl = QLabel("·")
         lbl.setObjectName("SeparatorDot")
         return lbl
 
     def _create_filename_label(self) -> QLabel:
-        """Return the filename label with a tooltip for clipped text."""
         lbl = QLabel(self._filename)
         lbl.setObjectName("FilenameLabel")
         lbl.setToolTip(self._filename)
@@ -170,7 +159,6 @@ class FileReceivedToast(QWidget):
 
     @staticmethod
     def _create_download_button() -> QPushButton:
-        """Return the primary "Download file" text-link button."""
         btn = QPushButton("Download file")
         btn.setObjectName("DownloadButton")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -179,7 +167,6 @@ class FileReceivedToast(QWidget):
 
     @staticmethod
     def _create_cancel_button() -> QPushButton:
-        """Return the secondary "Cancel download" text-link button."""
         btn = QPushButton("Cancel download")
         btn.setObjectName("CancelButton")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -187,7 +174,6 @@ class FileReceivedToast(QWidget):
         return btn
 
     def _setup_layout(self) -> None:
-        """Arrange all child widgets in a single horizontal banner row."""
         root = QHBoxLayout(self)
         root.setContentsMargins(Spacing.LG, Spacing.MD, Spacing.LG, Spacing.MD)
         root.setSpacing(Spacing.SM)
@@ -203,32 +189,25 @@ class FileReceivedToast(QWidget):
     # ── Styling ───────────────────────────────────────────────────────────────
 
     def _apply_style(self) -> None:
-        """Load and apply the toast QSS via the Qt resource filesystem."""
-        qss = load_stylesheet(ToastStyles.FILE_RECEIVED, [FileReceivedToastColors])
+        qss = load_stylesheet(
+            ToastStyles.FILE_RECEIVED,
+            themed([FileReceivedToastColors], [LightFileReceivedToastColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
 
     # ── Signals ───────────────────────────────────────────────────────────────
 
     def _connect_signals(self) -> None:
-        """Wire button clicks and viewmodel signals to their slots."""
         self._download_button.clicked.connect(self._on_download_requested)
         self._cancel_button.clicked.connect(self._on_cancel_requested)
         self._cancel_button.clicked.connect(self._close_with_animation)
         self._file_transfer_vm.receive_error.connect(self.close)
+        theme_manager.theme_changed.connect(self._apply_style)
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
     @Slot()
     def _on_download_requested(self) -> None:
-        """Open a save-location dialog; accept or reject based on the result.
-
-        If the user picks a path, calls
-        :meth:`~viewmodels.file_transfer.FileTransferViewModel.receive_file`
-        and then closes the toast with an animation.  If the user cancels the
-        dialog, calls
-        :meth:`~viewmodels.file_transfer.FileTransferViewModel.reject_receive`
-        and closes the toast — the transfer is abandoned.
-        """
         default_path: Path = Path.home() / "Desktop" / self._filename
         dest_path, _ = QFileDialog.getSaveFileName(
             self,
@@ -245,18 +224,10 @@ class FileReceivedToast(QWidget):
 
     @Slot()
     def _on_cancel_requested(self) -> None:
-        """Reject the incoming transfer when the user clicks Cancel."""
         self._file_transfer_vm.reject_receive()
 
     @Slot()
     def _close_with_animation(self) -> None:
-        """Fade-and-slide the toast upward, then destroy it.
-
-        Runs a 250 ms :class:`QParallelAnimationGroup` that simultaneously
-        fades ``windowOpacity`` from 1.0 → 0.0 and drifts the widget 16 px
-        upward.  The :meth:`close` call is deferred until the animation
-        finishes so the widget is never torn down mid-frame.
-        """
         if self._closing:
             return
         self._closing = True

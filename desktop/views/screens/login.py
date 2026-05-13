@@ -31,17 +31,14 @@ class LoginScreen(QWidget):
     # ── Setup ──────────────────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
-        """Construct and arrange child panels."""
         self._create_widgets()
         self._setup_layout()
 
     def _create_widgets(self) -> None:
-        """Instantiate the left and right panels."""
         self._left_panel = LeftPanel(self)
         self._right_panel = RightPanel(parent=self)
 
     def _setup_layout(self) -> None:
-        """Place panels side by side with no margins or gap."""
         layout = QHBoxLayout(self)
         layout.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.NONE)
         layout.setSpacing(Spacing.NONE)
@@ -51,9 +48,7 @@ class LoginScreen(QWidget):
         layout.addWidget(self._right_panel, stretch=1)
 
     def _apply_style(self) -> None:
-        """No screen-level stylesheet — panels handle their own styling."""
-        pass
+        pass  # panels handle their own styling; no screen-level stylesheet needed
 
     def _connect_signals(self) -> None:
-        """Wire up inter-panel signals."""
         pass

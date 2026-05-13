@@ -164,7 +164,6 @@ class FileTransferService(QObject):
     # ── Private Functions ─────────────────────────────────────────────────────────────
 
     def _spawn(self, target, *args):
-        """All thread creation must go through here."""
         if not self._is_running.is_set():
             return  # reject new spawns during teardown
         t = threading.Thread(target=target, args=args, daemon=True)
@@ -178,17 +177,6 @@ class FileTransferService(QObject):
             return [t for t in self._threads if t.is_alive()]
 
     def _send_file(self, path: str) -> None:
-        """Background worker: serialize metadata, await the peer's decision,
-        then stream raw bytes only if accepted.
-
-        Args:
-            path: Path to the local file to send.
-
-        Emits:
-            file_send_complete: With ``(filename, total_bytes)`` on success.
-            file_send_rejected: With the filename when the receiver declines.
-            file_send_error: With the exception message on any failure.
-        """
         try:
             file_path: Path = Path(path)
             if not file_path.is_file():
@@ -203,14 +191,14 @@ class FileTransferService(QObject):
             )
             with tau.connect(FileTransferChannels.REGULAR_FILE_METADATA_PC_TO_ANDROID.value) as meta_stream:
                 meta_stream.write_string(meta_payload)
-                meta_stream.flush()
+
 
             # 2. Wait for the receiver's accept/reject token.
             #    TauSync's 30-second handshake timeout is the upper bound.
             with tau.connect(FileTransferChannels.REGULAR_FILE_RESPONSE_FROM_ANDROID.value) as resp_stream:
                 response: str = resp_stream.read_all().decode("utf-8").strip()
 
-            if response == FileTransferResponse.REJECTED.value:
+            if response == FileTransferResponse.REJECTED_FROM_ANDROID.value:
                 self.file_send_rejected.emit(filename)
                 return
 
@@ -224,12 +212,6 @@ class FileTransferService(QObject):
             self.file_send_error.emit(str(exc))
 
     def _receive_metadata(self) -> None:
-        """Background worker: read the peer's metadata from the ``file_meta_android`` channel.
-
-        Emits:
-            file_metadata_received: With ``(filename, size_bytes)`` on success.
-            file_receive_error: With the exception message on failure.
-        """
         try:
             tau = self._connectivity.tau
             with tau.connect(FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC.value) as meta_stream:
@@ -240,23 +222,13 @@ class FileTransferService(QObject):
             self.file_receive_error.emit(str(exc))
             
     def _receive_file(self, dest_path: str, file_size: int) -> None:
-        """Background worker: write ``"accept"``, then stream bytes to *dest_path*.
-
-        Args:
-            dest_path: Absolute path where the incoming file will be saved.
-            file_size: Exact number of bytes to read from the data channel.
-
-        Emits:
-            file_receive_complete: With ``(filename, dest_path)`` on success.
-            file_receive_error: With the exception message on failure.
-        """
         try:
             os.makedirs(Path(dest_path).parent, exist_ok=True)
             tau = self._connectivity.tau
 
             # 1. Tell the sender we accept; it will open the data channel.
             with tau.connect(FileTransferChannels.REGULAR_FILE_RESPONSE_FROM_PC.value) as resp_stream:
-                resp_stream.write_string(FileTransferResponse.ACCEPTED.value)
+                resp_stream.write_string(FileTransferResponse.ACCEPTED_FROM_PC.value)
                 resp_stream.flush()
 
             # 2. Stream bytes straight to disk — no full-file buffering in RAM.
@@ -269,27 +241,15 @@ class FileTransferService(QObject):
             self.file_receive_error.emit(str(exc))
 
     def _reject_receive(self) -> None:
-        """Background worker: write ``"reject"`` so the sender aborts cleanly.
-
-        Emits:
-            file_receive_error: With the exception message if the write fails.
-        """
         try:
             tau = self._connectivity.tau
             with tau.connect(FileTransferChannels.REGULAR_FILE_RESPONSE_FROM_PC.value) as resp_stream:
-                resp_stream.write_string(FileTransferResponse.REJECTED.value)
+                resp_stream.write_string(FileTransferResponse.REJECTED_FROM_PC.value)
                 resp_stream.flush()
         except Exception as exc:
             self.file_receive_error.emit(str(exc))
 
     def _listen_for_file_to_send(self) -> None:
-        """Pipe-listener worker: block on the named pipe and forward paths to :meth:`send_file`.
-
-        Runs for the lifetime of the process on the daemon thread started by
-        :meth:`start_pipe_listener`.  Each client connection yields one file
-        path; the client disconnects and the loop waits for the next caller.
-        """
-
         timeout = datetime.timedelta(seconds=3)
         pipe_name: str = r'\\.\pipe\FileSend'
         with Server(65536, 65536, pipe_name) as server:

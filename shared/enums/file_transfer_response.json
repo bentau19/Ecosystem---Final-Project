@@ -1,17 +1,27 @@
 {
   "name": "FileTransferResponse",
-  "description": "Accepted/rejected tokens exchanged over the REGULAR_FILE_RESPONSE channel. Both PC and Android must write and compare these exact strings — define them here once and generate both sides.",
+  "description": "Accepted/rejected tokens exchanged over the REGULAR_FILE_RESPONSE channels. Each token encodes the responder's identity so a cross-channel read is detectable rather than silently wrong. Both PC and Android must write and compare these exact strings — define them here once and generate both sides.",
   "type": "string",
   "members": [
     {
-      "name": "ACCEPTED",
-      "value": "accept",
-      "description": "Receiver accepted the incoming file — sender may open REGULAR_FILE_DATA and stream bytes."
+      "name": "ACCEPTED_FROM_PC",
+      "value": "accept_pc",
+      "description": "PC accepted Android's incoming file — Android may open REGULAR_FILE_DATA_ANDROID_TO_PC and stream bytes."
     },
     {
-      "name": "REJECTED",
-      "value": "reject",
-      "description": "Receiver rejected the incoming file — sender must abort without opening REGULAR_FILE_DATA."
+      "name": "REJECTED_FROM_PC",
+      "value": "reject_pc",
+      "description": "PC rejected Android's incoming file — Android must abort without opening REGULAR_FILE_DATA_ANDROID_TO_PC."
+    },
+    {
+      "name": "ACCEPTED_FROM_ANDROID",
+      "value": "accept_android",
+      "description": "Android accepted PC's incoming file — PC may open REGULAR_FILE_DATA_PC_TO_ANDROID and stream bytes."
+    },
+    {
+      "name": "REJECTED_FROM_ANDROID",
+      "value": "reject_android",
+      "description": "Android rejected PC's incoming file — PC must abort without opening REGULAR_FILE_DATA_PC_TO_ANDROID."
     }
   ]
 }

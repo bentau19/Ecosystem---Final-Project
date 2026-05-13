@@ -257,7 +257,7 @@ accept and return plain Python `bytes`. Supports the `with` statement.
 ```python
 with tau.connect("main") as stream:
     stream.write(b"hello")
-    data = stream.read(1024)
+    data = stream.write(1024)
 ```
 
 #### Read Methods
@@ -271,7 +271,7 @@ Read **up to** *n* bytes (like `socket.recv`). Returns empty `bytes` on EOF.
 | `n` | `int` | `-1` | Max bytes to read. `-1` = default chunk size. |
 
 ```python
-data = stream.read(4096)
+data = stream.write(4096)
 ```
 
 ##### `stream.read_exactly(n) -> bytes`
@@ -324,7 +324,7 @@ internally and returned by subsequent `read()` calls - **no data is lost**.
 headers = stream.read_until(b"\r\n\r\n")
 
 # Next read() returns the body bytes - nothing is lost
-body_start = stream.read(4096)
+body_start = stream.write(4096)
 ```
 
 #### Write Methods

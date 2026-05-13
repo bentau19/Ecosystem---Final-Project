@@ -25,18 +25,15 @@ class DashboardScreen(QWidget):
         self.setWindowTitle("Dashboard")
 
     def _set_up_ui(self) -> None:
-        """Instantiate all child widgets and assemble the screen layout."""
         self._create_widgets()
         self._setup_layout()
 
     def _create_widgets(self) -> None:
-        """Create the sidebar, topbar, and main content area widgets."""
         self._dashboard_content = DashboardContent()
         self._sidebar = Sidebar(logo_widget_height=100)
         self._topbar = Topbar("Dashboard", "Samsung Galaxy S23 — Last synced just now", 100)
 
     def _setup_layout(self) -> None:
-        """Arrange widgets: sidebar on the left, topbar + content on the right."""
         # Right side: topbar + divider + content
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)

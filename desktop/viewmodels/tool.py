@@ -55,15 +55,6 @@ class ToolViewModel(QObject):
 
     @staticmethod
     def _convert_to_dto(entity: ToolEntity) -> ToolDTO:
-        """
-        Convert a ToolEntity to a ToolDTO.
-
-        Args:
-            entity (ToolEntity): The ToolEntity to convert.
-
-        Returns:
-            ToolDTO: The converted ToolDTO.
-        """
         return ToolDTO(
             entity.title,
             entity.description,
@@ -73,11 +64,6 @@ class ToolViewModel(QObject):
 
     @Slot(ToolEntity)
     def _on_tool_updated(self, entity: ToolEntity) -> None:
-        """Handle when a tool is updated.
-
-        Args:
-            entity: The updated :class:`~domain.entities.tool.ToolEntity`.
-        """
         tool = self._convert_to_dto(entity)
         self.tool_updated.emit(tool.title)
         # Refresh the enabled-tool list asynchronously; the result arrives via
@@ -87,11 +73,6 @@ class ToolViewModel(QObject):
 
     @Slot(ToolEntity)
     def _on_tool_added(self, entity: ToolEntity) -> None:
-        """Handle when a tool is added.
-
-        Args:
-            entity: The added :class:`~domain.entities.tool.ToolEntity`.
-        """
         tool = self._convert_to_dto(entity)
         self.tool_added.emit(tool)
         self._enabled_tools.append(tool)
@@ -99,11 +80,6 @@ class ToolViewModel(QObject):
 
     @Slot(str)
     def _on_tool_deleted(self, id: str) -> None:
-        """Handle when a tool is deleted.
-
-        Args:
-            id: The title of the deleted tool.
-        """
         # Notify the view immediately so it can remove the card without waiting
         # for the async DB refresh.
         self.tool_deleted.emit(id)
@@ -114,18 +90,6 @@ class ToolViewModel(QObject):
 
     @Slot(list)
     def _on_all_enabled_fetched(self, tools: list[ToolEntity]) -> None:
-        """Handle the async result of :meth:`~services.tool.ToolService.fetch_all_enabled`.
-
-        Updates the in-memory enabled-tool list and notifies the view of the
-        new count.
-
-        Args:
-            tools: The current list of enabled
-                :class:`~domain.entities.tool.ToolEntity` objects.
-
-        Emits:
-            tool_count_changed: With the new count of enabled tools.
-        """
         self._enabled_tools = [self._convert_to_dto(t) for t in tools]
         self.tool_count_changed.emit(len(self._enabled_tools))
 

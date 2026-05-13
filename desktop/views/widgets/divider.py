@@ -1,7 +1,9 @@
 from PySide6.QtWidgets import QFrame
 
+from app.theme_manager import theme_manager
+from resources.colors import Colors, LightColors
 from resources.paths import Styles
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 
 
 class Divider(QFrame):
@@ -26,22 +28,18 @@ class Divider(QFrame):
         super().__init__(parent)
         self._setup_ui()
         self._setup_style()
+        self._connect_signals()
 
     def _setup_ui(self) -> None:
-        """Configure the divider's basic properties.
-        
-        Sets the frame shape to a horizontal line and fixes the height to 1 pixel.
-        """
         self.setFrameShape(QFrame.Shape.HLine)
         self.setFixedHeight(1)
 
     def _setup_style(self) -> None:
-        """Load and apply QSS styling to the divider.
-        
-        Reads the divider.styles file, replaces the BORDER color placeholder
-        with the actual color value from the Colors class, and applies the stylesheet.
-        """
-
-        qss: str = load_stylesheet(Styles.DIVIDER)
-
+        qss: str = load_stylesheet(
+            Styles.DIVIDER,
+            themed([Colors], [LightColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
+
+    def _connect_signals(self) -> None:
+        theme_manager.theme_changed.connect(self._setup_style)

@@ -144,7 +144,7 @@ class DeviceViewModel(QObject):
             device: The DTO of the device to connect to. Its ``id`` is passed
                 to the connectivity service for identification.
         """
-        self._connectivity_service.connect_to_device(device.id)
+        self._connectivity_service.connect_to_device(device.name)
 
     def disconnect_device(self) -> None:
         """Disconnect the currently connected device via the connectivity service."""
@@ -153,89 +153,38 @@ class DeviceViewModel(QObject):
     # ── Private helpers ────────────────────────────────────────────────────────
 
     def _request_device_info_refresh(self) -> None:
-        """Delegate to the device-info service to fetch fresh device metadata."""
         self._device_info_service.fetch_device_info()
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
     @Slot(object)
     def _on_device_info_ready(self, entity: DeviceEntity) -> None:
-        """Handle a freshly assembled DeviceEntity from the device-info service.
-
-        The entity is already persisted by :class:`~services.device_info.DeviceInfoService`
-        before this signal fires, so the slot only needs to update the tracked
-        ID and emit the DTO list so the view refreshes.
-
-        Args:
-            entity: The :class:`~entities.device_info.DeviceEntity` assembled
-                from the TauSync channel reads.
-
-        Emits:
-            device_infos_updated: With the converted ``list[DeviceInfoDTO]``.
-        """
         self._current_device_connected_id = entity.id
         self.device_infos_updated.emit(self._to_device_info_dtos(entity))
 
     @Slot(object)
     def _on_device_fetched(self, entity: DeviceEntity | None) -> None:
-        """Handle the async result of :meth:`~services.device_info.DeviceInfoService.fetch_device_by_id`.
-
-        Args:
-            entity: The fetched :class:`~domain.entities.device_info.DeviceEntity`,
-                or ``None`` if no match was found in the repository.
-
-        Emits:
-            device_infos_updated: With ``list[DeviceInfoDTO]`` if *entity* is
-                not ``None``.
-        """
         if entity is None:
             return
         self.device_infos_updated.emit(self._to_device_info_dtos(entity))
 
     @Slot(list)
     def _on_all_devices_fetched(self, devices: list[DeviceEntity]) -> None:
-        """Handle the async result of :meth:`~services.device_info.DeviceInfoService.fetch_all_devices`.
-
-        Args:
-            devices: All :class:`~domain.entities.device_info.DeviceEntity`
-                objects currently stored in the repository.
-
-        Emits:
-            previous_devices_updated: With the converted
-                ``list[PreviousDeviceDTO]``.
-        """
         dtos = [self._to_prev_device_dto(d) for d in devices]
         self.previous_devices_updated.emit(dtos)
 
     @Slot(object)
     def _on_entity_saved(self, entity: DeviceEntity) -> None:
-        """Forward a repository save event to the view as a list of DTOs.
-
-        Args:
-            entity: The updated :class:`~entities.device_info.DeviceEntity`.
-
-        Emits:
-            device_infos_updated: With the converted ``list[DeviceInfoDTO]``.
-        """
         self.device_infos_updated.emit(self._to_device_info_dtos(entity))
 
     @Slot()
     def _on_device_connected(self) -> None:
-        """Handle a device connection event from the connectivity service.
-
-        Emits ``device_connected`` to notify the view layer, then triggers a
-        background refresh so the device info cards populate immediately.
-
-        Emits:
-            device_connected: To signal views that a device is now connected.
-        """
         self._device_info_service.start()
         self._device_info_service.fetch_device_info()
         self.device_connected.emit()
 
     @Slot()
     def _on_device_disconnected(self):
-        """Handle a device disconnection event from the connectivity service."""
         self._device_info_service.stop()
         self._connectivity_service.start()
         self.device_disconnected.emit()
@@ -244,15 +193,6 @@ class DeviceViewModel(QObject):
 
     @staticmethod
     def _to_device_info_dtos(entity: DeviceEntity) -> list[DeviceInfoDTO]:
-        """Convert a DeviceEntity into one DTO per dashboard card.
-
-        Args:
-            entity: The connected device entity to convert.
-
-        Returns:
-            A list of ``DeviceInfoDTO`` subclass instances in display order:
-            name → OS → battery → storage.
-        """
         return [
             DeviceNameDTO(
                 title="Name",
@@ -280,15 +220,6 @@ class DeviceViewModel(QObject):
 
     @staticmethod
     def _to_prev_device_dto(entity: DeviceEntity) -> PreviousDeviceDTO:
-        """Convert a DeviceEntity into a PreviousDeviceDTO for the device list view.
-
-        Args:
-            entity: The :class:`~entities.device_info.DeviceEntity` to convert.
-
-        Returns:
-            A :class:`~dto.previous_device.PreviousDeviceDTO` with all
-            fields populated from the entity.
-        """
         return PreviousDeviceDTO(
             name=entity.name,
             os=entity.os,

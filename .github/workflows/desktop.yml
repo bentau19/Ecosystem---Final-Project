@@ -1,0 +1,103 @@
+name: desktop.yml
+on: [ push ]
+
+jobs:
+
+
+  test:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          pip install -r TauSync/windows/requirements.txt
+          pip install -r desktop/requirements.txt
+          pip install  TauSync/windows
+          pip install pytest
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build native
+        run: |
+          cmake -S desktop/native/windows/pipe -B build
+          cmake --build build --config Release
+      - name: Copy file
+        run: |
+          cp desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd 
+          desktop/native/windows/pipe/pipe_module.cp313-win_amd64.pyd
+
+      - name: Run tests
+        run: pytest desktop/
+
+  build:
+    needs: test
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build native
+        run: |
+          cmake -S desktop/native/windows/pipe -B build
+          cmake --build build --config Release
+
+      - name: Copy file
+        run: |
+          cp desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd 
+          desktop/native/windows/pipe/pipe_module.cp313-win_amd64.pyd
+
+      - name: Install deps
+        run: |
+          pip install -r TauSync/windows/requirements.txt
+          pip install -r desktop/requirements.txt
+          pip install  TauSync/windows
+          pip install pyinstaller
+
+      - name: Build EXEs
+        run: |
+          pyinstaller desktop/installer/specs/file_handler.spec
+          pyinstaller desktop/installer/specs/main_app.spec
+
+      - name: Build MSI
+        run: dotnet build desktop/installer/ -c Release
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build
+          path: |
+            dist/
+            desktop/installer/bin/
+
+
+
+  deploy:
+    needs: build
+    if: github.ref != 'refs/heads/main'
+    runs-on: windows-latest
+    environment: production
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build
+
+      - name: Publish release
+        run: echo "Deploy step here (GitHub Release / MSI upload)"
+
+
+
+
+

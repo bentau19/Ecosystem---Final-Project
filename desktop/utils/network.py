@@ -28,6 +28,11 @@ def get_pc_name() -> str:
     return platform.node()
 
 
+def get_ip_by_hostname(hostname: str) -> str:
+    ip = socket.gethostbyname(hostname)
+    return ip
+
+
 def read_string_from_channel(tau: TauSync, channel: str) -> str:
     """Open a named TauSync channel, read all incoming data, and return it as a string.
 
@@ -43,6 +48,7 @@ def read_string_from_channel(tau: TauSync, channel: str) -> str:
     Returns:
         The full payload decoded as a UTF-8 string.
     """
+    print(channel)
     with tau.connect(str(channel)) as stream:
         return stream.read_all().decode("utf-8")
 

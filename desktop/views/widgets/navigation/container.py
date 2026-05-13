@@ -2,10 +2,11 @@ from PySide6.QtCore import Slot
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
-from resources.colors import NavigationColors
+from app.theme_manager import theme_manager
+from resources.colors import Colors, LightColors
 from resources.paths import Icons, NavigationStyles
 from resources.spacing import Spacing
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 from views.widgets.navigation.item import NavigationItem
 
 
@@ -70,13 +71,17 @@ class NavigationContainer(QWidget):
 
     def _setup_style(self) -> None:
         """Load and apply the stylesheet for the navigation container."""
-        qss: str = load_stylesheet(NavigationStyles.CONTAINER, [NavigationColors])
+        qss: str = load_stylesheet(
+            NavigationStyles.CONTAINER,
+            themed([Colors], [LightColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
 
     def _setup_signals(self) -> None:
-        """Connect navigation item signals."""
+        """Connect navigation item signals and theme changes."""
         for item in self._navigation_items:
             item.clicked.connect(lambda i=item: self._change_active_status(i))
+        theme_manager.theme_changed.connect(self._setup_style)
 
     @Slot(NavigationItem)
     def _change_active_status(self, navigation_item: NavigationItem) -> None:

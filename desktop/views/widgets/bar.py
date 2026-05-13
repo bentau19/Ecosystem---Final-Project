@@ -32,10 +32,6 @@ class Bar(QWidget):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        """Set up the widget's initial configuration.
-        
-        Sets the fixed height of the battery bar to 7 pixels.
-        """
         self.setFixedHeight(7)
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -59,32 +55,11 @@ class Bar(QWidget):
 
     @staticmethod
     def _draw_background_track(painter: QPainter, width: int, height: int) -> None:
-        """Draw the background track of the battery bar.
-        
-        Draws a rounded rectangle with the surface color as the background
-        track for the battery indicator.
-        
-        Args:
-            painter (QPainter): The painter instance to draw with
-            width (int): Width of the widget
-            height (int): Height of the widget
-        """
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(QColor(Colors.SURFACE_SECONDARY)))
         painter.drawRoundedRect(0, 0, width, height, 3, 3)
 
     def _draw_battery_fill(self, painter: QPainter, width: int, height: int) -> None:
-        """Draw the battery level fill with gradient.
-        
-        Calculates the fill width based on the battery percentage and draws
-        a rounded rectangle with a green gradient to represent the current
-        battery level.
-        
-        Args:
-            painter (QPainter): The painter instance to draw with
-            width (int): Width of the widget
-            height (int): Height of the widget
-        """
         fill_width: int = int(width * self._percentage / 100)
         gradient: QLinearGradient = QLinearGradient(0, 0, fill_width, 0)
         gradient.setColorAt(0, self._gradient_start)

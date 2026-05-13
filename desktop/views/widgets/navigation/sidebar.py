@@ -1,9 +1,10 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame
 
-from resources.colors import SidebarColors
+from app.theme_manager import theme_manager
+from resources.colors import SidebarColors, LightSidebarColors
 from resources.paths import NavigationStyles
 from resources.spacing import Spacing
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 from views.widgets.divider import Divider
 from views.widgets.indicators.pill_wraper import PillWrapper
 from views.widgets.logo_widget import LogoWidget
@@ -43,21 +44,19 @@ class Sidebar(QFrame):
 
         self._setup_ui()
         self._setup_style()
+        self._connect_signals()
 
     def _setup_ui(self) -> None:
-        """Initialize child widgets, layout, and apply styles."""
         self._create_widgets()
         self._create_layout()
         self.setFixedWidth(self._sidebar_width)
 
     def _create_widgets(self) -> None:
-        """Instantiate all child widgets used in the sidebar."""
         self._logo_widget = self._create_logo_widget()
         self._nav_container = NavigationContainer()
         self._pill_wrapper = PillWrapper()
 
     def _create_layout(self) -> None:
-        """Set up the vertical layout and add widgets with spacing and dividers."""
         layout: QVBoxLayout = QVBoxLayout(self)
         layout.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.SM)
         layout.setSpacing(Spacing.NONE)
@@ -70,17 +69,16 @@ class Sidebar(QFrame):
         layout.addWidget(self._pill_wrapper)
 
     def _setup_style(self) -> None:
-        """Load and apply the QSS stylesheet for the sidebar."""
-        qss: str = load_stylesheet(NavigationStyles.SIDEBAR, [SidebarColors])
+        qss: str = load_stylesheet(
+            NavigationStyles.SIDEBAR,
+            themed([SidebarColors], [LightSidebarColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
 
-    def _create_logo_widget(self) -> LogoWidget:
-        """
-        Create the logo widget.
+    def _connect_signals(self) -> None:
+        theme_manager.theme_changed.connect(self._setup_style)
 
-        Returns:
-            LogoWidget: The logo widget.
-        """
+    def _create_logo_widget(self) -> LogoWidget:
         widget: LogoWidget = LogoWidget()
         widget.setFixedHeight(self._logo_widget_height)
         return widget

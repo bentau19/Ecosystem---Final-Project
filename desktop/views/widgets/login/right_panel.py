@@ -8,9 +8,11 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 import utils.styles
+from app.theme_manager import theme_manager
 from domain.dto.previous_device import PreviousDeviceDTO
-from resources.colors import Palette
+from resources.colors import Palette, LoginColors, LightLoginColors, Colors, LightColors
 from resources.paths import Icons, LoginStyles
+from utils.styles import themed
 from resources.spacing import Spacing
 from app.app_state import app_state
 from app.navigation_manager import NavigationManager, navigation_manager
@@ -67,12 +69,10 @@ class RightPanel(QWidget):
     # ── Setup ──────────────────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
-        """Construct and arrange all child widgets."""
         self._create_widgets()
         self._setup_layout()
 
     def _create_widgets(self) -> None:
-        """Instantiate all child widgets."""
         self._title_lbl = QLabel("Previously connected")
         self._title_lbl.setObjectName("RightPanelTitle")
 
@@ -84,11 +84,7 @@ class RightPanel(QWidget):
         self._footer = self._create_footer()
 
     def _create_device_list(self) -> QWidget:
-        """Build an empty container that will be populated via the ViewModel.
-
-        Returns:
-            A QWidget whose layout receives one DeviceCard per loaded device.
-        """
+        # Empty on construction; populated by _on_devices_loaded when the ViewModel fires.
         container = QWidget(self)
         container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         container.setObjectName("DeviceList")
@@ -100,11 +96,6 @@ class RightPanel(QWidget):
         return container
 
     def _create_empty_state(self) -> QWidget:
-        """Build a centered empty-state widget shown when no previous devices exist.
-
-        Returns:
-            A QWidget with an icon, heading, and hint text vertically centered.
-        """
         container = QWidget(self)
         container.setObjectName("NoDevicesView")
         # Allow the container to expand so internal stretches can center the content
@@ -145,11 +136,6 @@ class RightPanel(QWidget):
         return container
 
     def _create_footer(self) -> QWidget:
-        """Build the 'End-to-end encrypted · Privacy · Help' footer row.
-
-        Returns:
-            A QWidget containing the footer labels laid out horizontally.
-        """
         footer = QWidget(self)
         footer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
@@ -180,17 +166,7 @@ class RightPanel(QWidget):
         return footer
 
     def _create_icon_pixmap(self) -> QPixmap:
-        """Render the empty-state smartphone icon.
-
-        Translates the HTML ``.device-icon`` CSS rule into a QPainter pixmap:
-        - background: ``oklch(1 0 0 / 0.04)``  → white at 4 % opacity
-        - border:     ``1px solid --line-2``    → :data:`Palette.GRAY_640`
-        - border-radius: 10 px
-        - icon color: ``--text-2``              → SVG stroke (cyan accent)
-
-        Returns:
-            A fully rendered QPixmap ready to be set on a QLabel.
-        """
+        # Translates the HTML .device-icon CSS rule into a QPainter pixmap.
         s = _EMPTY_ICON_SIZE
         r = _EMPTY_ICON_RADIUS
         m = _EMPTY_ICON_MARGIN
@@ -220,7 +196,6 @@ class RightPanel(QWidget):
         return pixmap
 
     def _setup_layout(self) -> None:
-        """Arrange all child widgets in a vertical column."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(Spacing.XXL, Spacing.XXL, Spacing.XXL, Spacing.XXL)
         layout.setSpacing(Spacing.SM)
@@ -239,18 +214,17 @@ class RightPanel(QWidget):
         layout.addWidget(self._footer)
 
     def _apply_style(self) -> None:
-        """Load and apply the right-panel QSS stylesheet."""
-        qss = utils.styles.load_stylesheet(LoginStyles.RIGHT_PANEL)
+        qss = utils.styles.load_stylesheet(
+            LoginStyles.RIGHT_PANEL,
+            themed([LoginColors, Colors], [LightLoginColors, LightColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
-        """Connect ViewModel signals to their handler slots.
-
-        The initial device load is triggered separately in ``__init__`` after
-        this method returns, ensuring the slot is already wired before the
-        signal fires.
-        """
+        # Wire before load_devices() is called in __init__ so the signal never fires
+        # before the slot is connected.
         self._device_viewmodel.previous_devices_updated.connect(self._on_devices_loaded)
+        theme_manager.theme_changed.connect(self._apply_style)
 
     # ── Slots ──────────────────────────────────────────────────────────────────
 

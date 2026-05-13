@@ -7,7 +7,10 @@ from PySide6.QtWidgets import (
 )
 
 import utils.styles
+from app.theme_manager import theme_manager
+from resources.colors import LoginColors, LightLoginColors, Colors, LightColors
 from resources.paths import Icons, LoginStyles
+from utils.styles import themed
 from resources.spacing import Spacing
 from views.widgets.indicators.pulsing_dot import PulsingDot
 from views.widgets.login.qr import QR
@@ -46,14 +49,12 @@ class LeftPanel(QWidget):
     # ── Setup ──────────────────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
-        """Configure the widget and build child layout."""
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("LeftPanel")
         self._create_widgets()
         self._setup_layout()
 
     def _create_widgets(self) -> None:
-        """Instantiate all child widgets."""
         self._logo = self._create_logo()
         self._logo_name = self._create_logo_name()
         self._app_description = self._create_description()
@@ -64,7 +65,6 @@ class LeftPanel(QWidget):
         self._waiting_for_connection = self._create_waiting_for_connection_widget()
 
     def _setup_layout(self) -> None:
-        """Arrange all child widgets in a centred vertical stack."""
         layout = QVBoxLayout(self)
 
         layout.setContentsMargins(Spacing.XXL, Spacing.SM, Spacing.XXL, Spacing.XXL)
@@ -97,11 +97,6 @@ class LeftPanel(QWidget):
 
     @staticmethod
     def _create_qr() -> QR:
-        """Create and configure the QR code widget.
-
-        Returns:
-            A QR instance capped at 420×420 px.
-        """
         # 420 px gives a QR dense enough to scan comfortably at arm's length
         qr_size: int = 420
         qr = QR()
@@ -111,21 +106,10 @@ class LeftPanel(QWidget):
 
     @staticmethod
     def _create_logo() -> Logo:
-        """Create the application logo widget.
-
-        Returns:
-            A Logo label with the default icon size.
-        """
-
         logo = Logo(logo_size=100)
         return logo
 
     def _create_description(self) -> QLabel:
-        """Create the app tagline label.
-
-        Returns:
-            A centred QLabel with the application description text.
-        """
         label = QLabel(self)
         label.setText("Seamless cross-device connectivity")
         label.setObjectName("DescriptionLabel")
@@ -134,11 +118,6 @@ class LeftPanel(QWidget):
 
     @staticmethod
     def _create_logo_name() -> LogoNameLabel:
-        """Create the gradient application-name label.
-
-        Returns:
-            A LogoNameLabel instance (gradient-painted 'SyncDose').
-        """
         logo_label = LogoNameLabel()
         logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo_label.setObjectName("LogoName")
@@ -146,11 +125,6 @@ class LeftPanel(QWidget):
 
     @staticmethod
     def _create_generic_scan_instructions() -> QLabel:
-        """Create the primary scan-instruction label.
-
-        Returns:
-            A centred QLabel with a short instruction string.
-        """
         label = QLabel()
         label.setText("Scan with SyncDose on your phone")
         label.setObjectName("GenericScanInstructions")
@@ -159,11 +133,6 @@ class LeftPanel(QWidget):
 
     @staticmethod
     def _create_detailed_scan_instructions() -> QLabel:
-        """Create the secondary step-by-step scan-instruction label.
-
-        Returns:
-            A word-wrapping, centred QLabel with detailed steps.
-        """
         label = QLabel()
         label.setText("Open the app → tap the scan icon → point your camera here")
         label.setWordWrap(True)
@@ -173,11 +142,6 @@ class LeftPanel(QWidget):
 
     @staticmethod
     def _create_refresh_button() -> QPushButton:
-        """Create the 'Refresh QR' button.
-
-        Returns:
-            A fixed-size QPushButton with the refresh icon and label.
-        """
         button = QPushButton()
         button.setIcon(QIcon(Icons.REFRESH))
         button.setText("  Refresh QR")
@@ -187,11 +151,6 @@ class LeftPanel(QWidget):
 
     @staticmethod
     def _create_waiting_for_connection_widget() -> QWidget:
-        """Create the pulsing-dot 'Waiting for connection…' indicator row.
-
-        Returns:
-            A QWidget containing a PulsingDot and a status label side-by-side.
-        """
         widget = QWidget()
         # WA_StyledBackground lets QSS target this plain QWidget with a background rule
         widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -210,17 +169,18 @@ class LeftPanel(QWidget):
     # ── Style ──────────────────────────────────────────────────────────────────
 
     def _setup_style(self) -> None:
-        """Load and apply the left-panel QSS stylesheet."""
-        qss = utils.styles.load_stylesheet(LoginStyles.LEFT_PANEL)
+        qss = utils.styles.load_stylesheet(
+            LoginStyles.LEFT_PANEL,
+            themed([LoginColors, Colors], [LightLoginColors, LightColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
-        """Wire up internal widget signals."""
         self._refresh_button.clicked.connect(self._refresh_qr_code)
+        theme_manager.theme_changed.connect(self._setup_style)
 
     @Slot()
     def _refresh_qr_code(self) -> None:
-        """Regenerate the QR code and update the display."""
         self._qr.refresh_qr()
 
 

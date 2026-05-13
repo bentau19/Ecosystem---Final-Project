@@ -2,10 +2,11 @@ from PySide6.QtCore import Qt, Signal, QEvent
 from PySide6.QtGui import QPixmap, QEnterEvent, QMouseEvent
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame
 
-from resources.colors import NavigationColors
+from app.theme_manager import theme_manager
+from resources.colors import NavigationColors, LightNavigationColors, LightColors
 from resources.paths import NavigationStyles
 from resources.spacing import Spacing
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 
 
 class NavigationItem(QFrame):
@@ -40,6 +41,7 @@ class NavigationItem(QFrame):
 
         self._setup_ui()
         self._setup_style()
+        self._connect_signals()
 
     def _setup_ui(self) -> None:
         """Initialize widget, layout, and styles."""
@@ -104,8 +106,15 @@ class NavigationItem(QFrame):
 
     def _setup_style(self) -> None:
         """Load and apply the stylesheet with color placeholders replaced."""
-        qss: str = load_stylesheet(NavigationStyles.ITEM, [NavigationColors])
+        qss: str = load_stylesheet(
+            NavigationStyles.ITEM,
+            themed([NavigationColors], [LightNavigationColors, LightColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
+
+    def _connect_signals(self) -> None:
+        """Wire theme changes to re-apply the stylesheet."""
+        theme_manager.theme_changed.connect(self._setup_style)
 
     def _change_hover_status(self, value: bool) -> None:
         """Update hover property and refresh styling."""

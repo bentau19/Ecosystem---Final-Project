@@ -10,6 +10,7 @@ from typing import Callable
 
 from services.connectivity import ConnectivityService
 from domain.enums.file_transfer_channels import FileTransferChannels
+from domain.enums.session_channels import SessionChannels
 
 
 class PhoneRequestService:
@@ -41,6 +42,7 @@ class PhoneRequestService:
 
         self.operations: dict[str, Callable[[], None]] = {
             FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC.value: file_transfer_service.receive_metadata,
+            SessionChannels.DISCONNECT_FROM_PHONE.value: self._connectivity.disconnect_device,
         }
         self.start()
 
@@ -75,7 +77,6 @@ class PhoneRequestService:
     # ── Private lifecycle ──────────────────────────────────────────────────────
 
     def _spawn(self, target, *args):
-        """All thread creation must go through here."""
         if not self._is_running.is_set():
             return  # reject new spawns during teardown
         t = threading.Thread(target=target, args=args, daemon=True)
@@ -89,12 +90,6 @@ class PhoneRequestService:
             return [t for t in self._threads if t.is_alive()]
 
     def _listen_to_channels(self) -> None:
-        """Read the peer's waiting channels and dispatch to registered handlers.
-
-        Retrieves the list of channel names the peer is waiting on and calls
-        the registered handler for each.  Channels with no registered handler
-        are silently skipped.
-        """
         while not self._connectivity.connected:
             sleep(5)
         tau = self._connectivity.tau
