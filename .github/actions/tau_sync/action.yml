@@ -10,4 +10,4 @@ runs:
 
     - name: Build windows DLL
       shell: bash
-      run: dotnet publish TauSync/TauSync.Lib -c Release -o /output
+      run: dotnet publish TauSync/Tausync_Windows/TauSync.Lib -c Release -o TauSync/windows/tausync_py/dll
