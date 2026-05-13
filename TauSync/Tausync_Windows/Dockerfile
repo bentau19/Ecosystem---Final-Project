@@ -10,6 +10,8 @@ RUN chmod +x make_dll.sh
 
 VOLUME /output
 
+RUN sed -i 's/\r//' ./make_dll.sh
+
 ENTRYPOINT ["/bin/bash"]
 CMD ["make_dll.sh"]
 
