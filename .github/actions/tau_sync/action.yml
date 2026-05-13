@@ -10,4 +10,4 @@ runs:
 
     - name: Build windows DLL
       shell: bash
-      run: docker compose -f TauSync/docker-compose.yml up --build --force-recreate
+      run: dotnet publish TauSync/TauSync.Lib -c Release -o /output
