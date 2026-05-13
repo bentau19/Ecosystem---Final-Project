@@ -1,0 +1,13 @@
+name: TauSync Action
+
+description: Build Windows DLL using Docker Compose
+
+runs:
+  using: "composite"
+
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Build windows DLL
+      shell: bash
+      run: docker compose -f TauSync/docker-compose.yml up --build --force-recreate
