@@ -33,9 +33,10 @@ jobs:
           cmake --build desktop/native/windows/pipe/build --config Release
       - name: Copy file
         run: |
-          cp desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd 
-          desktop/native/windows/pipe/pipe_module.cp313-win_amd64.pyd
-
+          Copy-Item `
+          desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd `
+          desktop/native/windows/pipe/
+            
       - name: Run tests
         run: pytest desktop/
 
@@ -61,8 +62,9 @@ jobs:
 
       - name: Copy file
         run: |
-          cp desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd 
-          desktop/native/windows/pipe/pipe_module.cp313-win_amd64.pyd
+            Copy-Item `
+            desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd `
+            desktop/native/windows/pipe/
 
       - name: Install deps
         run: |
