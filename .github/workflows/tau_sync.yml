@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build windows DLL
-        run: docker compose  -f ../../TauSync/docker-compose.yml up --build --force-recreate
+        run: docker compose  -f TauSync/docker-compose.yml up --build --force-recreate
 
 
 

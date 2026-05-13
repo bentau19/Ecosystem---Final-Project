@@ -50,8 +50,8 @@ jobs:
 
       - name: Build native
         run: |
-          cmake -S desktop/native/windows/pipe -B build
-          cmake --build build --config Release
+          cmake -S desktop/native/windows/pipe -B desktop/native/windows/pipe/build
+          cmake --build desktop/native/windows/pipe/build --config Release
 
       - name: Copy file
         run: |
