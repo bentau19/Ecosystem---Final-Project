@@ -1,5 +1,10 @@
-name: desktop.yml
-on: [ push ]
+name: Desktop
+on:
+  workflow_run:
+    workflows:
+      - TauSync
+    types:
+      - completed
 
 jobs:
 
@@ -25,8 +30,8 @@ jobs:
 
       - name: Build native
         run: |
-          cmake -S desktop/native/windows/pipe -B build
-          cmake --build build --config Release
+          cmake -S desktop/native/windows/pipe -B desktop/native/windows/pipe/build
+          cmake --build desktop/native/windows/pipe/build --config Release
       - name: Copy file
         run: |
           cp desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd 
