@@ -1,8 +1,8 @@
-name: Desktop
+name: "Desktop"
+
 on:
   workflow_run:
-    workflows:
-      - TauSync
+    workflows: ["TauSync"]
     types:
       - completed
 

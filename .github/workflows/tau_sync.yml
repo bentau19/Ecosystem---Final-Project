@@ -1,4 +1,4 @@
-name: TauSync
+name: "TauSync"
 
 on:
   [ push ]
