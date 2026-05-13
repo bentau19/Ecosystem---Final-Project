@@ -62,9 +62,9 @@ jobs:
 
       - name: Copy file
         run: |
-            Copy-Item `
-            desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd `
-            desktop/native/windows/pipe/
+          Copy-Item `
+          desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd `
+          desktop/native/windows/pipe/
 
       - name: Install deps
         run: |
@@ -84,26 +84,26 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: build
+          name: installer
           path: |
-            dist/
-            desktop/installer/bin/
+            desktop/installer/bin/Release/**/*.msi
 
 
 
-  deploy:
-    needs: build
-    if: github.ref != 'refs/heads/main'
-    runs-on: windows-latest
-    environment: production
-
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: build
-
-      - name: Publish release
-        run: echo "Deploy step here (GitHub Release / MSI upload)"
+# make package on main branch with approval
+#  deploy:
+#    needs: build
+#    if: github.ref == 'refs/heads/main'
+#    runs-on: windows-latest
+#    environment: production
+#
+#    steps:
+#      - uses: actions/download-artifact@v4
+#        with:
+#          name: build
+#
+#      - name: Publish release
+#        run: echo "Deploy step here (GitHub Release / MSI upload)"
 
 
 
