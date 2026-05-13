@@ -1,18 +1,18 @@
 name: Desktop
 
 on:
-  [push]
+  [ push ]
 jobs:
 
-
-  dll:
-    uses: .github/workflows/tau_sync.yml
 
   test:
     runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
+
+      - uses: ./.github/workflows/tau_sync.yml
+
 
       - uses: actions/setup-python@v5
         with:
@@ -45,6 +45,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/workflows/tau_sync.yml
+        
 
       - uses: actions/setup-python@v5
         with:
