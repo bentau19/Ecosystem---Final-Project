@@ -16,7 +16,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
@@ -36,7 +36,7 @@ jobs:
           Copy-Item `
           desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd `
           desktop/native/windows/pipe/
-            
+
       - name: Run tests
         run: pytest desktop/
 
@@ -51,7 +51,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
 
       - uses: ilammy/msvc-dev-cmd@v1
 
