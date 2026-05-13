@@ -2,5 +2,4 @@ pyside6>=6.11.1
 pytest-qt>=4.4.0
 qrcode>= 7.4.2
 pillow >= 12.2.0
-tausync-py>= 0.1.0
 jsonschema>= 4.17.3

@@ -34,7 +34,7 @@ jobs:
       - name: Copy file
         run: |
           Copy-Item `
-          desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd `
+          desktop/native/windows/pipe/build/Release/pipe_module.cp312-win_amd64.pyd `
           desktop/native/windows/pipe/
 
       - name: Run tests
@@ -63,7 +63,7 @@ jobs:
       - name: Copy file
         run: |
             Copy-Item `
-            desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd `
+            desktop/native/windows/pipe/build/Release/pipe_module.cp312-win_amd64.pyd `
             desktop/native/windows/pipe/
 
       - name: Install deps
