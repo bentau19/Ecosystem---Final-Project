@@ -1,13 +1,12 @@
 name: Desktop
 
 on:
-  workflow_run:
-    workflows: [TauSync]
-    types:
-      - completed
-
+  [push]
 jobs:
 
+
+  dll:
+    -uses: .github/workflows/tau_sync.yml
 
   test:
     runs-on: windows-latest

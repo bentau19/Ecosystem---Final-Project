@@ -1,7 +1,8 @@
 name: TauSync
 
 on:
-  [ push ]
+  [ workflow_call ]
+
 jobs:
   #  run tests after finish configure
 
