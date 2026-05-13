@@ -86,7 +86,7 @@ jobs:
         with:
           name: installer
           path: |
-            desktop/installer/bin/Release/**/*.msi
+            desktop/installer/bin/Release/*.msi
 
 
 
