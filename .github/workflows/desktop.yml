@@ -6,7 +6,7 @@ jobs:
 
 
   dll:
-    -uses: .github/workflows/tau_sync.yml
+    uses: .github/workflows/tau_sync.yml
 
   test:
     runs-on: windows-latest
