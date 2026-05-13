@@ -11,7 +11,7 @@
     <Fragment>
 
         <!-- C:\Program Files\SyncDose\ -->
-        <StandardDirectory Id="ProgramFilesFolder">
+        <StandardDirectory Id="ProgramFiles64Folder">
             <Directory Id="INSTALLFOLDER" Name="SyncDose">
                 <Directory Id="FILEHANDLERFOLDER" Name="FileHandler"/>
             </Directory>

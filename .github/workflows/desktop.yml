@@ -16,7 +16,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Install dependencies
         run: |
@@ -34,7 +34,7 @@ jobs:
       - name: Copy file
         run: |
           Copy-Item `
-          desktop/native/windows/pipe/build/Release/pipe_module.cp312-win_amd64.pyd `
+          desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd `
           desktop/native/windows/pipe/
 
       - name: Run tests
@@ -51,7 +51,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - uses: ilammy/msvc-dev-cmd@v1
 
@@ -63,7 +63,7 @@ jobs:
       - name: Copy file
         run: |
             Copy-Item `
-            desktop/native/windows/pipe/build/Release/pipe_module.cp312-win_amd64.pyd `
+            desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd `
             desktop/native/windows/pipe/
 
       - name: Install deps
