@@ -153,38 +153,45 @@ class DeviceViewModel(QObject):
     # ── Private helpers ────────────────────────────────────────────────────────
 
     def _request_device_info_refresh(self) -> None:
+        # Delegate to the service so the timer and update_device_info() share one path.
         self._device_info_service.fetch_device_info()
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
     @Slot(object)
     def _on_device_info_ready(self, entity: DeviceEntity) -> None:
+        # Track the connected device ID so load_device_info() fetches the right entity.
         self._current_device_connected_id = entity.id
         self.device_infos_updated.emit(self._to_device_info_dtos(entity))
 
     @Slot(object)
     def _on_device_fetched(self, entity: DeviceEntity | None) -> None:
+        # Silently drop None — no device in the repository yet.
         if entity is None:
             return
         self.device_infos_updated.emit(self._to_device_info_dtos(entity))
 
     @Slot(list)
     def _on_all_devices_fetched(self, devices: list[DeviceEntity]) -> None:
+        # Convert raw entities to view-ready DTOs before emitting.
         dtos = [self._to_prev_device_dto(d) for d in devices]
         self.previous_devices_updated.emit(dtos)
 
     @Slot(object)
     def _on_entity_saved(self, entity: DeviceEntity) -> None:
+        # Refresh the dashboard cards whenever a save completes.
         self.device_infos_updated.emit(self._to_device_info_dtos(entity))
 
     @Slot()
     def _on_device_connected(self) -> None:
+        # Start the info service so channel reads can proceed, then fetch immediately.
         self._device_info_service.start()
         self._device_info_service.fetch_device_info()
         self.device_connected.emit()
 
     @Slot()
-    def _on_device_disconnected(self):
+    def _on_device_disconnected(self) -> None:
+        # Stop info reads, restart the listener so the next device can connect.
         self._device_info_service.stop()
         self._connectivity_service.start()
         self.device_disconnected.emit()
@@ -193,6 +200,7 @@ class DeviceViewModel(QObject):
 
     @staticmethod
     def _to_device_info_dtos(entity: DeviceEntity) -> list[DeviceInfoDTO]:
+        # Map entity fields to the typed DTO subclasses the view layer expects.
         return [
             DeviceNameDTO(
                 title="Name",
@@ -220,6 +228,7 @@ class DeviceViewModel(QObject):
 
     @staticmethod
     def _to_prev_device_dto(entity: DeviceEntity) -> PreviousDeviceDTO:
+        # Flatten entity fields into the flat DTO the login panel's card list expects.
         return PreviousDeviceDTO(
             name=entity.name,
             os=entity.os,

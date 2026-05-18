@@ -61,6 +61,7 @@ class ToolRepository(
         self._configure_db()
 
     def _configure_db(self) -> None:
+        # Create the tools table if absent; seed default rows when the table is empty.
         with sqlite3.connect(self._db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(

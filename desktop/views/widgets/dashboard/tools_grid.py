@@ -46,26 +46,18 @@ class ToolsGrid(QWidget):
         self._tool_view_model.load_enabled_tools()
 
     def _setup_ui(self) -> None:
-        """Set up the user interface."""
+        # Initialize the flow layout.
         self._create_layout()
 
     def _create_layout(self) -> None:
-        """Create the FlowLayout and configure its margins and spacing."""
+        # Create the FlowLayout and configure its margins and spacing.
         self._main_layout = FlowLayout(min_width=self._card_width, parent=self)
         self._main_layout.setContentsMargins(Spacing.NONE, Spacing.SM, Spacing.NONE, Spacing.NONE)
         self._main_layout.setSpacing(Spacing.LG)
 
     @staticmethod
     def _create_description_widget(text: str) -> QLabel:
-        """Create a word-wrapped, left-aligned description label.
-
-        Args:
-            text: The description text to display.
-
-        Returns:
-            A ``QLabel`` configured for multi-line display with the
-            ``description`` object name set for QSS targeting.
-        """
+        # Create a word-wrapped, left-aligned description label for use inside a ToolCard.
         label: QLabel = QLabel(text)
         label.setObjectName("description")
         label.setWordWrap(True)
@@ -73,7 +65,7 @@ class ToolsGrid(QWidget):
         return label
 
     def _setup_style(self) -> None:
-        """Load and apply the QSS stylesheet for the tools grid."""
+        # Load and apply the themed QSS stylesheet.
         qss: str = load_stylesheet(
             DashboardStyles.TOOLS_GRID,
             themed([Colors], [LightColors], theme_manager.is_dark),
@@ -81,11 +73,7 @@ class ToolsGrid(QWidget):
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
-        """Connect ViewModel signals to their handler slots.
-
-        Only ``tools_loaded`` is wired up; update/add/delete signals are
-        stubbed out until those features are implemented.
-        """
+        # Wire tools_loaded and theme_changed; add/update/delete signals are stubbed until needed.
         # TODO: setup signals on changed tool,added deleted if needed
         # self._tool_view_model.tool_updated.connect(self._on_tool_updated)
         # self._tool_view_model.tool_added.connect(self._on_tool_added)
@@ -95,11 +83,7 @@ class ToolsGrid(QWidget):
 
     @Slot(list)
     def _load_tools(self, tools: list[ToolDTO]) -> None:
-        """Populate the grid by creating a ToolCard for each loaded tool.
-
-        Args:
-            tools: The list of enabled tool DTOs emitted by the ViewModel.
-        """
+        # Create a ToolCard for each enabled tool DTO and add it to the flow layout.
         print(tools)
         for tool in tools:
             description_label: QLabel = self._create_description_widget(tool.description)

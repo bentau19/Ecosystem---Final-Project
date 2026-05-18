@@ -91,12 +91,14 @@ class ToolService(QObject):
     # ── Private lifecycle ──────────────────────────────────────────────────────
 
     def _start(self) -> None:
+        # Guard against double-start with the lifecycle lock.
         with self._lifecycle_lock:
             if self._is_running.is_set():
                 return
             self._is_running.set()
 
     def _stop(self) -> None:
+        # Join every worker except the calling thread to avoid a deadlock.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
@@ -108,17 +110,20 @@ class ToolService(QObject):
                 t.join()
 
     def _spawn(self, target, *args) -> None:
+        # Reject new spawns during teardown to avoid work after _is_running is cleared.
         if not self._is_running.is_set():
-            return  # reject new spawns during teardown
+            return
         t = threading.Thread(target=target, args=args, daemon=True)
         with self._threads_lock:
             self._threads.append(t)
         t.start()
 
     def _get_pending_threads(self) -> list[threading.Thread]:
+        # Snapshot alive threads under the lock so callers can join without holding it.
         with self._threads_lock:
             return [t for t in self._threads if t.is_alive()]
 
     def _fetch_all_enabled(self) -> None:
+        # Retrieve enabled tools from the repository and emit the result.
         tools = self._repository.get_all_enabled()
         self.all_enabled_tools_fetched.emit(tools)

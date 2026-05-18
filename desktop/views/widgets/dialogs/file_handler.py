@@ -65,6 +65,7 @@ class _BaseHandlerDialog(QDialog):
     # ── UI construction ────────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
+        # Configure dialog properties, then build widgets and layout.
         self.setObjectName("HandlerDialog")
         self.setWindowTitle("SyncDose")
         self.setFixedWidth(self._DIALOG_WIDTH)
@@ -75,6 +76,7 @@ class _BaseHandlerDialog(QDialog):
         self._setup_layout()
 
     def _create_widgets(self) -> None:
+        # Instantiate all dialog child widgets.
         self._icon_circle: QLabel = self._create_icon_circle()
         self._title_label: QLabel = self._create_title_label()
         self._message_label: QLabel = self._create_message_label()
@@ -82,6 +84,7 @@ class _BaseHandlerDialog(QDialog):
         self._dismiss_button: QPushButton = self._create_dismiss_button()
 
     def _setup_layout(self) -> None:
+        # Arrange: icon → title → message → Try Again → Dismiss, with design-spec spacing.
         root: QVBoxLayout = QVBoxLayout(self)
         # top: 32px  |  sides: 24px  |  bottom: 24px  (mirrors mockup padding)
         root.setContentsMargins(
@@ -103,6 +106,7 @@ class _BaseHandlerDialog(QDialog):
         root.addWidget(self._dismiss_button)
 
     def _create_icon_circle(self) -> QLabel:
+        # Create the fixed-size accent icon circle label.
         circle = QLabel(self._icon_char)
         circle.setObjectName("IconCircle")
         circle.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -110,6 +114,7 @@ class _BaseHandlerDialog(QDialog):
         return circle
 
     def _create_title_label(self) -> QLabel:
+        # Create the centred, word-wrapped title heading.
         label = QLabel(self._title)
         label.setObjectName("TitleLabel")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -117,6 +122,7 @@ class _BaseHandlerDialog(QDialog):
         return label
 
     def _create_message_label(self) -> QLabel:
+        # Create the centred, word-wrapped body message label.
         label = QLabel(self._message)
         label.setObjectName("MessageLabel")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -124,6 +130,7 @@ class _BaseHandlerDialog(QDialog):
         return label
 
     def _create_try_again_button(self) -> QPushButton:
+        # Create the primary 'Try Again' button that resolves the dialog as Accepted.
         btn = QPushButton("Try Again")
         btn.setObjectName("TryAgainButton")
         btn.setFixedHeight(self._BUTTON_HEIGHT)
@@ -131,6 +138,7 @@ class _BaseHandlerDialog(QDialog):
         return btn
 
     def _create_dismiss_button(self) -> QPushButton:
+        # Create the neutral 'Dismiss' button that resolves the dialog as Rejected.
         btn = QPushButton("Dismiss")
         btn.setObjectName("DismissButton")
         btn.setFixedHeight(self._BUTTON_HEIGHT)
@@ -148,6 +156,7 @@ class _BaseHandlerDialog(QDialog):
         return f"rgba({r}, {g}, {b}, {alpha})"
 
     def _apply_style(self) -> None:
+        # Load QSS from disk (no Qt virtual FS in standalone FileHandler.exe) and inject accent tokens.
         qss: str = load_stylesheet_disk(
             _QSS_REL_PATH,
             themed([HandlerDialogColors], [LightHandlerDialogColors], theme_manager.is_dark),
@@ -163,6 +172,7 @@ class _BaseHandlerDialog(QDialog):
     # ── Signals ────────────────────────────────────────────────────────────────
 
     def _connect_signals(self) -> None:
+        # Wire Try Again → accept, Dismiss → reject, and theme_changed → re-apply style.
         self._try_again_button.clicked.connect(self.accept)  # → Accepted
         self._dismiss_button.clicked.connect(self.reject)  # → Rejected
         theme_manager.theme_changed.connect(self._apply_style)

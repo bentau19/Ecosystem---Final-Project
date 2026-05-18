@@ -31,10 +31,12 @@ class Divider(QFrame):
         self._connect_signals()
 
     def _setup_ui(self) -> None:
+        # Configure as a horizontal frame line exactly 1 px tall.
         self.setFrameShape(QFrame.Shape.HLine)
         self.setFixedHeight(1)
 
     def _setup_style(self) -> None:
+        # Load and apply the themed divider QSS.
         qss: str = load_stylesheet(
             Styles.DIVIDER,
             themed([Colors], [LightColors], theme_manager.is_dark),
@@ -42,4 +44,5 @@ class Divider(QFrame):
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
+        # Wire theme_changed to re-apply the stylesheet.
         theme_manager.theme_changed.connect(self._setup_style)

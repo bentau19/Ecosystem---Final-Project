@@ -131,12 +131,14 @@ class DeviceInfoService(QObject):
         threading.Thread(target=self._stop, daemon=True).start()
 
     def _start(self) -> None:
+        # Guard against double-start with the lifecycle lock.
         with self._lifecycle_lock:
             if self._is_running.is_set():
                 return
             self._is_running.set()
 
     def _stop(self) -> None:
+        # Join every worker except the calling thread to avoid a deadlock.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
@@ -148,37 +150,71 @@ class DeviceInfoService(QObject):
                 t.join()
 
     def fetch_device_info(self) -> None:
+        """Request a fresh device-info read from TauSync channels on a background thread.
+
+        Gated on :attr:`_is_running` — call :meth:`start` first.
+
+        Emits:
+            device_info_ready: With the populated
+                :class:`~domain.entities.device_info.DeviceEntity` on success.
+            read_error: With the exception message string on failure.
+        """
         if not self._is_running.is_set():
             return
         self._spawn(self._get_device_info)
 
     # ── Private helpers ────────────────────────────────────────────────────────
 
-    def _spawn(self, target, *args):
+    def _spawn(self, target, *args) -> None:
+        # Reject new spawns during teardown to avoid work after _is_running is cleared.
         if not self._is_running.is_set():
-            return  # reject new spawns during teardown
+            return
         t = threading.Thread(target=target, args=args, daemon=True)
         with self._threads_lock:
             self._threads.append(t)
         t.start()
 
+    def _start(self) -> None:
+        # Guard against double-start with the lifecycle lock.
+        with self._lifecycle_lock:
+            if self._is_running.is_set():
+                return
+            self._is_running.set()
+
+    def _stop(self) -> None:
+        # Join every worker except the calling thread to avoid a deadlock.
+        with self._lifecycle_lock:
+            if not self._is_running.is_set():
+                return
+            self._is_running.clear()
+            pending_threads: list[threading.Thread] = self._get_pending_threads()
+            for t in pending_threads:
+                if t == threading.current_thread():
+                    continue
+                t.join()
+
     def _save(self, entity: DeviceEntity) -> None:
+        # Persist entity via repository and re-emit the saved signal at service level.
         self._device_repository.save(entity)
         self.device_saved.emit(entity)
 
     def _fetch_device_by_id(self, device_id: str) -> None:
+        # Look up the entity and emit device_fetched (None if not found).
         entity = self._device_repository.get_by_id(device_id)
         self.device_fetched.emit(entity)
 
     def _fetch_all_devices(self) -> None:
+        # Retrieve the full device list and emit it for the ViewModel to consume.
         devices = self._device_repository.get_all()
         self.all_devices_fetched.emit(devices)
 
     def _get_pending_threads(self) -> list[threading.Thread]:
+        # Snapshot alive threads under the lock so callers can join without holding it.
         with self._threads_lock:
             return [t for t in self._threads if t.is_alive()]
 
     def _get_device_info(self) -> None:
+        # Read all device channels sequentially, build the entity, persist, and emit.
         tau = self._connectivity.tau
         if not tau.is_connected:
             return
@@ -207,6 +243,7 @@ class DeviceInfoService(QObject):
             self.read_error.emit(str(exc))
 
     def _read_device_id(self) -> str:
+        # Exchange ID with the remote device: read what the phone has, assign a new one if empty.
         tau = self._connectivity.tau
 
         device_id: str
@@ -222,6 +259,7 @@ class DeviceInfoService(QObject):
         return device_id
 
     def _generate_unique_id(self) -> str:
+        # Retry until a UUID hex that doesn't collide with any stored device is found.
         while True:
             candidate_id = str(uuid.uuid4().hex)
             if not self._device_repository.id_exists(candidate_id):

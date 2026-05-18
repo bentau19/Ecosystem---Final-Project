@@ -46,12 +46,12 @@ class StorageInfo(QFrame):
         self._connect_signals()
 
     def _setup_ui(self) -> None:
-        """Create and configure the vertical layout for the storage card."""
+        # Create widgets and build the vertical layout.
         self._create_widgets()
         self._create_layout()
 
     def _create_widgets(self) -> None:
-        """Create all child widgets for the storage card."""
+        # Create the value label, gradient bar, and percentage sub-label.
         self._value_label = self._create_value_label()
 
         self._bar = Bar(self._percentage, QColor(StorageBarColors.GRADIENT_START),
@@ -59,11 +59,7 @@ class StorageInfo(QFrame):
         self._sub_label = self._create_sub_label()
 
     def _create_layout(self) -> None:
-        """Create and configure the vertical layout for the storage card.
-
-        Sets up a QVBoxLayout with specific margins and spacing, then adds
-        all child widgets in the correct order with appropriate spacing.
-        """
+        # Build the vertical card layout: value → bar → sub-label → stretch.
         layout: QVBoxLayout = QVBoxLayout(self)
         layout.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.NONE)
         layout.addWidget(self._value_label)
@@ -74,7 +70,7 @@ class StorageInfo(QFrame):
         layout.addStretch()
 
     def _setup_style(self) -> None:
-        """Apply card styling to the storage card."""
+        # Load and apply the themed QSS.
         qss: str = load_stylesheet(
             DashboardStyles.STORAGE_INFO,
             themed([Colors], [LightColors], theme_manager.is_dark),
@@ -82,26 +78,17 @@ class StorageInfo(QFrame):
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
-        """Wire theme changes to re-apply the stylesheet."""
+        # Wire theme_changed to re-apply the stylesheet.
         theme_manager.theme_changed.connect(self._setup_style)
 
     def _create_value_label(self) -> QLabel:
-        """Create the storage usage value label.
-
-        Returns:
-            QLabel: A label displaying "128 / 256 GB" with text color,
-                   larger font, bold weight, and transparent background
-        """
+        # Create the 'used / total GB' display label.
         label: QLabel = QLabel(f"{self._used_space} / {self._available_space} GB")
         label.setObjectName("storageValue")
         return label
 
     def _create_sub_label(self) -> QLabel:
-        """Create the usage percentage sub-label.
-
-        Returns:
-            QLabel: A label displaying "50% used" with muted color and small font
-        """
+        # Create the 'N% used' muted sub-label.
         label: QLabel = QLabel(f"{self._percentage}% used")
         label.setObjectName("storageSubLabel")
         return label

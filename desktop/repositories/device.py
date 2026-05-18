@@ -47,6 +47,7 @@ class DeviceRepository(
         self._configure_db()
 
     def _configure_db(self) -> None:
+        # Create the devices table if it does not already exist.
         with sqlite3.connect(self._db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("CREATE TABLE IF NOT EXISTS devices "

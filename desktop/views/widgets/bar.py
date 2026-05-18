@@ -32,6 +32,7 @@ class Bar(QWidget):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
+        # Fix the bar height to 7 px so it renders as a thin horizontal track.
         self.setFixedHeight(7)
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -55,11 +56,13 @@ class Bar(QWidget):
 
     @staticmethod
     def _draw_background_track(painter: QPainter, width: int, height: int) -> None:
+        # Draw the full-width muted background track behind the fill.
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(QColor(Colors.SURFACE_SECONDARY)))
         painter.drawRoundedRect(0, 0, width, height, 3, 3)
 
     def _draw_battery_fill(self, painter: QPainter, width: int, height: int) -> None:
+        # Draw the gradient fill scaled to the current percentage.
         fill_width: int = int(width * self._percentage / 100)
         gradient: QLinearGradient = QLinearGradient(0, 0, fill_width, 0)
         gradient.setColorAt(0, self._gradient_start)

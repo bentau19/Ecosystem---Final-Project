@@ -50,6 +50,7 @@ class QR(QLabel):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
+        # Set the initial pixmap generated during construction.
         self.setPixmap(self._pixmap)
 
     def refresh_qr(self) -> None:
@@ -58,6 +59,7 @@ class QR(QLabel):
         self.setPixmap(self._pixmap)
 
     def _load_qr(self) -> None:
+        # Read the local IP, encode it as JSON, generate a QR code, and store the pixmap.
         ip: str = network.get_ip()
 
         data: dict[str, str] = {DataKey.IP.value: ip}
@@ -116,6 +118,7 @@ class QR(QLabel):
         painter.end()
 
     def _draw_corner_brackets(self, painter: QPainter) -> None:
+        # Draw four L-shaped teal corner brackets over the clipped QR image.
         pen = QPen(
             _BRACKET_COLOR,
             _BRACKET_WIDTH,

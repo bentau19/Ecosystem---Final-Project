@@ -29,6 +29,14 @@ def get_pc_name() -> str:
 
 
 def get_ip_by_hostname(hostname: str) -> str:
+    """Resolve a hostname to its IPv4 address.
+
+    Args:
+        hostname: DNS name or NetBIOS name of the target machine.
+
+    Returns:
+        A dotted-decimal IPv4 string (e.g. ``"192.168.1.20"``).
+    """
     ip = socket.gethostbyname(hostname)
     return ip
 

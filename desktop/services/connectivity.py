@@ -74,17 +74,27 @@ class ConnectivityService(QObject):
 
     @property
     def connected(self) -> bool:
+        """``True`` when the TauSync transport has an active peer connection."""
         return self._tau.is_connected
 
     # ── Public API ───────────────────────────────────────────────────
 
     def start(self) -> None:
+        """Start the connection listener on a background thread."""
         threading.Thread(target=self._start, daemon=True).start()
 
     def stop(self) -> None:
+        """Stop the service on a background thread, joining all pending workers."""
         threading.Thread(target=self._stop, daemon=True).start()
 
     def connect_to_device(self, hostname: str) -> None:
+        """Initiate an outbound connection to *hostname* on a background thread.
+
+        No-ops when the service is not running.
+
+        Args:
+            hostname: DNS name or IP address of the target device.
+        """
         if not self._is_running.is_set():
             return
         self._spawn(self._connect_to_device, hostname)
@@ -92,6 +102,7 @@ class ConnectivityService(QObject):
     # ── Private Functions ───────────────────────────────────────────────────
 
     def _start(self) -> None:
+        # Guard against double-start; replace the transport so reconnects get a fresh TauSync.
         with self._lifecycle_lock:
             if self._is_running.is_set():
                 return
@@ -100,6 +111,7 @@ class ConnectivityService(QObject):
         self._spawn(self._listen)
 
     def _stop(self) -> None:
+        # Join every worker thread except the one calling _stop (which is itself a thread).
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
@@ -175,5 +187,6 @@ class ConnectivityService(QObject):
                 self.connection_error.emit(str(exc))
 
     def _get_pending_threads(self) -> list[threading.Thread]:
+        # Snapshot alive threads under the lock so callers can join without holding it.
         with self._threads_lock:
             return [t for t in self._threads if t.is_alive()]

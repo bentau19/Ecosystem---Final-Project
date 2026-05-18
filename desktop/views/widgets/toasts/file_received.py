@@ -120,10 +120,12 @@ class FileReceivedToast(QWidget):
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
+        # Instantiate all child widgets and assemble the horizontal row layout.
         self._create_widgets()
         self._setup_layout()
 
     def _create_widgets(self) -> None:
+        # Create all visible elements of the toast banner.
         self._icon_circle: QLabel = self._create_icon_circle()
         self._title_label: QLabel = self._create_title_label()
         self._separator_dot: QLabel = self._create_separator_dot()
@@ -133,6 +135,7 @@ class FileReceivedToast(QWidget):
 
     @staticmethod
     def _create_icon_circle() -> QLabel:
+        # Create the fixed-size download icon circle.
         lbl = QLabel("↓")
         lbl.setObjectName("IconCircle")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -141,17 +144,20 @@ class FileReceivedToast(QWidget):
 
     @staticmethod
     def _create_title_label() -> QLabel:
+        # Create the static 'File Received' heading label.
         lbl = QLabel("File Received")
         lbl.setObjectName("TitleLabel")
         return lbl
 
     @staticmethod
     def _create_separator_dot() -> QLabel:
+        # Create the · bullet separator between the title and filename.
         lbl = QLabel("·")
         lbl.setObjectName("SeparatorDot")
         return lbl
 
     def _create_filename_label(self) -> QLabel:
+        # Show the filename; tooltip exposes the full name if it's truncated.
         lbl = QLabel(self._filename)
         lbl.setObjectName("FilenameLabel")
         lbl.setToolTip(self._filename)
@@ -159,6 +165,7 @@ class FileReceivedToast(QWidget):
 
     @staticmethod
     def _create_download_button() -> QPushButton:
+        # Create the flat 'Download file' accept button.
         btn = QPushButton("Download file")
         btn.setObjectName("DownloadButton")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -167,6 +174,7 @@ class FileReceivedToast(QWidget):
 
     @staticmethod
     def _create_cancel_button() -> QPushButton:
+        # Create the flat 'Cancel download' reject button.
         btn = QPushButton("Cancel download")
         btn.setObjectName("CancelButton")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -174,6 +182,7 @@ class FileReceivedToast(QWidget):
         return btn
 
     def _setup_layout(self) -> None:
+        # Assemble the single horizontal row: icon → title → · → filename → stretch → buttons.
         root = QHBoxLayout(self)
         root.setContentsMargins(Spacing.LG, Spacing.MD, Spacing.LG, Spacing.MD)
         root.setSpacing(Spacing.SM)
@@ -189,6 +198,7 @@ class FileReceivedToast(QWidget):
     # ── Styling ───────────────────────────────────────────────────────────────
 
     def _apply_style(self) -> None:
+        # Load and apply the themed toast QSS.
         qss = load_stylesheet(
             ToastStyles.FILE_RECEIVED,
             themed([FileReceivedToastColors], [LightFileReceivedToastColors], theme_manager.is_dark),
@@ -198,6 +208,7 @@ class FileReceivedToast(QWidget):
     # ── Signals ───────────────────────────────────────────────────────────────
 
     def _connect_signals(self) -> None:
+        # Wire download/cancel buttons, receive_error auto-close, and theme changes.
         self._download_button.clicked.connect(self._on_download_requested)
         self._cancel_button.clicked.connect(self._on_cancel_requested)
         self._cancel_button.clicked.connect(self._close_with_animation)
@@ -208,6 +219,7 @@ class FileReceivedToast(QWidget):
 
     @Slot()
     def _on_download_requested(self) -> None:
+        # Open a save-file dialog; accept or reject based on whether the user chose a path.
         default_path: Path = Path.home() / "Desktop" / self._filename
         dest_path, _ = QFileDialog.getSaveFileName(
             self,
@@ -224,10 +236,12 @@ class FileReceivedToast(QWidget):
 
     @Slot()
     def _on_cancel_requested(self) -> None:
+        # Send the reject token so the sender aborts the data channel.
         self._file_transfer_vm.reject_receive()
 
     @Slot()
     def _close_with_animation(self) -> None:
+        # Guard against double-close; run a parallel fade + slide-up animation then hide.
         if self._closing:
             return
         self._closing = True

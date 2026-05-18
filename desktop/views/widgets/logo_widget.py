@@ -32,16 +32,19 @@ class LogoWidget(QFrame):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
+        # Set object name, build child widgets, arrange them, and apply QSS.
         self.setObjectName("logoFrame")
         self._create_widgets()
         self._setup_layout()
         self._apply_styles()
 
     def _create_widgets(self) -> None:
+        # Instantiate the gradient name label and circular logo icon.
         self._app_name_label = self._create_name_label()
         self._logo_icon = self._create_logo_icon()
 
     def _setup_layout(self) -> None:
+        # Place logo icon left, name label next, trailing stretch to fill remaining space.
         layout: QHBoxLayout = QHBoxLayout(self)
         layout.setContentsMargins(Spacing.SM, Spacing.LG, Spacing.SM, Spacing.LG)
         layout.setSpacing(Spacing.SM)
@@ -50,15 +53,18 @@ class LogoWidget(QFrame):
         layout.addStretch()
 
     def _create_logo_icon(self) -> "Logo":
+        # Construct a circular Logo at the configured size.
         return Logo(self._logo_size)
 
     @staticmethod
     def _create_name_label() -> "LogoNameLabel":
+        # Create the gradient-text app-name label.
         label: LogoNameLabel = LogoNameLabel()
         label.setObjectName("logoText")
         return label
 
     def _apply_styles(self) -> None:
+        # Load and apply the logo-widget QSS.
         qss: str = load_stylesheet(Styles.LOGO_WIDGET)
         self.setStyleSheet(qss)
 
@@ -76,6 +82,7 @@ class LogoNameLabel(QLabel):
         self._init_ui()
 
     def _init_ui(self) -> None:
+        # Set the text; gradient painting is handled entirely in paintEvent.
         self.setText(self.tr("SyncDose"))
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -142,5 +149,6 @@ class Logo(QLabel):
         self.setObjectName("logoIcon")
 
     def _apply_style(self) -> None:
+        # Load and apply the logo-widget QSS.
         qss: str = load_stylesheet(Styles.LOGO_WIDGET)
         self.setStyleSheet(qss)

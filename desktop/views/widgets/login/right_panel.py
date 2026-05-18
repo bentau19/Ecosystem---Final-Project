@@ -69,10 +69,12 @@ class RightPanel(QWidget):
     # ── Setup ──────────────────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
+        # Create widgets and build the panel layout.
         self._create_widgets()
         self._setup_layout()
 
     def _create_widgets(self) -> None:
+        # Instantiate title, subtitle, device list, empty-state, and footer.
         self._title_lbl = QLabel("Previously connected")
         self._title_lbl.setObjectName("RightPanelTitle")
 
@@ -96,6 +98,7 @@ class RightPanel(QWidget):
         return container
 
     def _create_empty_state(self) -> QWidget:
+        # Build the no-devices placeholder with a centered icon, title, and subtitle.
         container = QWidget(self)
         container.setObjectName("NoDevicesView")
         # Allow the container to expand so internal stretches can center the content
@@ -136,6 +139,7 @@ class RightPanel(QWidget):
         return container
 
     def _create_footer(self) -> QWidget:
+        # Build the 'End-to-end encrypted · Privacy · Help' footer row.
         footer = QWidget(self)
         footer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
@@ -196,6 +200,7 @@ class RightPanel(QWidget):
         return pixmap
 
     def _setup_layout(self) -> None:
+        # Stack title, subtitle, device list, empty-state, and footer vertically.
         layout = QVBoxLayout(self)
         layout.setContentsMargins(Spacing.XXL, Spacing.XXL, Spacing.XXL, Spacing.XXL)
         layout.setSpacing(Spacing.SM)
@@ -214,6 +219,7 @@ class RightPanel(QWidget):
         layout.addWidget(self._footer)
 
     def _apply_style(self) -> None:
+        # Load and apply the themed right-panel QSS.
         qss = utils.styles.load_stylesheet(
             LoginStyles.RIGHT_PANEL,
             themed([LoginColors, Colors], [LightLoginColors, LightColors], theme_manager.is_dark),
@@ -230,16 +236,7 @@ class RightPanel(QWidget):
 
     @Slot(list)
     def _on_devices_loaded(self, dtos: list[PreviousDeviceDTO]) -> None:
-        """Populate the device list from ViewModel data, or show empty state.
-
-        Clears any previously rendered cards, then creates one
-        :class:`DeviceCard` per DTO and wires its connect signal.
-        Toggles the empty-state widget and subtitle visibility based on
-        whether any devices were loaded.
-
-        Args:
-            dtos: The list of device DTOs emitted by the ViewModel.
-        """
+        # Clear existing cards, populate with fresh ones, then toggle empty-state visibility.
         has_devices = bool(dtos)
 
         # Toggle subtitle — irrelevant when no devices exist

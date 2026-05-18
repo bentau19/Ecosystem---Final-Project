@@ -49,12 +49,14 @@ class LeftPanel(QWidget):
     # ── Setup ──────────────────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
+        # Enable styled background so QSS can paint this plain QWidget, then build content.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("LeftPanel")
         self._create_widgets()
         self._setup_layout()
 
     def _create_widgets(self) -> None:
+        # Instantiate all child widgets via their factory methods.
         self._logo = self._create_logo()
         self._logo_name = self._create_logo_name()
         self._app_description = self._create_description()
@@ -65,6 +67,7 @@ class LeftPanel(QWidget):
         self._waiting_for_connection = self._create_waiting_for_connection_widget()
 
     def _setup_layout(self) -> None:
+        # Vertically centre the content block using flanking stretches.
         layout = QVBoxLayout(self)
 
         layout.setContentsMargins(Spacing.XXL, Spacing.SM, Spacing.XXL, Spacing.XXL)
@@ -110,6 +113,7 @@ class LeftPanel(QWidget):
         return logo
 
     def _create_description(self) -> QLabel:
+        # Create the centred app-description label.
         label = QLabel(self)
         label.setText("Seamless cross-device connectivity")
         label.setObjectName("DescriptionLabel")
@@ -169,6 +173,7 @@ class LeftPanel(QWidget):
     # ── Style ──────────────────────────────────────────────────────────────────
 
     def _setup_style(self) -> None:
+        # Load and apply the themed left-panel QSS.
         qss = utils.styles.load_stylesheet(
             LoginStyles.LEFT_PANEL,
             themed([LoginColors, Colors], [LightLoginColors, LightColors], theme_manager.is_dark),
@@ -176,11 +181,13 @@ class LeftPanel(QWidget):
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
+        # Wire the refresh button and theme_changed to their slots.
         self._refresh_button.clicked.connect(self._refresh_qr_code)
         theme_manager.theme_changed.connect(self._setup_style)
 
     @Slot()
     def _refresh_qr_code(self) -> None:
+        # Regenerate the QR code with a fresh IP read.
         self._qr.refresh_qr()
 
 

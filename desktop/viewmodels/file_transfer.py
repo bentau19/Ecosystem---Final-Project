@@ -71,6 +71,7 @@ class FileTransferViewModel(QObject):
         """
         super().__init__(parent)
         self._service: FileTransferService = file_transfer_service
+        self._is_device_connected: bool = False
 
         # ── Service signal forwarding ─────────────────────────────────────────
         self._service.file_send_complete.connect(self._on_send_complete)
@@ -142,11 +143,13 @@ class FileTransferViewModel(QObject):
 
     @Slot()
     def _on_device_connected(self) -> None:
+        # Gate new operations and start the file-transfer service.
         self._is_device_connected = True
         self._service.start()
 
     @Slot()
     def _on_device_disconnected(self) -> None:
+        # Drop the connectivity gate and stop the service.
         self._is_device_connected = False
         self._service.stop()
 
@@ -154,24 +157,30 @@ class FileTransferViewModel(QObject):
 
     @Slot(str, int)
     def _on_send_complete(self, filename: str, total_bytes: int) -> None:
+        # Forward send-complete from service to the view layer.
         self.send_complete.emit(filename, total_bytes)
 
     @Slot(str)
     def _on_send_rejected(self, filename: str) -> None:
+        # Translate a rejection into a user-readable error string.
         self.send_error.emit(f'"{filename}" was rejected by the receiver')
 
     @Slot(str)
     def _on_send_error(self, error: str) -> None:
+        # Forward send errors unchanged.
         self.send_error.emit(error)
 
     @Slot(str, int)
     def _on_metadata_received(self, filename: str, size: int) -> None:
+        # Forward incoming metadata so the view can show the accept/reject prompt.
         self.metadata_received.emit(filename, size)
 
     @Slot(str, str)
     def _on_receive_complete(self, filename: str, dest_path: str) -> None:
+        # Forward receive-complete from service to the view layer.
         self.receive_complete.emit(filename, dest_path)
 
     @Slot(str)
     def _on_receive_error(self, error: str) -> None:
+        # Forward receive errors unchanged.
         self.receive_error.emit(error)

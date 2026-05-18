@@ -1,5 +1,3 @@
-from typing import List
-
 from PySide6.QtCore import Qt, QMargins, QRect, QSize
 from PySide6.QtWidgets import QLayout, QLayoutItem, QWidget
 
@@ -26,7 +24,7 @@ class FlowLayout(QLayout):
         if parent is not None:
             self.setContentsMargins(QMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.NONE))
 
-        self._item_list: List[QLayoutItem] = []
+        self._item_list: list[QLayoutItem] = []
 
     def addItem(self, item: QLayoutItem) -> None:
         """
@@ -149,6 +147,7 @@ class FlowLayout(QLayout):
         return size
 
     def _do_layout(self, rect: QRect, test_only: bool) -> int:
+        # Compute item positions (or just the total height when test_only=True).
         if not self._item_list:
             return 0
 

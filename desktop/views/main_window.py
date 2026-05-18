@@ -57,6 +57,7 @@ class MainWindow(QMainWindow):
 
     # ── Setup ──────────────────────────────────────────────────────────────────
     def _setup_ui(self) -> None:
+        # Build the stacked widget, add screens, set as central, and configure the tray.
         self._stack = QStackedWidget(self)
 
         self._screens = {
@@ -71,6 +72,7 @@ class MainWindow(QMainWindow):
         self._setup_tray()
 
     def _setup_tray(self) -> None:
+        # Create the system-tray icon with an Open + Quit context menu.
         self._tray_icon = QSystemTrayIcon(QIcon(Icons.LOGO), parent=self)
         self._tray_icon.setToolTip("SyncDose")
 
@@ -89,6 +91,7 @@ class MainWindow(QMainWindow):
         self._tray_icon.show()
 
     def _connect_signals(self) -> None:
+        # Wire navigation, file-transfer, and theme signals to their slots.
         self._navigation_manager.navigate.connect(self._change_page)
         self._file_transfer_vm.receive_error.connect(self._on_file_receive_error)
         self._file_transfer_vm.metadata_received.connect(self._on_file_received_metadata)
@@ -109,27 +112,32 @@ class MainWindow(QMainWindow):
     # ── Slots ──────────────────────────────────────────────────────────────────
 
     @Slot(str,int)
-    def _on_file_received_metadata(self,filename: str, file_size: int) -> None:
+    def _on_file_received_metadata(self, filename: str, file_size: int) -> None:
+        # Show the file-received toast when incoming metadata arrives.
         self._toast = FileReceivedToast(filename, file_size)
         self._toast.show_toast()
 
     @Slot(int)
     def _change_page(self, index: int) -> None:
+        # Switch the stacked widget to the screen at the given index.
         self._stack.setCurrentIndex(index)
 
     @Slot()
     def _restore_window(self) -> None:
+        # Bring the window back from the tray and give it focus.
         self.showNormal()
         self.activateWindow()
         self.raise_()
 
     @Slot(QSystemTrayIcon.ActivationReason)
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        # Restore the window on double-click; single-click opens the context menu natively.
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._restore_window()
 
     @Slot()
     def _restyle_tray(self) -> None:
+        # Reload the tray-menu QSS whenever the theme changes.
         self._tray_menu.setStyleSheet(
             utils.styles.load_stylesheet(
                 Styles.TRAY_MENU,
@@ -139,4 +147,5 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_file_receive_error(self, error: str) -> None:
+        # Show the generic transfer-error dialog; error string is displayed inside it.
         TransferErrorDialog()

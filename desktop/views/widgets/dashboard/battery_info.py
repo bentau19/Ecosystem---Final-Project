@@ -39,15 +39,18 @@ class BatteryInfo(QFrame):
         self._connect_signals()
 
     def _setup_ui(self) -> None:
+        # Create widgets and build the vertical layout.
         self._create_widgets()
         self._create_layout()
 
     def _create_widgets(self) -> None:
+        # Create value label, gradient bar, and charging status label.
         self._battery_value_label: QLabel = self._create_battery_value_label()
         self._battery_bar: Bar = self._create_battery_bar()
         self._charging_label: QLabel = self._create_charging_label()
 
     def _create_layout(self) -> None:
+        # Build the vertical card layout: percentage → bar → charging label → stretch.
         layout: QVBoxLayout = QVBoxLayout(self)
         layout.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.NONE)
 
@@ -71,15 +74,18 @@ class BatteryInfo(QFrame):
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
+        # Wire theme_changed to re-apply the stylesheet.
         theme_manager.theme_changed.connect(self.setup_style)
 
     def _create_battery_value_label(self) -> QLabel:
+        # Create the 'N%' percentage display label.
         percentage_str = f"{self._battery_percentage}%"
         val = QLabel(percentage_str)
         val.setObjectName("batteryValue")
         return val
 
     def _create_battery_bar(self) -> Bar:
+        # Create the gradient fill bar scaled to current battery percentage.
         bar = Bar(self._battery_percentage,QColor(BatteryBarColors.GRADIENT_START),QColor (
             BatteryBarColors.GRADIENT_END))
         bar.setObjectName("batteryBar")
@@ -87,6 +93,7 @@ class BatteryInfo(QFrame):
 
     @staticmethod
     def _create_charging_label() -> QLabel:
+        # Create the charging status label (static text for now).
         charging = QLabel("⚡ Charging… ~35 min to full")
         charging.setObjectName("batteryCharging")
         return charging

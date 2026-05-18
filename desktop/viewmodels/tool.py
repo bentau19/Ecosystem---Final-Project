@@ -55,6 +55,7 @@ class ToolViewModel(QObject):
 
     @staticmethod
     def _convert_to_dto(entity: ToolEntity) -> ToolDTO:
+        # Map entity fields to the flat DTO the view layer consumes.
         return ToolDTO(
             entity.title,
             entity.description,
@@ -64,6 +65,7 @@ class ToolViewModel(QObject):
 
     @Slot(ToolEntity)
     def _on_tool_updated(self, entity: ToolEntity) -> None:
+        # Emit update signal and refresh the enabled-tool list asynchronously.
         tool = self._convert_to_dto(entity)
         self.tool_updated.emit(tool.title)
         # Refresh the enabled-tool list asynchronously; the result arrives via
@@ -73,6 +75,7 @@ class ToolViewModel(QObject):
 
     @Slot(ToolEntity)
     def _on_tool_added(self, entity: ToolEntity) -> None:
+        # Append the new DTO to the in-memory list and notify the count changed.
         tool = self._convert_to_dto(entity)
         self.tool_added.emit(tool)
         self._enabled_tools.append(tool)
@@ -90,6 +93,7 @@ class ToolViewModel(QObject):
 
     @Slot(list)
     def _on_all_enabled_fetched(self, tools: list[ToolEntity]) -> None:
+        # Replace the in-memory list and update the count badge.
         self._enabled_tools = [self._convert_to_dto(t) for t in tools]
         self.tool_count_changed.emit(len(self._enabled_tools))
 

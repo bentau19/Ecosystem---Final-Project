@@ -36,7 +36,7 @@ class DashboardContent(QScrollArea):
         self._connect_signals()
 
     def _setup_ui(self) -> None:
-        """Configure the scroll area and build child widgets and layout."""
+        # Configure scroll area properties, then build child widgets and layout.
         self.setObjectName("dashboardContent")
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
@@ -47,13 +47,13 @@ class DashboardContent(QScrollArea):
         self._create_layout()
 
     def _create_widgets(self) -> None:
-        """Instantiate the device-status row, tools header, and tools grid."""
+        # Instantiate the device-status row, tools section header, and tools grid.
         self._device_status_row: PhoneDetailsRow = self._create_device_status_row()
         self._tools_section_header: ToolsSectionHeader = ToolsSectionHeader()
         self._tools_grid: ToolsGrid = ToolsGrid()
 
     def _create_layout(self) -> None:
-        """Build the inner content widget and set it as the scroll area's widget."""
+        # Build the inner content widget and install it as the scroll area's viewport widget.
         inner: QWidget = QWidget()
 
         layout: QVBoxLayout = QVBoxLayout(inner)
@@ -72,19 +72,15 @@ class DashboardContent(QScrollArea):
         self.setWidget(inner)
 
     def _setup_style(self) -> None:
-        """Apply the themed viewport background color."""
+        # Apply the themed background to the viewport so it blends with the window.
         bg = Palette.DARK_950 if theme_manager.is_dark else LightPalette.DARK_950
         self.viewport().setStyleSheet(f"background-color: {bg};")
 
     def _connect_signals(self) -> None:
-        """Wire theme changes to re-apply the viewport background."""
+        # Wire theme_changed to re-apply the viewport background.
         theme_manager.theme_changed.connect(self._setup_style)
 
     @staticmethod
     def _create_device_status_row() -> PhoneDetailsRow:
-        """Create the phone details row widget.
-
-        Returns:
-            A default-constructed :class:`~views.widgets.dashboard.phone_details_row.PhoneDetailsRow`.
-        """
+        # Return a default-constructed PhoneDetailsRow.
         return PhoneDetailsRow()

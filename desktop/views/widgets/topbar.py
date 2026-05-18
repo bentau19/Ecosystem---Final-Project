@@ -54,16 +54,19 @@ class Topbar(QWidget):
         self.setup_signals()
 
     def _setup_ui(self) -> None:
+        # Set fixed height, enable styled background, then build widgets and layout.
         self.setFixedHeight(self._topbar_height)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._create_widgets()
         self._create_layout()
 
     def _create_widgets(self) -> None:
+        # Create the title/subtitle block and the disconnect button.
         self._title_block = self._create_title_block()
         self._disconnect_button = self._create_disconnect_button()
 
     def _create_layout(self) -> None:
+        # Place the title block on the left, stretch, then disconnect button on the right.
         layout: QHBoxLayout = QHBoxLayout(self)
         layout.setContentsMargins(Spacing.XXL, Spacing.NONE, Spacing.XXL, Spacing.NONE)
         layout.setSpacing(Spacing.MD)
@@ -74,6 +77,7 @@ class Topbar(QWidget):
         layout.addWidget(self._disconnect_button)
 
     def _create_title_block(self) -> QWidget:
+        # Build a stacked title + subtitle label pair.
         block: QWidget = QWidget()
 
         layout: QVBoxLayout = QVBoxLayout(block)
@@ -92,6 +96,7 @@ class Topbar(QWidget):
         return block
 
     def _create_disconnect_button(self) -> QPushButton:
+        # Create the disconnect button with icon, fixed height, and pointer cursor.
         icon_size = 16
         btn: QPushButton = QPushButton(self.tr("  Disconnect"))
         btn.setIcon(QIcon(Icons.DISCONNECT))
@@ -103,6 +108,7 @@ class Topbar(QWidget):
         return btn
 
     def _setup_style(self) -> None:
+        # Load and apply the themed topbar stylesheet.
         qss: str = load_stylesheet(
             Styles.TOPBAR,
             themed([TopbarColors], [LightTopbarColors], theme_manager.is_dark),
@@ -117,8 +123,10 @@ class Topbar(QWidget):
 
     @Slot()
     def _disconnect_from_current_device(self) -> None:
+        # Delegate disconnect to the ViewModel; it will emit device_disconnected when done.
         self._device_viewmodel.disconnect_device()
 
     @Slot()
     def _move_to_login(self) -> None:
+        # Navigate back to the login screen after the device disconnects.
         navigation_manager.go_to_screen(Screen.LOGIN)

@@ -87,12 +87,12 @@ class PreviousDeviceCard(QWidget):
     # ── Setup ──────────────────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
-        """Construct and arrange all child widgets."""
+        # Construct and arrange all child widgets.
         self._create_widgets()
         self._setup_layout()
 
     def _create_widgets(self) -> None:
-        """Instantiate all child widgets."""
+        # Instantiate all child widgets.
         self._icon_lbl = self._create_icon_label()
 
         self._name_lbl = QLabel(self._device.name)
@@ -123,14 +123,7 @@ class PreviousDeviceCard(QWidget):
         self._connect_btn.setVisible(False)
 
     def _create_icon_label(self) -> QLabel:
-        """Render the device icon as a tinted rounded-square Pixmap.
-
-        Derives the background color from the design token so the icon
-        appearance is consistent across all device cards.
-
-        Returns:
-            A fixed-size QLabel containing the rendered Pixmap.
-        """
+        # Render the device icon as a tinted rounded-square pixmap using the ICON_BG design token.
         color = QColor(LoginColors.ICON_BG)
 
         pixmap = QPixmap(_ICON_SIZE, _ICON_SIZE)
@@ -157,11 +150,7 @@ class PreviousDeviceCard(QWidget):
         return lbl
 
     def _create_status_container(self) -> QWidget:
-        """Wrap badge and time label in a right-aligned column widget.
-
-        Returns:
-            A QWidget containing the badge and last-seen label stacked vertically.
-        """
+        # Wrap badge and time label in a right-aligned column widget.
         container = QWidget(self)
         container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         col = QVBoxLayout(container)
@@ -172,7 +161,7 @@ class PreviousDeviceCard(QWidget):
         return container
 
     def _setup_layout(self) -> None:
-        """Arrange all child widgets in a horizontal row."""
+        # Arrange all child widgets in a single horizontal row.
         layout = QHBoxLayout(self)
         layout.setContentsMargins(Spacing.LG, Spacing.MD, Spacing.LG, Spacing.MD)
         layout.setSpacing(Spacing.LG)
@@ -191,11 +180,11 @@ class PreviousDeviceCard(QWidget):
         layout.addWidget(self._connect_btn)
 
     def _apply_style(self) -> None:
-        """No per-card stylesheet — styles are inherited from RightPanel."""
+        # No per-card stylesheet — styles are inherited from RightPanel.
         pass
 
     def _connect_signals(self) -> None:
-        """Wire the Connect button and ViewModel signals to their dialogs."""
+        # Wire the Connect button and ViewModel device_connected signal.
         self._connect_btn.clicked.connect(self._on_button_clicked)
         self._device_viewmodel.device_connected.connect(self._on_device_connected)
 
@@ -223,14 +212,10 @@ class PreviousDeviceCard(QWidget):
 
     @Slot()
     def _on_device_connected(self) -> None:
-        """Navigate to the dashboard when the ViewModel reports a connection.
-
-        Called when :attr:`~viewmodels.device.DeviceViewModel.device_connected`
-        fires, regardless of which card initiated the connection request.
-        """
+        # Navigate to the dashboard; fires for every card regardless of which initiated the request.
         navigation_manager.go_to_screen(Screen.DASHBOARD)
 
     @Slot()
     def _on_button_clicked(self) -> None:
-        """Forward a connect request to the ViewModel when the button is clicked."""
+        # Forward a connect request to the ViewModel.
         self._device_viewmodel.connect_to_device(self._device)

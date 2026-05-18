@@ -47,9 +47,7 @@ class InfoCard(QFrame):
         self._connect_signals()
 
     def _setup_ui(self) -> None:
-        """
-        Set up the UI for the dashboard card.
-        """
+        # Set object name, configure animation, then build widgets and layout.
         self.setObjectName("card")
 
         self._anim: QPropertyAnimation = QPropertyAnimation(self, b'pos')
@@ -61,16 +59,12 @@ class InfoCard(QFrame):
         self._create_layout()
 
     def _create_widgets(self) -> None:
-        """
-        Create the child widgets for the dashboard card.
-        """
+        # Create icon label and title label.
         self._icon_label: QLabel = self._create_icon_label()
         self._title_label: QLabel = self._create_title_label()
 
     def _create_layout(self) -> None:
-        """
-        Create and configure the layout for the dashboard card.
-        """
+        # Build the vertical card layout: icon → title → content → stretch.
         layout: QVBoxLayout = QVBoxLayout(self)
 
         layout.setContentsMargins(Spacing.LG, Spacing.LG, Spacing.LG, Spacing.LG)
@@ -85,7 +79,7 @@ class InfoCard(QFrame):
         layout.addStretch()
 
     def _setup_style(self) -> None:
-        """Apply the stylesheet to the dashboard card."""
+        # Load themed QSS and append the per-card icon background color rule.
         qss: str = load_stylesheet(
             DashboardStyles.INFO_CARD,
             themed([InfoCardColors], [LightInfoCardColors], theme_manager.is_dark),
@@ -94,7 +88,7 @@ class InfoCard(QFrame):
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
-        """Wire theme changes to re-apply the stylesheet."""
+        # Wire theme_changed to re-apply the stylesheet.
         theme_manager.theme_changed.connect(self._setup_style)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
@@ -111,12 +105,7 @@ class InfoCard(QFrame):
         super().mouseReleaseEvent(event)
 
     def _create_title_label(self) -> QLabel:
-        """
-        Create a title label for the dashboard card.
-
-        Returns:
-            QLabel: The title label.
-        """
+        # Create a left-aligned title label.
         title_label: QLabel = QLabel(self._title)
         title_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         title_label.setObjectName('titleLabel')
@@ -124,12 +113,7 @@ class InfoCard(QFrame):
         return title_label
 
     def _create_icon_label(self) -> QLabel:
-        """
-        Create an icon label for the dashboard card.
-
-        Returns:
-            QLabel: The icon label.
-        """
+        # Create a fixed-size icon label scaled to card icon dimensions.
         icon_label: QLabel = QLabel()
         icon_pixmap: QPixmap = self._icon.pixmap(self._icon_width, self._icon_height)
         icon_label.setPixmap(icon_pixmap)

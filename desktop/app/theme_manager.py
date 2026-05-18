@@ -25,6 +25,7 @@ def _read_registry_dark_mode() -> bool | None:
 
 
 def _detect_is_dark() -> bool:
+    # Prefer the registry value on Windows; fall back to Qt style hints on other platforms.
     registry_result = _read_registry_dark_mode()
     if registry_result is not None:
         return registry_result
@@ -69,6 +70,7 @@ class ThemeManager(QObject):
 
     @Slot(Qt.ColorScheme)
     def _on_scheme_changed(self, scheme: Qt.ColorScheme) -> None:
+        # Re-read the authoritative source; skip emit if nothing actually changed.
         new_is_dark = _detect_is_dark()
         if new_is_dark == self._is_dark:
             return  # no real change — guard against spurious signals

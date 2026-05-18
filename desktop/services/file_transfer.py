@@ -73,6 +73,7 @@ class FileTransferService(QObject):
         threading.Thread(target=self._stop, daemon=True).start()
 
     def _start(self) -> None:
+        # Guard against double-start; launch the named-pipe listener on entry.
         with self._lifecycle_lock:
             if self._is_running.is_set():
                 return
@@ -80,6 +81,7 @@ class FileTransferService(QObject):
             self._spawn(self._listen_for_file_to_send)
 
     def _stop(self) -> None:
+        # Join every worker except the calling thread to avoid a deadlock.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
@@ -173,10 +175,12 @@ class FileTransferService(QObject):
 
 
     def _get_pending_threads(self) -> list[threading.Thread]:
+        # Snapshot alive threads under the lock so callers can join without holding it.
         with self._threads_lock:
             return [t for t in self._threads if t.is_alive()]
 
     def _send_file(self, path: str) -> None:
+        # Steps: send metadata → wait for accept/reject → stream bytes.
         try:
             file_path: Path = Path(path)
             if not file_path.is_file():
@@ -212,6 +216,7 @@ class FileTransferService(QObject):
             self.file_send_error.emit(str(exc))
 
     def _receive_metadata(self) -> None:
+        # Open the metadata channel, parse the JSON payload, and emit the result.
         try:
             tau = self._connectivity.tau
             with tau.connect(FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC.value) as meta_stream:
@@ -222,6 +227,7 @@ class FileTransferService(QObject):
             self.file_receive_error.emit(str(exc))
             
     def _receive_file(self, dest_path: str, file_size: int) -> None:
+        # Steps: send accept token → stream bytes straight to disk.
         try:
             os.makedirs(Path(dest_path).parent, exist_ok=True)
             tau = self._connectivity.tau
@@ -241,6 +247,7 @@ class FileTransferService(QObject):
             self.file_receive_error.emit(str(exc))
 
     def _reject_receive(self) -> None:
+        # Write the reject token; sender aborts without opening the data channel.
         try:
             tau = self._connectivity.tau
             with tau.connect(FileTransferChannels.REGULAR_FILE_RESPONSE_FROM_PC.value) as resp_stream:
@@ -250,6 +257,7 @@ class FileTransferService(QObject):
             self.file_receive_error.emit(str(exc))
 
     def _listen_for_file_to_send(self) -> None:
+        # Poll the named pipe for incoming file paths from FileHandler.exe and forward them.
         timeout = datetime.timedelta(seconds=3)
         pipe_name: str = r'\\.\pipe\FileSend'
         with Server(65536, 65536, pipe_name) as server:

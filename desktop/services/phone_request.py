@@ -57,6 +57,7 @@ class PhoneRequestService:
         threading.Thread(target=self._stop, daemon=True).start()
 
     def _start(self) -> None:
+        # Guard against double-start; launch the channel-listener loop on entry.
         with self._lifecycle_lock:
             if self._is_running.is_set():
                 return
@@ -64,6 +65,7 @@ class PhoneRequestService:
             self._spawn(self._listen_to_channels)
 
     def _stop(self) -> None:
+        # Join every worker except the calling thread to avoid a deadlock.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
@@ -76,20 +78,22 @@ class PhoneRequestService:
 
     # ── Private lifecycle ──────────────────────────────────────────────────────
 
-    def _spawn(self, target, *args):
+    def _spawn(self, target, *args) -> None:
+        # Reject new spawns during teardown to avoid work after _is_running is cleared.
         if not self._is_running.is_set():
-            return  # reject new spawns during teardown
+            return
         t = threading.Thread(target=target, args=args, daemon=True)
         with self._threads_lock:
             self._threads.append(t)
         t.start()
 
-
     def _get_pending_threads(self) -> list[threading.Thread]:
+        # Snapshot alive threads under the lock so callers can join without holding it.
         with self._threads_lock:
             return [t for t in self._threads if t.is_alive()]
 
     def _listen_to_channels(self) -> None:
+        # Block until a device is connected, then dispatch each waiting channel to its handler.
         while not self._connectivity.connected:
             sleep(5)
         tau = self._connectivity.tau
