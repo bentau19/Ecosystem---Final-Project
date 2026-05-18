@@ -44,7 +44,7 @@
 </ExePackage>
 
       <!-- Your MSI -->
-      <MsiPackage SourceFile=""!(bindpath.Package)Package.msi" Vital="yes" "
+      <MsiPackage SourceFile="..\Package\bin\Release\Package.msi"
                   Vital="yes" />
 
     </Chain>

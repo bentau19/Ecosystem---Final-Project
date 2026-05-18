@@ -2,6 +2,7 @@
   <PropertyGroup>
     <AcceptEula>wix7</AcceptEula>
       <InstallerPlatform>x64</InstallerPlatform>
+  <OutputPath>bin\Release\</OutputPath>
   </PropertyGroup>
 
 

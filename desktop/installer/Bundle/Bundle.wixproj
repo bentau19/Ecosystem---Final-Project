@@ -10,8 +10,9 @@
     <PackageReference Include="WixToolset.Util.wixext" Version="7.0.0" />
   </ItemGroup>
 
-  <!-- Reference your Package project so it builds first -->
   <ItemGroup>
     <ProjectReference Include="..\Package\Package.wixproj" />
   </ItemGroup>
+
+
 </Project>
