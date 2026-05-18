@@ -14,6 +14,8 @@
     </BootstrapperApplication>
 
 
+
+
 <util:RegistrySearch Id="AspNetCore10Check"
                      Root="HKLM"
                      Key="SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.AspNetCore.App"
@@ -42,7 +44,7 @@
 </ExePackage>
 
       <!-- Your MSI -->
-      <MsiPackage SourceFile="..\Package\bin\Release\Package.msi"
+      <MsiPackage SourceFile=""!(bindpath.Package)Package.msi" Vital="yes" "
                   Vital="yes" />
 
     </Chain>
