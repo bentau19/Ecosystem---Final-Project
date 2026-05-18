@@ -1,7 +1,10 @@
 name: Desktop
 
 on:
-  [ push ]
+  push:
+    branches: ["**"]
+    tags:
+      - "v*"
 jobs:
 
 
@@ -40,8 +43,10 @@ jobs:
       - name: Run tests
         run: pytest desktop/
 
+
   build:
     needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
 
     steps:
@@ -92,23 +97,23 @@ jobs:
             desktop/installer/**/bin/Release/*.exe
 
 
-#  deploy:
-#    needs: build
-#    if: github.ref == 'refs/heads/main'
-#    runs-on: windows-latest
-#    environment: production
-#
-#    steps:
-#      - uses: actions/download-artifact@v4
-#        with:
-#          name: installer
-#          path: artifacts
-#
-#      - name: Create Release
-#        uses: softprops/action-gh-release@v2
-#        with:
-#          files: artifacts/**/*.msi
-#
+  deploy:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    environment: production
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: artifacts/**/*.msi
 
 
 
