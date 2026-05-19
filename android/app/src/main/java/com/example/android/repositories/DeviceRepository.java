@@ -8,18 +8,27 @@ import com.example.android.domain.entities.DeviceStorageStats;
 import com.example.android.domain.entities.LocalDeviceInfo;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionType;
+import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.utils.DeviceUtils;
-
+import android.util.Log;
 public class DeviceRepository {
 
     /**
      * Repository class that manages the device's connection state and hardware statistics.
      * Acts as the single source of truth for the UI regarding device status.
+     *
+     * Tracks:
+     * - DeviceConnectionState: Local device info + Remote PC info
+     * - ConnectionStatus: DISCONNECTED, CONNECTING, CONNECTED, RECONNECTING, FAILED
      */
     private static DeviceRepository instance;
+    private static final String TAG = "DeviceRepository";
 
-    // LiveData holds the unified connection state
+    // LiveData holds the unified connection state (local device + remote PC)
     private final MutableLiveData<DeviceConnectionState> connectionState = new MutableLiveData<>();
+
+    // LiveData holds the connection status lifecycle (CONNECTING, CONNECTED, RECONNECTING, FAILED, etc.)
+    private final MutableLiveData<ConnectionStatus> connectionStatus = new MutableLiveData<>(ConnectionStatus.DISCONNECTED);
 
     public DeviceConnectionState getCurrentConnectionState() {
         return connectionState.getValue();
@@ -64,6 +73,33 @@ public class DeviceRepository {
     }
 
     /**
+     * Exposes the connection status (CONNECTING, CONNECTED, RECONNECTING, FAILED, etc.)
+     * Useful for UI to show connection progress and errors.
+     */
+    public LiveData<ConnectionStatus> getConnectionStatus() {
+        return connectionStatus;
+    }
+
+    /**
+     * Gets the current connection status value synchronously.
+     */
+    public ConnectionStatus getCurrentConnectionStatus() {
+        ConnectionStatus status = connectionStatus.getValue();
+        return status != null ? status : ConnectionStatus.DISCONNECTED;
+    }
+
+    /**
+     * Updates the connection status and notifies all observers.
+     * This is called by the Transport/Service layer when connection state changes.
+     */
+    public void updateConnectionStatus(ConnectionStatus newStatus) {
+        if (getCurrentConnectionStatus() != newStatus) {
+            Log.d(TAG, "Connection status changed: " + newStatus.getDisplayName());
+            connectionStatus.postValue(newStatus);
+        }
+    }
+
+    /**
      * Connect to computer (after scanning)
      */
     public void connect(String pcName, String ip, ConnectionType type) {
@@ -88,6 +124,8 @@ public class DeviceRepository {
             current.setRemotePC(null);
             connectionState.postValue(current);
         }
+        // Update status to disconnected
+        updateConnectionStatus(ConnectionStatus.DISCONNECTED);
     }
 
     /**

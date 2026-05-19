@@ -14,86 +14,155 @@ import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 
 import com.example.android.R;
-import com.example.android.domain.entities.DeviceConnectionState;
-import com.example.android.domain.entities.DeviceStorageStats;
+import com.example.android.data.datasource.SystemDataSource;
 import com.example.android.domain.entities.RemoteDeviceInfo;
+import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.domain.enums.ConnectionType;
 import com.example.android.enums.DeviceInfoChannels;
-import com.example.android.data.datasource.SystemDataSource;
+import com.example.android.network.handlers.BatteryLevelChannelHandler;
+import com.example.android.network.handlers.ChannelHandlerRegistry;
+import com.example.android.network.handlers.PCNameChannelHandler;
+import com.example.android.network.transport.TransportManager;
+import com.example.android.network.transport.TransportStatus;
+import com.example.android.network.transport.TauSyncTransportManager;
 import com.example.android.repositories.DeviceRepository;
-import com.example.android.utils.NetworkHandler;
-import com.example.tausync_lib.sdk.TauSync;
 
-import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+/**
+ * ConnectivityService - Orchestrator for managing remote PC connections.
+ *
+ * Responsibilities:
+ * ✓ Initialize and manage TransportManager
+ * ✓ Register channel-specific handlers
+ * ✓ Update Repository with connection status
+ * ✓ Manage foreground notifications
+ * ✓ Handle service lifecycle
+ *
+ * What it DOES NOT do (delegated):
+ * ✗ Direct TauSync communication (→ TauSyncTransportManager)
+ * ✗ Channel-specific logic (→ ChannelHandlers)
+ * ✗ State management (→ DeviceRepository)
+ *
+ * This clean architecture makes it easy to:
+ * - Add new transport types (Bluetooth, P2P, etc.)
+ * - Add new channels (clipboard, file transfer, camera, etc.)
+ * - Test individual components
+ * - Scale without creating monolithic code
+ */
+public class ConnectivityService extends Service implements TransportManager.TransportListener {
 
-public class ConnectivityService extends Service {
     private static final String CHANNEL_ID = "ConnectivityServiceChannel";
     private static final String TAG = "TauSyncFlow";
-    private TauSync tauSync;
+
+    // Core components
+    private TransportManager transportManager;
+    private ChannelHandlerRegistry handlerRegistry;
     private SystemDataSource systemDataSource;
-    private DeviceConnectionState connectionState;
-    private final ExecutorService backgroundExecutor = Executors.newCachedThreadPool();
+    private DeviceRepository deviceRepository;
 
     @Override
     public void onCreate() {
         super.onCreate();
-        DeviceRepository deviceRepository = DeviceRepository.getInstance();
-        this.connectionState = deviceRepository.getCurrentConnectionState();
-        createNotificationChannel();
+        Log.d(TAG, "Service created");
+
+        // Initialize dependencies
         systemDataSource = new SystemDataSource(this);
+
+        // Initialize Repository (with fallback for Android 14+ race condition)
+        try {
+            deviceRepository = DeviceRepository.getInstance();
+        } catch (IllegalStateException e) {
+            Log.w(TAG, "Repository not initialized, initializing with fallback data");
+            deviceRepository = DeviceRepository.getInstance(
+                    systemDataSource.getDeviceId(),
+                    systemDataSource.getDeviceModel()
+            );
+        }
+
+        // Initialize transport manager (uses TauSync under the hood)
+        transportManager = new TauSyncTransportManager();
+
+        // Initialize channel handler registry
+        handlerRegistry = new ChannelHandlerRegistry();
+        registerChannelHandlers();
+
+        createNotificationChannel();
+        Log.d(TAG, "Service initialization complete");
+    }
+
+    /**
+     * Registers all channel handlers.
+     * This is where new handlers are wired in.
+     * Future: clipboard, file transfer, camera streaming, etc.
+     */
+    private void registerChannelHandlers() {
+        Log.d(TAG, "Registering channel handlers...");
+
+        // Battery level handler
+        handlerRegistry.registerHandler(
+                DeviceInfoChannels.BATTERY_LEVEL.getValue(),
+                new BatteryLevelChannelHandler(systemDataSource, transportManager)
+        );
+
+        // PC name handler
+        handlerRegistry.registerHandler(
+                DeviceInfoChannels.PC_NAME.getValue(),
+                new PCNameChannelHandler(deviceRepository, transportManager)
+        );
+
+        // Future implementations:
+        // handlerRegistry.registerHandler(
+        //     "clipboard",
+        //     new ClipboardChannelHandler(clipboard, transportManager)
+        // );
+        // handlerRegistry.registerHandler(
+        //     "files",
+        //     new FileTransferChannelHandler(fileManager, transportManager)
+        // );
+        // handlerRegistry.registerHandler(
+        //     "camera",
+        //     new CameraStreamChannelHandler(camera, transportManager)
+        // );
+
+        Log.d(TAG, "Registered " + handlerRegistry.getHandlerCount() + " handlers");
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        String targetIp = intent.getStringExtra("TARGET_IP");
-        Log.d(TAG, "onStartCommand: Starting service for IP: " + targetIp);
+        Log.d(TAG, "onStartCommand: Service starting");
 
-        if (connectionState != null && connectionState.getRemotePC() != null) {
-            connectionState.getRemotePC().setConnectionType(ConnectionType.WIFI);
+        String targetIp = (intent != null) ? intent.getStringExtra("TARGET_IP") : null;
+        Log.d(TAG, "Target IP: " + targetIp);
+
+        if (targetIp == null) {
+            Log.e(TAG, "No TARGET_IP provided, stopping service");
+            stopSelf();
+            return START_NOT_STICKY;
         }
 
-        // נוטיפיקציה התחלתית
-        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("SyncApp")
-                .setContentText("Connecting to " + targetIp + "...")
-                .setSmallIcon(R.drawable.ic_sync)
-                .setOngoing(true) // מונע החלקה של הנוטיפיקציה
-                .build();
-        startForeground(1, notification);
+        // Create RemoteDeviceInfo from the IP
+        // ConnectionType will be set dynamically by transport layer
+        RemoteDeviceInfo remoteDevice = new RemoteDeviceInfo(
+                "PC",           // Name (will be updated via channel handler)
+                targetIp,
+                ConnectionType.WIFI  // Default; can be changed dynamically
+        );
 
-        if (targetIp != null) {
-            backgroundExecutor.execute(() -> {
-                try {
-                    Log.i(TAG, "Attempting TCP connection to: " + targetIp);
-                    tauSync = new TauSync();
-                    tauSync.connectTo(targetIp);
+        // Update repository status to CONNECTING
+        deviceRepository.updateConnectionStatus(ConnectionStatus.CONNECTING);
 
-                    Log.i(TAG, "✔ TCP Connection established successfully!");
-                    updateNotification("Connected to PC at " + targetIp);
+        // Start initial notification
+        showConnectingNotification(targetIp);
 
-                    startDataStreaming();
-
-                } catch (Exception e) {
-                    Log.e(TAG, "✘ Connection failed: " + e.getMessage());
-
-                    // פתרון לכישלון: עצירת ה-Foreground והסרוויס
-                    stopForeground(true);
-                    stopSelf();
-                }
-            });
-        }
+        // Request connection from transport manager
+        // This will trigger the connection attempt with automatic reconnect
+        transportManager.connect(remoteDevice, this);
 
         return START_STICKY;
     }
 
-    /**
-     * פתרון לניקוי הנוטיפיקציה כשהאפליקציה נסגרת מה-Recents
-     */
     @Override
     public void onTaskRemoved(Intent rootIntent) {
-        Log.d(TAG, "App removed from task list. Shutting down service...");
+        Log.d(TAG, "App removed from recent apps, shutting down");
         cleanup();
         stopSelf();
         super.onTaskRemoved(rootIntent);
@@ -101,97 +170,193 @@ public class ConnectivityService extends Service {
 
     @Override
     public void onDestroy() {
-        Log.d(TAG, "onDestroy: Service is being destroyed");
+        Log.d(TAG, "Service destroyed");
         cleanup();
         super.onDestroy();
     }
 
     private void cleanup() {
-        if (tauSync != null) {
-            tauSync.dispose();
-            tauSync = null;
+        if (handlerRegistry != null) {
+            handlerRegistry.shutdownAll();
         }
-        backgroundExecutor.shutdownNow();
+        if (transportManager != null) {
+            transportManager.shutdown();
+        }
+        deviceRepository.updateConnectionStatus(ConnectionStatus.DISCONNECTED);
+    }
+
+    // ============ TransportListener Implementation ============
+    // These methods are called by the TransportManager when status changes
+
+    @Override
+    public void onStatusChanged(TransportStatus status) {
+        Log.d(TAG, "Transport status changed: " + status);
+
+        // Map TransportStatus to ConnectionStatus for the UI
+        ConnectionStatus connectionStatus = mapTransportStatusToConnectionStatus(status);
+        deviceRepository.updateConnectionStatus(connectionStatus);
+
+        // Update notification
+        updateNotificationForTransportStatus(status);
+    }
+
+    @Override
+    public void onPeerRequestsAvailable(java.util.List<String> channels) {
+        Log.d(TAG, "Peer requests available for channels: " + channels);
+
+        // Send initial device info once on first connection
+        if (deviceRepository.getCurrentConnectionStatus() == ConnectionStatus.CONNECTED &&
+                transportManager.isConnected()) {
+
+            // Check if we've already sent initial data
+            boolean shouldSendInitialData = false;
+            try {
+                String name = transportManager.readFromChannel(DeviceInfoChannels.NAME.getValue());
+                shouldSendInitialData = name == null || name.isEmpty();
+            } catch (Exception e) {
+                shouldSendInitialData = true;  // Assume we haven't sent yet on error
+            }
+
+            if (shouldSendInitialData) {
+                sendInitialDeviceInfo();
+            }
+        }
+
+        // Delegate to channel-specific handlers
+        for (String channel : channels) {
+            handlerRegistry.handlePeerRequest(channel);
+        }
+    }
+
+    @Override
+    public void onConnectionError(Exception error) {
+        Log.e(TAG, "Connection error: " + error.getMessage(), error);
+        deviceRepository.updateConnectionStatus(ConnectionStatus.FAILED);
+        updateNotification("Connection failed");
+    }
+
+    @Override
+    public void onReconnectAttempt(int attemptNumber, int maxRetries) {
+        Log.i(TAG, "Reconnect attempt " + attemptNumber + "/" + maxRetries);
+        deviceRepository.updateConnectionStatus(ConnectionStatus.RECONNECTING);
+        updateNotification("Reconnecting... (attempt " + attemptNumber + "/" + maxRetries + ")");
+    }
+
+    // ============ Helper Methods ============
+
+    /**
+     * Maps TransportStatus to ConnectionStatus for the repository.
+     */
+    private ConnectionStatus mapTransportStatusToConnectionStatus(TransportStatus transportStatus) {
+        switch (transportStatus) {
+            case CONNECTING:
+                return ConnectionStatus.CONNECTING;
+            case CONNECTED:
+                return ConnectionStatus.CONNECTED;
+            case RECONNECTING:
+                return ConnectionStatus.RECONNECTING;
+            case FAILED:
+                return ConnectionStatus.FAILED;
+            case IDLE:
+            case DISCONNECTING:
+            default:
+                return ConnectionStatus.DISCONNECTED;
+        }
+    }
+
+    /**
+     * Updates notification based on transport status.
+     */
+    private void updateNotificationForTransportStatus(TransportStatus status) {
+        switch (status) {
+            case CONNECTED:
+                updateNotification("Connected to PC");
+                break;
+            case CONNECTING:
+                updateNotification("Connecting...");
+                break;
+            case RECONNECTING:
+                updateNotification("Reconnecting...");
+                break;
+            case FAILED:
+                updateNotification("Connection failed");
+                break;
+            case DISCONNECTING:
+            case IDLE:
+            default:
+                updateNotification("Disconnected");
+        }
+    }
+
+    /**
+     * Sends initial device information to the remote PC.
+     * Called once when connection is first established.
+     */
+    private void sendInitialDeviceInfo() {
+        Log.d(TAG, "Sending initial device info");
+        try {
+            sendDeviceInfo(DeviceInfoChannels.NAME.getValue(), systemDataSource.getDeviceModel());
+            sendDeviceInfo(DeviceInfoChannels.OS.getValue(), "Android " + Build.VERSION.RELEASE);
+            sendDeviceInfo(DeviceInfoChannels.ID.getValue(), systemDataSource.getDeviceId());
+            sendDeviceInfo(DeviceInfoChannels.IP.getValue(), systemDataSource.getLocalIp());
+            sendDeviceInfo(DeviceInfoChannels.BATTERY_LEVEL.getValue(), String.valueOf(systemDataSource.getBattery()));
+            sendDeviceInfo(DeviceInfoChannels.BATTERY_CHARGING.getValue(), String.valueOf(systemDataSource.isDeviceCharging()));
+            sendDeviceInfo(DeviceInfoChannels.STORAGE_TOTAL.getValue(), String.valueOf(systemDataSource.getRawStorageStats().getTotal()));
+            sendDeviceInfo(DeviceInfoChannels.STORAGE_USED.getValue(), String.valueOf(systemDataSource.getRawStorageStats().getUsed()));
+        } catch (Exception e) {
+            Log.e(TAG, "Error sending initial device info: " + e.getMessage(), e);
+        }
+    }
+
+    private void sendDeviceInfo(String channel, String value) {
+        try {
+            Log.v(TAG, "Sending [" + channel + "]: " + value);
+            transportManager.writeToChannel(channel, value);
+        } catch (Exception e) {
+            Log.e(TAG, "Error writing [" + channel + "]: " + e.getMessage());
+        }
     }
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel serviceChannel = new NotificationChannel(
+            NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
                     "Connectivity Service Channel",
                     NotificationManager.IMPORTANCE_LOW
             );
             NotificationManager manager = getSystemService(NotificationManager.class);
-            manager.createNotificationChannel(serviceChannel);
+            if (manager != null) {
+                manager.createNotificationChannel(channel);
+            }
         }
     }
 
-    private void updateNotification(String statusText) {
-        Notification updatedNotification = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle(getString(R.string.app_name) + " - Connected")
-                .setContentText(statusText)
+    private void showConnectingNotification(String targetIp) {
+        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle(getString(R.string.app_name))
+                .setContentText("Connecting to " + targetIp + "...")
+                .setSmallIcon(R.drawable.ic_sync)
+                .setOngoing(true)
+                .build();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+        } else {
+            startForeground(1, notification);
+        }
+    }
+
+    private void updateNotification(String status) {
+        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle(getString(R.string.app_name))
+                .setContentText(status)
                 .setSmallIcon(R.drawable.ic_sync)
                 .setOngoing(true)
                 .build();
 
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        manager.notify(1, updatedNotification);
-    }
-
-    private void startDataStreaming() {
-        backgroundExecutor.execute(() -> {
-            try {
-                Log.d(TAG, "Phase A: Pushing initial device metadata...");
-                sendInitialStaticData();
-
-                Log.d(TAG, "Phase B: Entering polling loop...");
-                while (tauSync != null && !backgroundExecutor.isShutdown()) {
-                    List<String> waitingWords = tauSync.getPeerWaitingWords();
-                    if (!waitingWords.isEmpty()) {
-                        handlePeerRequests(waitingWords);
-                    }
-                    Thread.sleep(2000);
-                }
-            } catch (InterruptedException e) {
-                // when we close the app
-                Log.i(TAG, "Streaming loop stopped gracefully due to interruption.");
-            } catch (Exception e) {
-                Log.e(TAG, "Streaming loop error: ", e);
-            }
-        });
-    }
-
-    private void sendInitialStaticData() {
-        writeWithLog(DeviceInfoChannels.NAME.getValue(), systemDataSource.getDeviceModel());
-        writeWithLog(DeviceInfoChannels.OS.getValue(), "Android " + Build.VERSION.RELEASE);
-        writeWithLog(DeviceInfoChannels.ID.getValue(), systemDataSource.getDeviceId());
-        writeWithLog(DeviceInfoChannels.IP.getValue(), systemDataSource.getLocalIp());
-        writeWithLog(DeviceInfoChannels.BATTERY_LEVEL.getValue(), String.valueOf(systemDataSource.getBattery()));
-        writeWithLog(DeviceInfoChannels.BATTERY_CHARGING.getValue(), String.valueOf(systemDataSource.isDeviceCharging()));
-
-        DeviceStorageStats storage = systemDataSource.getRawStorageStats();
-        writeWithLog(DeviceInfoChannels.STORAGE_TOTAL.getValue(), String.valueOf(storage.getTotal()));
-        writeWithLog(DeviceInfoChannels.STORAGE_USED.getValue(), String.valueOf(storage.getUsed()));
-    }
-
-    private void writeWithLog(String channel, String value) {
-        Log.v(TAG, "Writing to channel [" + channel + "]: " + value);
-        NetworkHandler.writeToChannel(tauSync, channel, value);
-    }
-
-    private void handlePeerRequests(List<String> waiting) {
-        if (waiting.contains(DeviceInfoChannels.PC_NAME.getValue())) {
-            String pcName = NetworkHandler.readFromChannel(tauSync, DeviceInfoChannels.PC_NAME.getValue());
-            if (!pcName.isEmpty()) {
-                if (connectionState != null && connectionState.getRemotePC() != null) {
-                    connectionState.getRemotePC().setPcName(pcName);
-                }
-                updateNotification("Connected to " + pcName);
-            }
-        }
-        if (waiting.contains(DeviceInfoChannels.BATTERY_LEVEL.getValue())) {
-            NetworkHandler.writeToChannel(tauSync, DeviceInfoChannels.BATTERY_LEVEL.getValue(),
-                    String.valueOf(systemDataSource.getBattery()));
+        if (manager != null) {
+            manager.notify(1, notification);
         }
     }
 

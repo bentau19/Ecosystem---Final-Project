@@ -82,18 +82,20 @@ public class MainActivity extends AppCompatActivity {
      * Starts the Foreground Service to maintain the PC connection.
      */
     private void startConnectivityService() {
-        // 1. נחלץ את ה-IP מה-ViewModel (ה-IP שחולץ מה-QR ושמור ב-Repository)
+        // 1. Extract the IP from the ViewModel (the IP extracted from the QR and saved in the Repository)
         String ip = "";
         if (viewModel.getConnectionState().getValue() != null &&
                 viewModel.getConnectionState().getValue().getRemotePC() != null) {
             ip = viewModel.getConnectionState().getValue().getRemotePC().getPcIp();
         }
 
-        // 2. ניצור את ה-Intent ונוסיף לו את ה-IP כ-"Extra"
+        // 2. Create the Intent and add the IP as an "Extra"
+        // 3. Important: The Repository is already initialized by the ViewModel in onCreate()
+        // This ensures that when the service's onCreate() is called, the repository is ready
         Intent serviceIntent = new Intent(this, ConnectivityService.class);
-        serviceIntent.putExtra("TARGET_IP", ip); // המפתח הזה חייב להיות זהה למה שכתוב בסרוויס!
+        serviceIntent.putExtra("TARGET_IP", ip); // This key must match what the service expects!
 
-        // 3. הפעלה
+        // 4. Start the service
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ContextCompat.startForegroundService(this, serviceIntent);
         } else {
