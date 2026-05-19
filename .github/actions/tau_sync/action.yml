@@ -1,0 +1,13 @@
+name: TauSync Action
+
+description: Build Windows DLL using Docker Compose
+
+runs:
+  using: "composite"
+
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Build windows DLL
+      shell: bash
+      run: dotnet publish TauSync/Tausync_Windows/TauSync.Lib -c Release -o TauSync/windows/tausync_py/dll

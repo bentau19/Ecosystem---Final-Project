@@ -25,10 +25,7 @@ class PillWrapper(QWidget):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        """
-        Set up the vertical layout, add the ConnectionPill widget,
-        and enforce the minimum height of the wrapper.
-        """
+        # Build the vertical layout, add ConnectionPill, and enforce minimum height.
         layout: QVBoxLayout = QVBoxLayout(self)
 
         layout.setContentsMargins(Spacing.MD, Spacing.MD, Spacing.MD, Spacing.NONE)

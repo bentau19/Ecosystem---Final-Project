@@ -1,57 +1,102 @@
 {
   "name": "DeviceInfoChannels",
-  "description": "JSON key names for the DeviceInfo payload exchanged over the DEVICE_INFO channel. Both PC and Android must use the exact same key strings — define them here once and generate both sides.",
+  "description": "TauSync meeting-word identifiers for device info channel reads. Each field that can be pushed by either side is split by direction so both parties can push simultaneously without colliding on the same meeting-word. Both PC and Android must call tau.connect() with the exact same string — define them here once and generate both sides.",
   "type": "string",
   "members": [
     {
       "name": "ID",
       "value": "id",
-      "description": "Unique device identifier."
+      "description": "Bidirectional ID handshake channel: Android writes its current ID (or empty string for new devices), PC reads it and writes back the assigned ID on the same stream. Not split by direction because both parties read AND write within the same tau.connect() session."
     },
     {
-      "name": "NAME",
-      "value": "name",
-      "description": "Human-readable device name, e.g. \"Pixel 8 Pro\"."
+      "name": "NAME_FROM_ANDROID",
+      "value": "name_android",
+      "description": "Android pushes its human-readable device name to PC, e.g. \"Pixel 8 Pro\"."
     },
     {
-      "name": "OS",
-      "value": "os",
-      "description": "OS version string, e.g. \"Android 14\"."
+      "name": "NAME_FROM_PC",
+      "value": "name_pc",
+      "description": "PC pushes its human-readable device name to Android, e.g. \"Lavi's Laptop\". Reserved for future bidirectional device info exchange."
     },
     {
-      "name": "TAG",
-      "value": "tag",
-      "description": "User-assigned label, e.g. \"Home\"."
+      "name": "OS_FROM_ANDROID",
+      "value": "os_android",
+      "description": "Android pushes its OS version string to PC, e.g. \"Android 14\"."
     },
     {
-      "name": "LAST_SEEN",
-      "value": "last_seen",
-      "description": "Human-readable recency string, e.g. \"now\", \"today\", \"3 days ago\"."
+      "name": "OS_FROM_PC",
+      "value": "os_pc",
+      "description": "PC pushes its OS version string to Android, e.g. \"Windows 11\". Reserved for future bidirectional device info exchange."
     },
     {
-      "name": "BATTERY_LEVEL",
-      "value": "battery_level",
-      "description": "Battery level as an integer percentage (0–100)."
+      "name": "TAG_FROM_ANDROID",
+      "value": "tag_android",
+      "description": "Android pushes its user-assigned label to PC, e.g. \"Home\"."
     },
     {
-      "name": "BATTERY_CHARGING",
-      "value": "battery_charging",
-      "description": "Whether the device is currently charging."
+      "name": "TAG_FROM_PC",
+      "value": "tag_pc",
+      "description": "PC pushes its user-assigned label to Android. Reserved for future bidirectional device info exchange."
     },
     {
-      "name": "STORAGE_USED",
-      "value": "storage_used",
-      "description": "Used storage in bytes."
+      "name": "LAST_SEEN_FROM_ANDROID",
+      "value": "last_seen_android",
+      "description": "Android pushes a human-readable recency string to PC, e.g. \"now\", \"today\", \"3 days ago\"."
     },
     {
-      "name": "STORAGE_TOTAL",
-      "value": "storage_total",
-      "description": "Total storage capacity in bytes."
+      "name": "LAST_SEEN_FROM_PC",
+      "value": "last_seen_pc",
+      "description": "PC pushes a human-readable recency string to Android. Reserved for future bidirectional device info exchange."
     },
     {
-      "name": "IP",
-      "value": "ip",
-      "description": "Last known LAN IP address of the device, used to reconnect."
+      "name": "BATTERY_LEVEL_FROM_ANDROID",
+      "value": "battery_level_android",
+      "description": "Android pushes its battery level as an integer percentage (0-100) to PC."
+    },
+    {
+      "name": "BATTERY_LEVEL_FROM_PC",
+      "value": "battery_level_pc",
+      "description": "PC pushes its battery level to Android (relevant for laptops). Reserved for future bidirectional device info exchange."
+    },
+    {
+      "name": "BATTERY_CHARGING_FROM_ANDROID",
+      "value": "battery_charging_android",
+      "description": "Android pushes whether it is currently charging to PC."
+    },
+    {
+      "name": "BATTERY_CHARGING_FROM_PC",
+      "value": "battery_charging_pc",
+      "description": "PC pushes whether it is currently charging to Android. Reserved for future bidirectional device info exchange."
+    },
+    {
+      "name": "STORAGE_USED_FROM_ANDROID",
+      "value": "storage_used_android",
+      "description": "Android pushes its used storage in bytes to PC."
+    },
+    {
+      "name": "STORAGE_USED_FROM_PC",
+      "value": "storage_used_pc",
+      "description": "PC pushes its used storage in bytes to Android. Reserved for future bidirectional device info exchange."
+    },
+    {
+      "name": "STORAGE_TOTAL_FROM_ANDROID",
+      "value": "storage_total_android",
+      "description": "Android pushes its total storage capacity in bytes to PC."
+    },
+    {
+      "name": "STORAGE_TOTAL_FROM_PC",
+      "value": "storage_total_pc",
+      "description": "PC pushes its total storage capacity in bytes to Android. Reserved for future bidirectional device info exchange."
+    },
+    {
+      "name": "IP_FROM_ANDROID",
+      "value": "ip_android",
+      "description": "Android pushes its last known LAN IP address to PC, used to reconnect."
+    },
+    {
+      "name": "IP_FROM_PC",
+      "value": "ip_pc",
+      "description": "PC pushes its last known LAN IP address to Android. Reserved for future bidirectional device info exchange."
     }
   ]
 }

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Components.wxs — SyncDose Installer (WiX v7)
+    =============================================
+    Declares the app files to install.
+
+    In WiX v7, the <Files> element replaces heat.exe entirely.
+    It auto-harvests every file in dist\SyncDose\ recursively —
+    including SyncDose.exe, all PySide6 DLLs, Qt plugins,
+    Python runtime, qrcode, tausync-py, resources/styles/, etc.
+
+    No need to list individual files or run a harvest command.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+    <Fragment>
+
+        <ComponentGroup Id="SyncDoseAppFiles" Directory="INSTALLFOLDER">
+
+            <!--
+                This single line picks up everything in dist\SyncDose\:
+                  - SyncDose.exe
+                  - python3xx.dll
+                  - PySide6/  (all Qt DLLs and plugins)
+                  - tausync-py bindings
+                  - qrcode, PIL
+                  - resources/styles/*.qss
+                  - Any other bundled files PyInstaller included
+            -->
+            <Files Include="dist\SyncDose\**"/>
+
+        </ComponentGroup>
+
+        <ComponentGroup Id="FileHandlerFiles" Directory="FILEHANDLERFOLDER">
+
+            <!--
+                File handler DLL for Windows context menu integration.
+                This is a separate component because it has its own registry entries.
+            -->
+
+            <Files Include="dist\FileHandler\**"/>
+        </ComponentGroup>
+
+    </Fragment>
+</Wix>

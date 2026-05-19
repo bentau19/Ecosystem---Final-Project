@@ -1,5 +1,12 @@
 # TauSync v3.0 — C# Implementation Plan
 
+> **Status: HISTORICAL** — This document was a planning artifact for the migration from the
+> old CorrelationID-based protocol to the TargetID + Meeting Word model described in
+> `TauSync_Protocol_Spec.md (v3.0)`. That migration is complete and the library now ships
+> at **v3.1**. Refer to
+> [`TauSync/Shared_Definitions/TauSync_Protocol_Spec.md`](../../../Shared_Definitions/TauSync_Protocol_Spec.md)
+> for the authoritative current specification.
+
 This document maps the **TauSync_Protocol_Spec.md (v3.0)** to concrete C# changes.
 
 ---

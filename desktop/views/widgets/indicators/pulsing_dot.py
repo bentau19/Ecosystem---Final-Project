@@ -33,7 +33,7 @@ class PulsingDot(QWidget):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        """Set fixed size and start the looping opacity animation."""
+        # Set fixed size and start the indefinitely-looping opacity animation.
         self.setFixedSize(30, 30)
 
         self.anim: QPropertyAnimation = QPropertyAnimation(self, b"opacity")
@@ -47,19 +47,11 @@ class PulsingDot(QWidget):
         self.anim.start()
 
     def _get_opacity(self) -> float:
-        """Return the current opacity value used by the animation property.
-
-        Returns:
-            The current opacity as a float in [0.0, 1.0].
-        """
+        # Return the current opacity for the QPropertyAnimation property getter.
         return self._opacity
 
     def _set_opacity(self, value: float) -> None:
-        """Set the opacity value and schedule a repaint.
-
-        Args:
-            value: New opacity value in [0.0, 1.0].
-        """
+        # Store the new opacity and schedule a repaint so the dot redraws at the new alpha.
         self._opacity = value
         self.update()
 

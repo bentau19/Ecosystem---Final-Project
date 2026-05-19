@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Registry.wxs — SyncDose Installer (WiX v4)
+    ===========================================
+    Registers the "Send with SyncDose" shell context-menu verb for all files (*).
+
+    When a user right-clicks any file in Windows Explorer and chooses
+    "Send with SyncDose", Windows executes:
+
+        "[FILEHANDLERFOLDER]file.exe" "%1"
+
+    where %1 is the full path of the selected file.
+
+    Registry layout written under HKCR\*\shell\SendWithSyncDose:
+
+        (Default)             REG_SZ   "Send with SyncDose"
+        Icon                  REG_SZ   "[FILEHANDLERFOLDER]file.exe",0
+        command\(Default)     REG_SZ   "[FILEHANDLERFOLDER]file.exe" "%1"
+
+    The (Default) value on the verb key is the KeyPath for this component,
+    which WiX uses to track install / repair / uninstall state.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+    <Fragment>
+
+        <ComponentGroup Id="SyncDoseRegistry" Directory="INSTALLFOLDER">
+            <Component
+                    Id="FileHandlerContextMenu"
+                    Guid="F3A7E2D1-9B4C-4E6F-A3D8-2C1B5E7F9A0D">
+
+                <!--
+                    Verb key — the display name shown in the Explorer context menu.
+                    KeyPath="yes" marks this value as the component's key path so
+                    WiX can track whether this component is installed or not.
+                -->
+                <RegistryKey Root="HKCR" Key="*\shell\SendWithSyncDose">
+                    <RegistryValue
+                            Type="string"
+                            Value="Send with SyncDose"
+                            KeyPath="yes"/>
+
+                    <!--
+                        Icon shown next to the menu item.
+                        Syntax: "path\to\exe",resourceIndex
+                        Index 0 picks the first icon embedded in the executable.
+                    -->
+                    <RegistryValue
+                            Name="Icon"
+                            Type="string"
+                            Value='"[FILEHANDLERFOLDER]file.exe",0'/>
+                </RegistryKey>
+
+                <!--
+                    Command key — the exact command line Windows runs when the
+                    verb is invoked.  %1 is expanded by the shell to the full
+                    path of the right-clicked file.
+                -->
+                <RegistryKey Root="HKCR" Key="*\shell\SendWithSyncDose\command">
+                    <RegistryValue
+                            Type="string"
+                            Value='"[FILEHANDLERFOLDER]file.exe" "%1"'/>
+                </RegistryKey>
+
+            </Component>
+        </ComponentGroup>
+
+    </Fragment>
+</Wix>

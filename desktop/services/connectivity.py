@@ -4,45 +4,14 @@ Device connectivity service.
 Manages the TauSync TCP connection lifecycle on a background thread,
 emitting Qt signals when a device connects or disconnects.
 """
-import functools
+import socket
 import threading
-import uuid
-from datetime import date
-from typing import Callable
 
 from PySide6.QtCore import QObject, Signal
+
+import utils.network
+from domain.enums.session_channels import SessionChannels
 from tausync_py import TauSync
-
-from entities.device_info import DeviceEntity
-from enums.device_info_channels import DeviceInfoChannels
-from repositories.device import DeviceRepository
-from utils import network
-
-
-def threaded(func: Callable) -> Callable[..., threading.Thread]:
-    """Decorator that runs a bound method on a new daemon :class:`threading.Thread`.
-
-    The spawned thread is appended to ``self._threads`` so it can be joined
-    during cleanup. The first positional argument of the decorated method must
-    be the instance (``self``) and must expose a ``_threads: list`` attribute.
-
-    Args:
-        func: The bound method to wrap.
-
-    Returns:
-        A wrapper that starts the method on a background thread and returns
-        the :class:`threading.Thread` object to the caller.
-    """
-
-    @functools.wraps(func)
-    def run_as_thread(*args, **kwargs) -> threading.Thread:
-        self = args[0]
-        thread = threading.Thread(target=func, args=args, kwargs=kwargs, daemon=True)
-        self._threads.append(thread)
-        thread.start()
-        return thread
-
-    return run_as_thread
 
 
 class ConnectivityService(QObject):
@@ -57,148 +26,167 @@ class ConnectivityService(QObject):
     PySide6 handles cross-thread signal emission automatically via queued
     connections, so ``Signal.emit()`` from a ``threading.Thread`` is safe.
 
+    Exposes the underlying :class:`~tausync_py.TauSync` instance via the
+    read-only ``tau`` property so that other services (e.g.
+    :class:`~services.device_info.DeviceInfoService`) can share the same
+    connected transport without owning it.
+
     Signals:
-        device_connected (Signal): Emitted when a remote device connects.
-        device_disconnected (Signal): Emitted after :meth:`disconnect_device` completes.
-        connection_error (Signal[str]): Emitted if the connection attempt fails.
-        device_info_ready (Signal[object]): Emitted with a
-            :class:`~entities.device_info.DeviceEntity` when all channel reads
-            in :meth:`get_device_info` finish successfully.
+        device_connected: Emitted when a remote device connects.
+        device_disconnected: Emitted after :meth:`disconnect_device` completes.
+        connection_error (Signal[str]): Emitted with the exception message if
+            the connection attempt fails.
     """
 
     device_connected = Signal()
     device_disconnected = Signal()
     connection_error = Signal(str)
-    device_info_ready = Signal(object)
 
-    def __init__(self, repository: DeviceRepository, parent: QObject | None = None) -> None:
-        """Initialize the service and set up the TauSync connection.
+    def __init__(self, parent: QObject | None = None) -> None:
+        """Initialize the service and inject the device repository.
+
+        The background listener is *not* started automatically so that the
+        phone-side connectivity implementation can be wired in before the
+        service begins accepting connections. Call :meth:`start_listening`
+        explicitly when the application is ready.
 
         Args:
-            repository: The shared :class:`~repositories.device.DeviceRepository`
-                instance from the application's DI root, used to check for
-                existing device IDs before generating new ones.
             parent: Optional parent QObject for Qt memory management.
         """
         super().__init__(parent)
         self._tau: TauSync = TauSync()
-        self._device_repository: DeviceRepository = repository
         self._threads: list[threading.Thread] = []
+        self._is_running = threading.Event()
 
-        # self._listen()
+        self._lifecycle_lock = threading.Lock()
+        self._threads_lock = threading.Lock()
 
-    def _generated_id(self) -> str:
-        """Generate a UUID that does not already exist in the device repository.
+    # ── Public read-only access to the transport ──────────────────────────────
 
-        Loops until a UUID is found that is absent from the local database,
-        guaranteeing uniqueness before the ID is assigned to a new device.
-
-        Returns:
-            A UUID string guaranteed to be absent from the local database.
-        """
-        while True:
-            random_id = str(uuid.uuid4())
-            if not self._device_repository.id_exists(random_id):
-                return random_id
-
-    def _get_id(self) -> str:
-        """Read the device ID from the TauSync ID channel, generating one if absent.
+    @property
+    def tau(self) -> TauSync:
+        """The underlying TauSync transport shared with dependent services.
 
         Returns:
-            The device ID provided by the remote device, or a freshly generated
-            UUID that is unique within the local repository.
+            The :class:`~tausync_py.TauSync` instance owned by this service.
         """
-        device_id = network.read_from_channel(self._tau, DeviceInfoChannels.ID)
-        if device_id == "":
-            return self._generated_id()
-        return device_id
+        return self._tau
 
-    def get_tag(self) -> str:
-        """Read the device tag from the TauSync TAG channel, falling back to ``'default'``.
+    @property
+    def connected(self) -> bool:
+        """``True`` when the TauSync transport has an active peer connection."""
+        return self._tau.is_connected
 
-        Returns:
-            The tag string provided by the remote device, or ``"default"`` if
-            the channel returns an empty string.
-        """
-        tag = network.read_from_channel(self._tau, DeviceInfoChannels.TAG)
-        if tag == "":
-            return "default"
-        return tag
+    # ── Public API ───────────────────────────────────────────────────
 
-    @threaded
-    def get_device_info(self) -> None:
-        """Read all device fields from TauSync channels and emit a DeviceEntity.
+    def start(self) -> None:
+        """Start the connection listener on a background thread."""
+        threading.Thread(target=self._start, daemon=True).start()
 
-        Runs on a background thread (via the ``@threaded`` decorator). Silently
-        no-ops if TauSync is not currently connected.
+    def stop(self) -> None:
+        """Stop the service on a background thread, joining all pending workers."""
+        threading.Thread(target=self._stop, daemon=True).start()
 
-        Emits:
-            device_info_ready: With the assembled
-                :class:`~entities.device_info.DeviceEntity` once all channel
-                reads complete.
-        """
-        if not self._tau.is_connected:
-            return
-        entity = DeviceEntity(
-            id=self._get_id(),
-            tag=network.read_from_channel(self._tau, DeviceInfoChannels.TAG),
-            name=network.read_from_channel(self._tau, DeviceInfoChannels.NAME),
-            os=network.read_from_channel(self._tau, DeviceInfoChannels.OS),
-            battery_level=int(network.read_from_channel(self._tau, DeviceInfoChannels.BATTERY_LEVEL)),
-            battery_charging=bool(network.read_from_channel(self._tau, DeviceInfoChannels.BATTERY_CHARGING)),
-            storage_total=int(network.read_from_channel(self._tau, DeviceInfoChannels.STORAGE_TOTAL)),
-            storage_used=int(network.read_from_channel(self._tau, DeviceInfoChannels.STORAGE_USED)),
-            last_connected=date.fromisoformat(network.read_from_channel(self._tau, DeviceInfoChannels.LAST_SEEN)),
-            ip=network.read_from_channel(self._tau, DeviceInfoChannels.IP)
-        )
-        self.device_info_ready.emit(entity)
+    def connect_to_device(self, hostname: str) -> None:
+        """Initiate an outbound connection to *hostname* on a background thread.
 
-    @threaded
-    def _listen(self) -> None:
-        """Block until a remote device connects, then emit ``device_connected``.
-
-        Runs on a background :class:`threading.Thread`. Emits ``connection_error``
-        on failure so the error surfaces to the UI instead of being swallowed.
-
-        Emits:
-            device_connected: When the TauSync server accepts a connection.
-            connection_error: With the exception message string if listening fails.
-        """
-        try:
-            self._tau.listen()
-            self.device_connected.emit()
-        except Exception as exc:
-            self.connection_error.emit(str(exc))
-
-    def disconnect_device(self) -> None:
-        """Dispose the TauSync connection and emit ``device_disconnected``.
-
-        Joins all background threads with a 2-second timeout each before
-        clearing the thread registry, giving in-flight reads a chance to finish.
-
-        Emits:
-            device_disconnected: After all threads are joined and TauSync is disposed.
-        """
-        self._tau.dispose()
-        for thread in self._threads:
-            if thread.is_alive():
-                thread.join(timeout=2)
-        self._threads.clear()
-        self.device_disconnected.emit()
-
-    @threaded
-    def connect_to_device(self, ip: str) -> None:
-        """Connect to a remote device by IP address.
-
-        Currently, a stub — emits ``device_connected`` immediately while the
-        real phone-side implementation is pending.
+        No-ops when the service is not running.
 
         Args:
-            ip: The IP address of the remote TauSync server.
+            hostname: DNS name or IP address of the target device.
+        """
+        if not self._is_running.is_set():
+            return
+        self._spawn(self._connect_to_device, hostname)
+
+    # ── Private Functions ───────────────────────────────────────────────────
+
+    def _start(self) -> None:
+        # Guard against double-start; replace the transport so reconnects get a fresh TauSync.
+        with self._lifecycle_lock:
+            if self._is_running.is_set():
+                return
+            self._is_running.set()
+            self._tau = TauSync()
+        self._spawn(self._listen)
+
+    def _stop(self) -> None:
+        # Join every worker thread except the one calling _stop (which is itself a thread).
+        with self._lifecycle_lock:
+            if not self._is_running.is_set():
+                return
+            self._is_running.clear()
+            self.disconnect_device()
+            pending_threads: list[threading.Thread] = self._get_pending_threads()
+            for t in pending_threads:
+                if t == threading.current_thread():
+                    continue
+                t.join()
+
+    def _spawn(self, target, *args):
+        # All thread creation must go through here so teardown can join every worker.
+        if not self._is_running.is_set():
+            return  # reject new spawns during teardown
+        t = threading.Thread(target=target, args=args, daemon=True)
+        with self._threads_lock:
+            self._threads.append(t)
+        t.start()
+
+    def disconnect_device(self) -> None:
+        """Close the TauSync transport and emit ``device_disconnected``.
+
+        Raw close only — does not send any notification to the phone.
+        This is the shared tear-down primitive used by both the PC-initiated
+        path (:meth:`_stop`) and the phone-initiated path
+        (:class:`~services.phone_request.PhoneRequestService`).  When the PC
+        is initiating the disconnect, call :meth:`_notify_phone_of_disconnect`
+        first so the phone can tear down gracefully before the transport closes.
 
         Emits:
-            device_connected: Immediately (stub behavior).
+            device_disconnected: After the transport is closed.
         """
-        # TODO: via Bluetooth with prev id...
-        # self._tau.connect_to(ip)
-        self.device_connected.emit()
+        if SessionChannels.DISCONNECT_FROM_PHONE.value in self._tau.get_peer_waiting_words():
+            read = utils.network.read_string_from_channel(self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value)
+        else:
+            self._notify_phone_of_disconnect()
+
+        self._tau.disconnect()
+        self.device_disconnected.emit()
+
+    def _notify_phone_of_disconnect(self) -> None:
+        # Failures are swallowed so a missing/gone phone never blocks our own teardown.
+        try:
+            with self._tau.connect(SessionChannels.DISCONNECT_FROM_PC.value) as stream:
+                stream.write_string("disconnect")
+        except Exception:
+            pass
+
+    def _connect_to_device(self, hostname: str) -> None:
+        # TODO: connect via Bluetooth using the previously stored device ID.
+
+        try:
+            self._stop()
+            ip = utils.network.get_ip_by_hostname(hostname)
+            self._tau.connect_to(ip)
+            self.device_connected.emit()
+        except TimeoutError as ex:
+            print(ex)
+        except socket.gaierror as ex:
+            print(ex)
+
+    def _listen(self) -> None:
+        # Retries on timeout; surfaces unexpected exceptions via connection_error.
+        while self._is_running.is_set() and not self.connected:
+            try:
+                self._tau.listen(timeout_seconds=10)
+                self.device_connected.emit()
+            except TimeoutError:
+                continue
+            except Exception as exc:
+                print(exc)
+                self.connection_error.emit(str(exc))
+
+    def _get_pending_threads(self) -> list[threading.Thread]:
+        # Snapshot alive threads under the lock so callers can join without holding it.
+        with self._threads_lock:
+            return [t for t in self._threads if t.is_alive()]

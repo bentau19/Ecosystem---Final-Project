@@ -1,0 +1,12 @@
+#logoIcon {
+    background-color: transparent;
+    border-radius: 10px;
+    font-size: 30px;
+}
+
+#logoText {
+    color: {{TEXT}};
+    font-size: 25px;
+    font-weight: 800;
+    background: transparent;
+}

@@ -6,7 +6,6 @@
 # --- החרגה (Whitelist) של ה-DLL הספציפי למנוע ---
 # אנחנו מאפשרים ל-Git לעקוב אחרי הקובץ הזה למרות שהוא בתוך תיקיית bin
 !TauSync/Tausync_Windows/TauSync.Lib/bin/Debug/net8.0/TauSync.Lib.dll
-*.txt
 # קבצי הגדרות אישיים של Visual Studio / Cursor
 .vs/
 *.user
@@ -47,4 +46,5 @@ Thumbs.db
 desktop.ini
 .ai
 .claude
+.run
 graphify-out

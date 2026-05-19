@@ -1,9 +1,10 @@
+import os
 import sqlite3
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
-from entities.tool import ToolEntity
-from repositories.interfaces.base import IRepository
+from domain.entities.tool import ToolEntity
+from repositories.repository import IRepository
 from serializers.tool import ToolSerializer
 from utils.meta import ABCQObjectMeta
 
@@ -54,15 +55,13 @@ class ToolRepository(
         """
         super().__init__(parent)
         self._serializer = ToolSerializer()
-        self._db_path = Path(__file__).parent.parent / "data" / "app.db"
+        self._db_path =  Path(os.environ.get("APPDATA")) / "SyncDose" / "app.db"
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._db_path.touch(exist_ok=True)
         self._configure_db()
 
     def _configure_db(self) -> None:
-        """Create the ``tools`` table if absent and seed default rows.
-
-        Seeds are only written when the table is completely empty so that
-        runtime mutations survive application restarts.
-        """
+        # Create the tools table if absent; seed default rows when the table is empty.
         with sqlite3.connect(self._db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(

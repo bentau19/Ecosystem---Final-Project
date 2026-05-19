@@ -2,10 +2,11 @@ from PySide6.QtCore import Slot
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
-from resources.colors import NavigationColors
+from app.theme_manager import theme_manager
+from resources.colors import Colors, LightColors
 from resources.paths import Icons, NavigationStyles
 from resources.spacing import Spacing
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 from views.widgets.navigation.item import NavigationItem
 
 
@@ -34,12 +35,12 @@ class NavigationContainer(QWidget):
         self._setup_signals()
 
     def _setup_ui(self) -> None:
-        """Initialize widgets, layout, and styles."""
+        # Create widgets and build the vertical layout.
         self._create_widgets()
         self._setup_layout()
 
     def _create_widgets(self) -> None:
-        """Create all child widgets used in the navigation container."""
+        # Instantiate the section label and both navigation items.
         self._navigation_label = self._create_navigation_label()
 
         first_navigation_item: NavigationItem = NavigationItem(
@@ -57,7 +58,7 @@ class NavigationContainer(QWidget):
         self._active_navigation_item = first_navigation_item
 
     def _setup_layout(self) -> None:
-        """Create and configure the vertical layout."""
+        # Build the vertical layout: section label → nav items → trailing stretch.
         layout: QVBoxLayout = QVBoxLayout(self)
 
         layout.setContentsMargins(Spacing.LG, Spacing.XS, Spacing.LG, Spacing.NONE)
@@ -69,27 +70,22 @@ class NavigationContainer(QWidget):
         layout.addStretch()
 
     def _setup_style(self) -> None:
-        """Load and apply the stylesheet for the navigation container."""
-        qss: str = load_stylesheet(NavigationStyles.CONTAINER, [NavigationColors])
+        # Load and apply the themed container stylesheet.
+        qss: str = load_stylesheet(
+            NavigationStyles.CONTAINER,
+            themed([Colors], [LightColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
 
     def _setup_signals(self) -> None:
-        """Connect navigation item signals."""
+        # Wire each item's clicked signal and theme_changed to their slots.
         for item in self._navigation_items:
             item.clicked.connect(lambda i=item: self._change_active_status(i))
+        theme_manager.theme_changed.connect(self._setup_style)
 
     @Slot(NavigationItem)
     def _change_active_status(self, navigation_item: NavigationItem) -> None:
-        """
-        Update the active navigation item.
-
-        If the selected item is already active, no change occurs.
-        Otherwise, the previously active item is deactivated and the
-        new item becomes active.
-
-        Args:
-            navigation_item: The navigation item that was clicked.
-        """
+        # Deactivate the previous item and activate the clicked one; no-op if already active.
         if navigation_item == self._active_navigation_item:
             return
 
@@ -98,11 +94,7 @@ class NavigationContainer(QWidget):
         self._active_navigation_item = navigation_item
 
     def _create_navigation_label(self) -> QLabel:
-        """Create the section heading label ('General').
-
-        Returns:
-            A ``QLabel`` with the ``navigationSectionLabel`` object name set.
-        """
+        # Return the 'General' section heading label.
         label: QLabel = QLabel(self.tr("General"))
         label.setObjectName("navigationSectionLabel")
         return label

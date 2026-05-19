@@ -15,8 +15,9 @@ namespace TauSync.Interfaces
         /// </summary>
         /// <param name="targetId">IP address of the peer (client mode), or null/empty for server mode.</param>
         /// <returns>Task that completes when connected.</returns>
-        Task Connect(string? targetId);
+        Task Connect(string? targetId, int? timeoutSeconds = null);
 
+        public void Disconnect();
         /// <summary>
         /// Sends raw binary data (full TPack: 8-byte header + payload). No extra length prefix.
         /// </summary>

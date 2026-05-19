@@ -2,10 +2,11 @@ from PySide6.QtCore import Qt, Signal, QEvent
 from PySide6.QtGui import QPixmap, QEnterEvent, QMouseEvent
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame
 
-from resources.colors import NavigationColors
+from app.theme_manager import theme_manager
+from resources.colors import NavigationColors, LightNavigationColors, LightColors
 from resources.paths import NavigationStyles
 from resources.spacing import Spacing
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 
 
 class NavigationItem(QFrame):
@@ -40,9 +41,10 @@ class NavigationItem(QFrame):
 
         self._setup_ui()
         self._setup_style()
+        self._connect_signals()
 
     def _setup_ui(self) -> None:
-        """Initialize widget, layout, and styles."""
+        # Set active property, cursor, height, then create widgets and layout.
         self.setProperty("isActive", self._is_active)
         self._set_cursor_and_height()
 
@@ -50,12 +52,12 @@ class NavigationItem(QFrame):
         self._create_layout()
 
     def _create_widgets(self) -> None:
-        """Create icon and text labels."""
+        # Create the icon and text labels.
         self._icon_label = self._create_icon()
         self._text_label = self._create_text_label()
 
     def _create_layout(self) -> None:
-        """Create and configure the horizontal layout."""
+        # Build the horizontal layout with left-inset icon and text label.
         layout: QHBoxLayout = QHBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         layout.setContentsMargins(
@@ -72,16 +74,12 @@ class NavigationItem(QFrame):
         layout.addWidget(self._text_label)
 
     def _set_cursor_and_height(self) -> None:
-        """Set cursor and fixed height for the widget."""
+        # Apply pointer cursor and enforce 45 px fixed height.
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(45)
 
     def _create_icon(self) -> QLabel:
-        """Create the icon label scaled to 26×26 px.
-
-        Returns:
-            A fixed-width QLabel with the scaled icon and ``iconLabel`` object name.
-        """
+        # Create the icon label scaled to 26×26 px with a 40 px fixed-width container.
         icon_label: QLabel = QLabel()
         icon_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         icon_label.setFixedWidth(40)
@@ -91,11 +89,7 @@ class NavigationItem(QFrame):
         return icon_label
 
     def _create_text_label(self) -> QLabel:
-        """Create the text label aligned to the vertical centre.
-
-        Returns:
-            A QLabel with the item title and ``textLabel`` object name set.
-        """
+        # Create the item title label with the active state property pre-set.
         text_label: QLabel = QLabel(self._item_title)
         text_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         text_label.setObjectName("textLabel")
@@ -103,12 +97,19 @@ class NavigationItem(QFrame):
         return text_label
 
     def _setup_style(self) -> None:
-        """Load and apply the stylesheet with color placeholders replaced."""
-        qss: str = load_stylesheet(NavigationStyles.ITEM, [NavigationColors])
+        # Load and apply the themed navigation item stylesheet.
+        qss: str = load_stylesheet(
+            NavigationStyles.ITEM,
+            themed([NavigationColors], [LightNavigationColors, LightColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
 
+    def _connect_signals(self) -> None:
+        # Wire theme_changed to re-apply the stylesheet.
+        theme_manager.theme_changed.connect(self._setup_style)
+
     def _change_hover_status(self, value: bool) -> None:
-        """Update hover property and refresh styling."""
+        # Toggle the hovered property and force a style re-polish to update QSS rules.
         self._text_label.setProperty("hovered", value)
         self.style().unpolish(self._text_label)
         self.style().polish(self._text_label)

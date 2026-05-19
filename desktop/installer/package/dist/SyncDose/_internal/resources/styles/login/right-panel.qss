@@ -1,0 +1,136 @@
+/* ── Right Panel container ─────────────────────────── */
+#RightPanel {
+    background-color: #141C26;
+    border-left: 1px solid #1E3A4A;
+}
+
+#RightPanel QWidget {
+    background-color: transparent;
+}
+
+/* ── Header ────────────────────────────────────────── */
+#RightPanelTitle {
+    color: #E2E8F0;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+}
+
+#RightPanelSubtitle {
+    color: #64748B;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 13px;
+    font-weight: 400;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #1E3A4A;
+}
+
+/* ── Device card ───────────────────────────────────── */
+#DeviceCard {
+    background-color: #1a2535;
+    border: 1px solid #243547;
+    border-radius: 12px;
+}
+
+#DeviceCard:hover {
+    background-color: #1d2e42;
+    border-color: #22D3EE;
+}
+
+#DeviceName {
+    color: #E2E8F0;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+#DeviceMeta {
+    color: #64748B;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 400;
+}
+
+#DeviceTime {
+    color: #4A5568;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 11px;
+}
+
+/* ── Status badges ─────────────────────────────────── */
+#BadgeRecent {
+    color: #22D3EE;
+    background-color: rgba(34, 211, 238, 20);
+    border: 1px solid rgba(34, 211, 238, 60);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+#BadgeIdle {
+    color: #4A5568;
+    background-color: rgba(74, 85, 104, 20);
+    border: 1px solid rgba(74, 85, 104, 60);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+/* ── Hover connect button ──────────────────────────── */
+#ConnectBtn {
+    color: #22D3EE;
+    background-color: rgba(34, 211, 238, 15);
+    border: 1px solid rgba(34, 211, 238, 60);
+    border-radius: 8px;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 16px;
+    min-width: 90px;
+}
+
+#ConnectBtn:hover {
+    background-color: rgba(34, 211, 238, 30);
+    border-color: rgba(34, 211, 238, 120);
+    color: #67E8F9;
+}
+
+#ConnectBtn:pressed {
+    background-color: rgba(34, 211, 238, 50);
+}
+
+/* ── Empty state ───────────────────────────────────── */
+#EmptyStateTitle {
+    color: #64748B;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+#EmptyStateSubtitle {
+    color: #374151;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 400;
+}
+
+/* ── Footer ────────────────────────────────────────── */
+#FooterText {
+    color: #374151;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 11px;
+}
+
+#FooterLink {
+    color: #4A5568;
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 11px;
+}
+
+#FooterLink:hover {
+    color: #22D3EE;
+}

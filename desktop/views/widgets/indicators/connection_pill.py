@@ -1,8 +1,10 @@
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QFrame, QWidget
 
+from app.theme_manager import theme_manager
+from resources.colors import Colors, LightColors
 from resources.paths import IndicatorStyles
 from resources.spacing import Spacing
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 from views.widgets.indicators.pulsing_dot import PulsingDot
 
 
@@ -33,54 +35,43 @@ class ConnectionPill(QFrame):
 
         self._setup_ui()
         self._setup_style()
+        self._connect_signals()
 
     def _setup_ui(self) -> None:
-        """Set up the user interface."""
+        # Create child widgets and assemble the horizontal pill layout.
         self._create_widgets()
         self._create_layout()
 
     def _setup_style(self) -> None:
-        """Load and apply QSS styling to the connection pill.
-
-        Reads the connection_pill.styles file, replaces the GREEN color placeholder
-        with the actual color value from the Colors class, and applies the stylesheet.
-        """
-        qss: str = load_stylesheet(IndicatorStyles.CONNECTION_PILL)
+        # Load and apply the themed connection-pill stylesheet.
+        qss: str = load_stylesheet(
+            IndicatorStyles.CONNECTION_PILL,
+            themed([Colors], [LightColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
 
-    def _create_widgets(self) -> None:
-        """Create all child widgets for the connection pill.
+    def _connect_signals(self) -> None:
+        # Wire theme_changed to re-apply the stylesheet.
+        theme_manager.theme_changed.connect(self._setup_style)
 
-        Instantiates the pulsing dot indicator and connection type label.
-        """
+    def _create_widgets(self) -> None:
+        # Instantiate the pulsing-dot indicator and the connection-type label.
         self._pulsing_dot = self._create_pulsing_dot()
         self._connection_type_label = self._create_connection_type_label()
 
     @staticmethod
     def _create_pulsing_dot() -> PulsingDot:
-        """Create the pulsing dot indicator.
-
-        Returns:
-            PulsingDot: A pulsing dot widget to indicate active connection.
-        """
+        # Return a default PulsingDot that starts its animation on construction.
         return PulsingDot()
 
     def _create_connection_type_label(self) -> QLabel:
-        """Create the connection type label.
-
-        Returns:
-            QLabel: A label displaying "Connected via USB" with object name "label".
-        """
+        # Create the 'Connected via USB' status label.
         label: QLabel = QLabel(self.tr("Connected via USB"))
         label.setObjectName("label")
         return label
 
     def _create_layout(self) -> None:
-        """Create and configure the horizontal layout for the connection pill.
-
-        Sets up a QHBoxLayout with specific margins and spacing, then adds
-        the pulsing dot and connection label with a stretch at the end.
-        """
+        # Build the horizontal layout: dot → label → stretch.
         layout: QHBoxLayout = QHBoxLayout(self)
         layout.setContentsMargins(Spacing.MD, Spacing.MD, Spacing.SM, Spacing.SM)
         layout.setSpacing(Spacing.SM)

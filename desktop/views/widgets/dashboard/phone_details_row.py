@@ -1,4 +1,3 @@
-from typing import List, Type
 
 from PySide6.QtCore import Slot
 from PySide6.QtGui import QColor, QIcon
@@ -8,20 +7,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from dto.device_info import (
+from domain.dto.device_info import (
     DeviceInfoDTO,
     DeviceNameDTO,
     DeviceOSDTO,
     DeviceBatteryDTO,
     DeviceStorageDTO,
 )
-from enums.device_type import DeviceType
-from layouts.flow_layout import FlowLayout
-from resources.colors import Palette
+from domain.enums.device_type import DeviceType
+from views.layouts.flow_layout import FlowLayout
+from app.app_state import app_state
+from app.theme_manager import theme_manager
+from resources.colors import Palette, Colors, LightColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from utils.viewmodel_manager import viewmodel_manager
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 from viewmodels.device import DeviceViewModel
 from views.widgets.dashboard.battery_info import BatteryInfo
 from views.widgets.dashboard.info_card import InfoCard
@@ -60,10 +60,10 @@ class PhoneDetailsRow(QWidget):
         self._card_width: int = card_width
         self._card_height: int = card_height
 
-        self._device_viewmodel: DeviceViewModel = viewmodel_manager.device_viewmodel
+        self._device_viewmodel: DeviceViewModel = app_state.device_viewmodel
 
         self._main_layout: FlowLayout
-        self._cards: List[InfoCard] = []
+        self._cards: list[InfoCard] = []
 
         self._setup_ui()
         self._setup_style()
@@ -72,29 +72,22 @@ class PhoneDetailsRow(QWidget):
         self._device_viewmodel.load_device_info()
 
     def _setup_ui(self) -> None:
-        """Set up the user interface."""
+        # Create widgets and configure the flow layout.
         self._create_widgets()
         self._create_layout()
 
     def _create_widgets(self) -> None:
-        """Create all child widgets for the device status row."""
+        # No static child widgets; cards are created dynamically in _set_device_infos.
         pass
 
     def _create_layout(self) -> None:
-        """Create and configure the flow layout."""
+        # Create and configure the FlowLayout.
         self._main_layout = FlowLayout(min_width=self._card_width, parent=self)
         self._main_layout.setSpacing(Spacing.LG)
 
     @staticmethod
     def _create_description_widget(first_description: str) -> QWidget:
-        """Create a single-line label widget.
-
-        Args:
-            first_description: Primary line of text to display.
-
-        Returns:
-            QWidget containing the label.
-        """
+        # Create a single primary-line label widget inside a minimal container.
         widget: QWidget = QWidget()
         layout: QVBoxLayout = QVBoxLayout(widget)
         layout.setContentsMargins(
@@ -109,14 +102,7 @@ class PhoneDetailsRow(QWidget):
         return widget
 
     def _create_general_info_card(self, dto: DeviceInfoDTO) -> InfoCard:
-        """Create a generic text-value card (name, OS, or IP).
-
-        Args:
-            dto: The DTO supplying title, icon, color, and text value.
-
-        Returns:
-            A configured ``InfoCard`` widget.
-        """
+        # Create a text-value InfoCard for DeviceNameDTO or DeviceOSDTO instances.
         card: InfoCard
         descr = ""
         color: str
@@ -141,14 +127,7 @@ class PhoneDetailsRow(QWidget):
         return card
 
     def _create_battery(self, battery: DeviceBatteryDTO) -> InfoCard:
-        """Create the battery status card.
-
-        Args:
-            battery: The battery DTO.
-
-        Returns:
-            A configured ``InfoCard`` widget.
-        """
+        # Create the battery status InfoCard with a BatteryInfo content widget.
         card: InfoCard = InfoCard(
             QIcon(battery.icon_path),
             QColor(self._DEVICE_TYPE_COLORS[DeviceType.BATTERY]),
@@ -160,14 +139,7 @@ class PhoneDetailsRow(QWidget):
         return card
 
     def _create_storage(self, storage: DeviceStorageDTO) -> InfoCard:
-        """Create the storage usage card.
-
-        Args:
-            storage: The storage DTO.
-
-        Returns:
-            A configured ``InfoCard`` widget.
-        """
+        # Create the storage usage InfoCard with a StorageInfo content widget.
         card: InfoCard = InfoCard(
             QIcon(storage.icon_path),
             QColor(self._DEVICE_TYPE_COLORS[DeviceType.STORAGE]),
@@ -179,22 +151,21 @@ class PhoneDetailsRow(QWidget):
         return card
 
     def _setup_style(self) -> None:
-        """Apply the stylesheet to the widget."""
-        qss: str = load_stylesheet(DashboardStyles.DEVICE_STATUS_ROW)
+        # Load and apply the themed QSS.
+        qss: str = load_stylesheet(
+            DashboardStyles.DEVICE_STATUS_ROW,
+            themed([Colors], [LightColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
 
     def _setup_signals(self) -> None:
-        """Connect ViewModel signals to view slots."""
+        # Wire device_infos_updated and theme_changed to their slots.
         self._device_viewmodel.device_infos_updated.connect(self._set_device_infos)
+        theme_manager.theme_changed.connect(self._setup_style)
 
     @Slot(list)
-    def _set_device_infos(self, device_infos: List[DeviceInfoDTO]) -> None:
-        """Render an ``InfoCard`` for every loaded device-info DTO.
-
-        Args:
-            device_infos: List of ``DeviceInfoDTO`` subclass instances emitted
-                by the ViewModel on initial load.
-        """
+    def _set_device_infos(self, device_infos: list[DeviceInfoDTO]) -> None:
+        # Create an InfoCard for each DTO and add it to the flow layout.
         for dto in device_infos:
             if isinstance(dto, DeviceBatteryDTO):
                 self._main_layout.addWidget(self._create_battery(dto))

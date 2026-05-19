@@ -1,0 +1,17 @@
+{
+  "name": "SessionChannels",
+  "description": "TauSync meeting-word identifiers for session lifecycle events. Both PC and Android must call tau.connect() with the exact same string — define it here once and generate both sides.",
+  "type": "string",
+  "members": [
+    {
+      "name": "DISCONNECT_FROM_PHONE",
+      "value": "disconnect_phone",
+      "description": "Phone opens this channel when it initiates a disconnect."
+    },
+    {
+      "name": "DISCONNECT_FROM_PC",
+      "value": "disconnect_pc",
+      "description": "PC opens this channel to notify the phone before a PC-initiated disconnect."
+    }
+  ]
+}

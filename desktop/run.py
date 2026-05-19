@@ -8,7 +8,9 @@ import pytest
 import resources_qrc  # noqa: F401
 
 START_FILE = "./main.py"
-TESTS_DIR = "./unit_tests"
+TESTS_DIR = "."
+
+
 
 
 def compile_resources() -> None:
@@ -39,8 +41,9 @@ def compile_resources() -> None:
 
 
 def run_tests() -> None:
-    """Run the full pytest test suite under ``unit_tests/``.
+    """Run the full pytest test suite from colocated ``__tests__/`` directories.
 
+    Tests live next to their code: ``module/__tests__/test_*.py``.
     Exits the process with the pytest exit code if any test fails so that the
     application is never launched against a broken build.
     """

@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
 
 import resources_qrc  # noqa: F401
 from resources.spacing import Spacing
-from utils import viewmodel_manager
+from app.app_state import app_state
 from views.widgets.dashboard.dashboard_content import DashboardContent
 from views.widgets.divider import Divider
 from views.widgets.navigation.sidebar import Sidebar
@@ -25,18 +25,17 @@ class DashboardScreen(QWidget):
         self.setWindowTitle("Dashboard")
 
     def _set_up_ui(self) -> None:
-        """Instantiate all child widgets and assemble the screen layout."""
+        # Create widgets and assemble the sidebar + main-area layout.
         self._create_widgets()
         self._setup_layout()
 
     def _create_widgets(self) -> None:
-        """Create the sidebar, topbar, and main content area widgets."""
+        # Instantiate the content area, sidebar, and topbar.
         self._dashboard_content = DashboardContent()
         self._sidebar = Sidebar(logo_widget_height=100)
         self._topbar = Topbar("Dashboard", "Samsung Galaxy S23 — Last synced just now", 100)
 
     def _setup_layout(self) -> None:
-        """Arrange widgets: sidebar on the left, topbar + content on the right."""
         # Right side: topbar + divider + content
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)

@@ -1,12 +1,12 @@
 from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout
 
-from resources.colors import DashboardColors
+from app.app_state import app_state
+from app.theme_manager import theme_manager
+from resources.colors import DashboardColors, LightDashboardColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from utils.repository_manger import repository_manager
-from utils.styles import load_stylesheet
-from viewmodels.tool import ToolViewModel
+from utils.styles import load_stylesheet, themed
 
 
 class ToolsSectionHeader(QWidget):
@@ -28,7 +28,7 @@ class ToolsSectionHeader(QWidget):
         self._title: QLabel
         self._tag: QLabel
 
-        self._tools_view_model: ToolViewModel = ToolViewModel(repository_manager.tools_repository)
+        self._tools_view_model = app_state.tool_viewmodel
 
         self._setup_ui()
         self._setup_style()
@@ -36,21 +36,17 @@ class ToolsSectionHeader(QWidget):
         self._tools_view_model.load_enabled_tools()
 
     def _setup_ui(self) -> None:
-        """Set up the UI for the _tools section header."""
+        # Create title/tag widgets and build the horizontal layout.
         self._create_widgets()
         self._create_layout()
 
     def _create_widgets(self) -> None:
-        """Create the child widgets for the _tools section header."""
+        # Create the title and tag labels.
         self._title = self._create_title()
         self._tag = self._create_tag()
 
     def _create_layout(self) -> None:
-        """Create the layout for the _tools section header.
-
-        Set up a QHBoxLayout with specific margins and spacing, then add
-        all child widgets in the correct order with appropriate spacing.
-        """
+        # Lay out title on the left, tag on the right, with a stretch in between.
         layout: QHBoxLayout = QHBoxLayout(self)
         layout.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.NONE)
 
@@ -60,44 +56,32 @@ class ToolsSectionHeader(QWidget):
 
     @staticmethod
     def _create_title() -> QLabel:
-        """Create the title label for the _tools section header.
-
-        Returns:
-            QLabel: The title label.
-        """
+        # Return the static 'Available Tools' heading label.
         title: QLabel = QLabel("Available Tools")
         title.setObjectName("title")
         return title
 
     @staticmethod
     def _create_tag() -> QLabel:
-        """Create the tag label for the _tools section header.
-
-        Returns:
-            QLabel: The tag label.
-        """
+        # Return the initial count tag; text is updated dynamically by _update_tag.
         tag: QLabel = QLabel("6 tools available")
         tag.setObjectName("tag")
         return tag
 
     def _setup_style(self) -> None:
-        """Load and apply the stylesheet for the _tools section header.
-
-        Load the stylesheet from the resources file and apply it to the
-        _tools section header widget.
-        """
-        qss: str = load_stylesheet(DashboardStyles.TOOLS_SECTION_HEADER, [DashboardColors])
+        # Load and apply the themed stylesheet.
+        qss: str = load_stylesheet(
+            DashboardStyles.TOOLS_SECTION_HEADER,
+            themed([DashboardColors], [LightDashboardColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
-        """Connect ViewModel signals to their handler slots."""
+        # Wire tool_count_changed and theme_changed to their slots.
         self._tools_view_model.tool_count_changed.connect(self._update_tag)
+        theme_manager.theme_changed.connect(self._setup_style)
 
     @Slot(int)
     def _update_tag(self, count: int) -> None:
-        """Update the tag text with the tool count.
-
-        Args:
-            count (int): The count of tools.
-        """
+        # Update the count badge text whenever the enabled-tool count changes.
         self._tag.setText(f"{count} tools available")
