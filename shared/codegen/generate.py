@@ -12,6 +12,9 @@ Or generate a single file:
 """
 
 import json
+import os
+import re
+import shutil
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -19,14 +22,18 @@ from typing import Any
 
 # Resolve the project root (two levels up from this file: shared/codegen/generate.py)
 _PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent.parent
-_ANDROID_PATH: Path = _PROJECT_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "example" / "android" / "enums"
-_DESKTOP_PATH: Path = _PROJECT_ROOT / "desktop" / "enums"
+_ANDROID_ENUMS_PATH: Path = _PROJECT_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "example" / "android" / "enums"
+_DESKTOP_ENUMS_PATH: Path = _PROJECT_ROOT / "desktop" / "domain" / "enums"
+
+_ANDROID_JSON_PATH: Path = _PROJECT_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "example" / "android" / "jsons"
+_DESKTOP_JSON_PATH: Path = _PROJECT_ROOT / "desktop" / "serializers" / "jsons"
+
 # All JSON enum definitions live here.
-_ENUMS_DIR: Path = _PROJECT_ROOT / "shared" / "enums"
+_SHARED_DIR: Path = _PROJECT_ROOT / "shared"
 
 _OUTPUTS: dict[str, list[Path]] = {
-    "python": [_DESKTOP_PATH],
-    "java": [_ANDROID_PATH],
+    "python": [_DESKTOP_ENUMS_PATH],
+    "java": [_ANDROID_ENUMS_PATH],
 }
 
 _SUFFIXES: dict[str, str] = {
@@ -43,6 +50,21 @@ _GENERATORS: dict[str, Callable[[dict[str, Any]], str]] = {
     "python": python_gen.generate,
     "java": java_gen.generate,
 }
+
+
+def _to_snake_case(name: str) -> str:
+    """Convert a PascalCase class name to a snake_case filename stem.
+
+    Used so Python output files follow the project's ``snake_case`` convention
+    (e.g. ``FileTransferChannels`` → ``file_transfer_channels``).
+
+    Args:
+        name: PascalCase enum class name.
+
+    Returns:
+        Lowercase, underscore-separated equivalent.
+    """
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
 
 
 def _save_enum(lang: str, paths: list[Path], source: str, enum_name: str) -> None:
@@ -66,7 +88,7 @@ def _save_enum(lang: str, paths: list[Path], source: str, enum_name: str) -> Non
         file_path = path / f"{enum_name}{suffix}"
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(source, encoding="utf-8")
-        print(f"  [OK]   {lang:8s} → {path}")
+        print(f"  [OK]   {lang:8s} -> {path}")
 
 
 def process_definition(json_path: Path) -> None:
@@ -93,7 +115,9 @@ def process_definition(json_path: Path) -> None:
             continue
         source: str = generator(definition)
 
-        _save_enum(lang, paths, source, name)
+        # Python filenames use snake_case (project convention); Java uses PascalCase.
+        file_stem: str = _to_snake_case(name) if lang == "python" else name
+        _save_enum(lang, paths, source, file_stem)
 
 
 def main() -> None:
@@ -104,12 +128,8 @@ def main() -> None:
     those files (useful for regenerating a single enum without touching
     the rest).
     """
-    if len(sys.argv) > 1:
-        # Explicit file list supplied on the command line.
-        targets: list[Path] = [Path(arg).resolve() for arg in sys.argv[1:]]
-    else:
-        # Default: process every definition found in the enums directory.
-        targets = sorted(_ENUMS_DIR.glob("*.json"))
+
+    targets = sorted((_SHARED_DIR / "enums").glob("*.json"))
 
     if not targets:
         print("No JSON enum definitions found in shared/enums/")
@@ -119,6 +139,11 @@ def main() -> None:
         print(f"Processing {json_path.name}")
         process_definition(json_path)
 
+    targets = sorted((_SHARED_DIR / "jsons").glob("*.json"))
+
+    for target in targets:
+        # shutil.copy2(str(target), str(_ANDROID_JSON_PATH))
+        shutil.copy2(str(target), str(_DESKTOP_JSON_PATH / target.name))
     print("\nDone.")
 
 

@@ -1,9 +1,10 @@
+import os
 import sqlite3
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
-from entities.device_info import DeviceEntity
-from repositories.interfaces.base import IRepository
+from domain.entities.device_info import DeviceEntity
+from repositories.repository import IRepository
 from serializers.device import DeviceSerializer
 from utils.meta import ABCQObjectMeta
 
@@ -39,11 +40,14 @@ class DeviceRepository(
         super().__init__(parent)
 
         self._serializer = DeviceSerializer()
-        self._db_path = Path(__file__).parent.parent / "data" / "app.db"
+        self._db_path = Path(os.environ.get("APPDATA")) / "SyncDose" / "app.db"
+        
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._db_path.touch(exist_ok=True)
         self._configure_db()
 
     def _configure_db(self) -> None:
-        """Create the ``devices`` table if it does not already exist."""
+        # Create the devices table if it does not already exist.
         with sqlite3.connect(self._db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("CREATE TABLE IF NOT EXISTS devices "

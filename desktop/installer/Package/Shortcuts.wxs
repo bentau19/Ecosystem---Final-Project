@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Shortcuts.wxs — SyncDose Installer (WiX v7)
+    ============================================
+    Creates:
+      - Desktop shortcut      → SyncDose.exe
+      - Start Menu shortcut   → SyncDose.exe
+    Removes Start Menu folder on uninstall.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+
+    <ComponentGroup Id="SyncDoseShortcuts" Directory="INSTALLFOLDER">
+      <Component Id="SyncDoseShortcutComponent" Guid="899925c8-cc6a-4501-b763-faf1a2947219">
+
+        <!-- Desktop shortcut -->
+        <Shortcut
+          Id="SyncDoseDesktopShortcut"
+          Directory="DesktopFolder"
+          Name="SyncDose"
+          Description="SyncDose — Cross-device connectivity"
+          Target="[INSTALLFOLDER]SyncDose.exe"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="SyncDoseIcon" />
+
+        <!-- Start Menu shortcut -->
+        <Shortcut
+          Id="SyncDoseStartMenuShortcut"
+          Directory="SyncDoseStartMenuFolder"
+          Name="SyncDose"
+          Description="SyncDose — Cross-device connectivity"
+          Target="[INSTALLFOLDER]SyncDose.exe"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="SyncDoseIcon" />
+
+        <!-- Remove the Start Menu folder on uninstall -->
+        <RemoveFolder
+          Id="RemoveSyncDoseStartMenuFolder"
+          Directory="SyncDoseStartMenuFolder"
+          On="uninstall" />
+
+        <!--
+            Registry key — required as KeyPath for shortcut components.
+            Tracks this component for clean install/repair/uninstall.
+        -->
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\SyncDose"
+          Name="installed"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+
+      </Component>
+    </ComponentGroup>
+
+    <!--
+        App icon — WiX extracts it from SyncDose.exe's embedded icon.
+        If you have a standalone icon.ico, use SourceFile="icon.ico" instead.
+    -->
+    <Icon Id="SyncDoseIcon" SourceFile="dist\SyncDose\SyncDose.exe" />
+
+  </Fragment>
+</Wix>

@@ -2,13 +2,13 @@
     color: {{TEXT_PRIMARY}};
     font-size: 17px;
     font-weight: 700;
-    background:
+    background: transparent;
 }
 
 #tag {
     color: {{TEXT_SECONDARY}};
     font-size: 13px;
-    background: #1E2A38;
+    background: {{TAG_BACKGROUND}};
     border-width: 1px;
     border-style: solid;
     border-color: {{BORDER_DEFAULT}};

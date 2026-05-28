@@ -1,3 +1,6 @@
+import os
+import sys
+
 from PySide6.QtCore import QFile, QTextStream
 
 from resources.colors import ColorsEnum, Colors
@@ -57,6 +60,78 @@ def load_stylesheet(
 
     for cls in color_classes:
         qss = _replace_colors_placeholders(qss, cls)
+    qss = _replace_colors_placeholders(qss, Colors)
+
+    return qss
+
+
+def themed(
+        dark_classes: list[type[ColorsEnum]],
+        light_classes: list[type[ColorsEnum]],
+        is_dark: bool,
+) -> list[type[ColorsEnum]]:
+    """Return *dark_classes* or *light_classes* based on the current theme.
+
+    Designed to be used inline with :func:`load_stylesheet`::
+
+        from app.theme_manager import theme_manager
+        from utils.styles import load_stylesheet, themed
+
+        qss = load_stylesheet(
+            DashboardStyles.INFO_CARD,
+            themed([InfoCardColors], [LightInfoCardColors], theme_manager.is_dark),
+        )
+
+    Args:
+        dark_classes: Color enum classes to use when dark mode is active.
+        light_classes: Color enum classes to use when light mode is active.
+        is_dark: Whether the current system theme is dark.
+
+    Returns:
+        The appropriate list of color classes for the active theme.
+    """
+    return dark_classes if is_dark else light_classes
+
+
+def load_stylesheet_disk(
+        rel_path: str, color_classes: list[type[ColorsEnum]] | None = None
+) -> str:
+    """Load a QSS stylesheet from the filesystem and resolve color tokens.
+
+    Designed for standalone PyInstaller executables that cannot access the Qt
+    virtual resource filesystem.  Resolves the ``resources/`` root at
+    :data:`sys._MEIPASS` when running bundled, or relative to this module's
+    directory in development.
+
+    Args:
+        rel_path: Path relative to the ``resources/`` directory, e.g.
+            ``"styles/handlers/handler-dialog.qss"``.
+        color_classes: Optional list of additional :class:`ColorsEnum`
+            subclasses resolved before the base :class:`Colors` pass.
+
+    Returns:
+        The fully resolved QSS string ready to pass to ``setStyleSheet``.
+
+    Raises:
+        FileNotFoundError: If the resolved path does not exist on disk.
+    """
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller bundle — resources/ is extracted alongside the executable
+        base = os.path.join(sys._MEIPASS, 'resources')
+    else:
+        # Development — resources/ is a sibling of desktop/utils/
+        base = os.path.normpath(
+            os.path.join(os.path.dirname(__file__), '..', 'resources')
+        )
+
+    full_path = os.path.join(base, rel_path)
+
+    with open(full_path, 'r', encoding='utf-8') as fh:
+        qss: str = fh.read()
+
+    if color_classes:
+        for cls in color_classes:
+            qss = _replace_colors_placeholders(qss, cls)
     qss = _replace_colors_placeholders(qss, Colors)
 
     return qss

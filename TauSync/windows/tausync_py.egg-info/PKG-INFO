@@ -18,18 +18,7 @@ arrays behind a clean two-class API: **`TauSync`** and **`TauSyncStream`**.
 build the DLL, then install the Python package. The DLL is bundled as package data, so once
 built it travels with the package automatically.
 
-<<<<<<< Updated upstream
-```
-before all if you didnt compile the dll yet open the CMD on the main folder (the Ecosystem---Final-Project) and run the next line:
-dotnet build Tausync/Tausync_Windows/TauSync.Lib/TauSync.Lib.csproj
-
-the next step is:
-pip install -e <path to the folder>\tausync_py
-e.g.
-PS C:\Users\User\Desktop\OneDrive\CS_BA\Third_Year\final_project\Ecosystem---Final-Project\windows\tests\ben_test\file_test> py -e pip install -e ..\..\..\tausync_py 
-=======
 ### Prerequisites
->>>>>>> Stashed changes
 
 - **Docker Desktop** — the DLL is compiled inside a .NET SDK container; no local .NET installation needed
 - **Python 3.9+** with `pip`
@@ -240,6 +229,28 @@ Returns a `TauSyncStream`.
 stream = tau.connect("upload_channel")
 ```
 
+##### `tau.GetPeerWaitingWords() -> list[str]`
+
+Snapshot of meeting words the **peer** has fired REQ frames for, but which we
+have not paired with locally. Use this for diagnostics — e.g. to surface
+"someone is trying to connect on `X` and nobody is listening" in a UI, or to
+verify cross-platform pairing in tests.
+
+A word appears in the list when:
+1. The peer called `connect(word)` (sending a REQ over the wire).
+2. We have **not** yet called `connect(word)` ourselves on the same word.
+
+Once we call `connect(word)` and pair, the entry drops out of the list.
+
+```python
+waiting = tau.GetPeerWaitingWords()
+print(f"Peer is waiting on: {waiting}")
+# Peer is waiting on: ['alpha', 'beta']
+```
+
+> Meeting words are **case-sensitive** — `"alpha"` and `"Alpha"` are different
+> channels. The list reflects exactly what the peer sent on the wire.
+
 ##### `tau.new_manager() -> TauSync`
 
 Create another `TauSync` instance sharing the **same singleton socket**.
@@ -276,7 +287,7 @@ accept and return plain Python `bytes`. Supports the `with` statement.
 ```python
 with tau.connect("main") as stream:
     stream.write(b"hello")
-    data = stream.read(1024)
+    data = stream.write(1024)
 ```
 
 #### Read Methods
@@ -290,7 +301,7 @@ Read **up to** *n* bytes (like `socket.recv`). Returns empty `bytes` on EOF.
 | `n` | `int` | `-1` | Max bytes to read. `-1` = default chunk size. |
 
 ```python
-data = stream.read(4096)
+data = stream.write(4096)
 ```
 
 ##### `stream.read_exactly(n) -> bytes`
@@ -343,7 +354,7 @@ internally and returned by subsequent `read()` calls - **no data is lost**.
 headers = stream.read_until(b"\r\n\r\n")
 
 # Next read() returns the body bytes - nothing is lost
-body_start = stream.read(4096)
+body_start = stream.write(4096)
 ```
 
 #### Write Methods

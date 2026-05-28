@@ -1,0 +1,10 @@
+QWidget {
+    background: transparent;
+}
+
+
+#description {
+    color: white;
+    font-size: 14px;
+    color: {{TEXT_SECONDARY}}
+}

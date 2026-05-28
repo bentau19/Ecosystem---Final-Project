@@ -4,7 +4,10 @@ High-level Android library for real-time, bidirectional communication between An
 
 Built on top of the TauSync protocol (v3.1) — provides multiplexed named channels, automatic framing, and symmetric connect semantics.
 
-USING ANDROID YOU SHOULD BE ON CLIENT MODE
+> **Role note:** In the Ecosystem app the Android device always acts as the TCP **client**
+> (calls `connectTo(ip)`). The Windows desktop is the TCP server (calls `listen()`).
+> The TauSync library supports both roles; the guidance above reflects the expected
+> deployment topology, not a library restriction.
 
 ## Quick Start
 

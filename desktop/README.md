@@ -1,8 +1,8 @@
 # SyncDose — Windows Client
 
-A desktop dashboard application for monitoring and managing connected Android devices on Windows. Built with Python and
-PySide6, SyncDose provides a clean, real-time view of device status including battery, storage, connection state, and a
-configurable tools grid.
+A desktop dashboard application for monitoring and managing connected Android devices on Windows.
+Built with Python 3.13 and PySide6, SyncDose provides a real-time view of device status,
+bidirectional file transfer via Windows shell integration, and a configurable tools grid.
 
 ---
 
@@ -10,62 +10,189 @@ configurable tools grid.
 
 1. [Features](#features)
 2. [Requirements](#requirements)
-3. [Development Installation](#development-installation)
-4. [Production Installation](#production-installation)
+3. [Prerequisites](#prerequisites)
+4. [Development Setup](#development-setup)
 5. [Running the App](#running-the-app)
 6. [Running Tests](#running-tests)
-7. [Development vs Production](#development-vs-production)
-8. [Production Build](#production-build)
-9. [Project Structure](#project-structure)
-10. [Architecture](#architecture)
-11. [Screen Navigation](#screen-navigation)
-12. [Login Screen](#login-screen)
-13. [Services](#services)
-14. [Serializers](#serializers)
-15. [Database](#database)
-16. [Repository Interfaces](#repository-interfaces)
-17. [Configuration](#configuration)
+7. [Production Build](#production-build)
+8. [Project Structure](#project-structure)
+9. [Architecture](#architecture)
+10. [DI Root — AppState](#di-root--appstate)
+11. [Layer Boundaries](#layer-boundaries)
+12. [Threading Rules](#threading-rules)
+13. [Screen Navigation](#screen-navigation)
+14. [Theming System](#theming-system)
+15. [Design Tokens](#design-tokens)
+16. [Services](#services)
+17. [ViewModels](#viewmodels)
+18. [Repositories](#repositories)
+19. [Serializers](#serializers)
+20. [Database](#database)
+21. [File Transfer & IPC](#file-transfer--ipc)
+22. [Qt Resources](#qt-resources)
 
 ---
 
 ## Features
 
-- 📱 **Device Dashboard** — View connected device name, type, battery level, charging status, and storage usage at a
-  glance
-- 🔌 **Connection Status** — Live connection indicator with a pulsing dot and connection pill widget
-- 🛠️ **Tools Grid** — Configurable grid of action tools backed by `data/app.db`, with enabled/disabled states
-- 🔑 **Login Screen** — QR code pairing panel + scrollable list of previously connected devices with hover-to-connect
-  cards
-- 🧭 **Sidebar Navigation** — Icon-based sidebar with logo and navigation items
-- 🎨 **Custom Theming** — QSS stylesheets per component under `resources/styles/`, with a centralized color palette
-- 🔔 **System Tray** — Minimize-to-tray on close; restore via double-click or right-click context menu
+- **Device Dashboard** — Battery level, charging status, storage usage, OS info, and device
+  name in real time
+- **Login Screen** — QR code pairing panel (displays local IP) + scrollable list of previously
+  connected devices with one-click reconnect cards
+- **File Transfer** — Send files to the phone from the dashboard; receive files from the phone
+  with an accept/reject toast prompt. Also integrates with the Windows "Send with SyncDose"
+  shell context menu via a named pipe between two executables
+- **Tools Grid** — Configurable grid of action tiles backed by SQLite, with enabled/disabled
+  per-tool state
+- **Dark / Light Theme** — Tracks the Windows system color scheme (via the registry) and
+  re-themes all widgets dynamically without a restart
+- **System Tray** — Minimize-to-tray on close; restore via double-click or right-click menu
+- **Sidebar Navigation** — Icon-based sidebar with logo; `NavigationManager` drives all
+  screen transitions without coupling widgets to `MainWindow`
 
 ---
 
 ## Requirements
 
-| Dependency  | Version  | Notes                                                                        |
-|-------------|----------|------------------------------------------------------------------------------|
-| Python      | 3.10+    | f-strings and `match` statements are used throughout                         |
-| PySide6     | ≥ 6.5.0  | Qt bindings — included in `requirements.txt`                                 |
-| pythonnet   | ≥ 3.0.0  | CLR bridge for TauSync .NET calls — installed as a `tausync-py` dependency   |
-| tausync-py  | ≥ 0.1.0  | TauSync Python wrapper — requires building the `.dll` first (see below)      |
-| qrcode[pil] | ≥ 7.4.2  | QR image generation for the login panel                                      |
-| pytest      | ≥ 8.3.4  | Dev only — test runner                                                       |
-| pytest-qt   | ≥ 4.4.0  | Dev only — Qt application fixtures for unit tests                            |
-| pyinstaller | ≥ 5.11.0 | Dev only — only needed to produce a standalone `.exe` via `production.spec`  |
+| Dependency        | Version   | Notes |
+|-------------------|-----------|-------|
+| Python            | 3.13      | f-strings, `match`, and type-union syntax (`A \| B`) are used |
+| PySide6           | ≥ 6.5.0   | Qt bindings — included in `requirements.txt` |
+| pythonnet         | ≥ 3.0.0   | CLR bridge for TauSync .NET calls — installed as a `tausync_py` dependency |
+| tausync_py        | local pkg  | TauSync Python wrapper — requires the `.dll` (see setup) |
+| qrcode[pil]       | ≥ 7.4.2   | QR image generation for the login panel |
+| pytest            | ≥ 8.3.4   | Dev only — test runner |
+| pytest-qt         | ≥ 4.4.0   | Dev only — `QApplication` fixtures for ViewModel/widget tests |
+| pyinstaller       | ≥ 5.11.0  | Dev only — needed to produce standalone `.exe` files |
 
 ---
 
-## Installation
+## Prerequisites
 
-> **Which path do you need?**
-> - **[Development](#development-installation)** — running or modifying the source code on your machine
-> - **[Production](#production-installation)** — deploying the built `.exe` on a target Windows machine
+The following system-level tools must be installed on your Windows machine **before** running any
+step in [Development Setup](#development-setup). Python packages (`requirements.txt`) are handled
+by pip during setup — only the tools below need manual installation.
+
+| Tool | Version | Required for | How to install |
+|---|---|---|---|
+| **Python** | **3.13 exactly** | Runtime; `run.py`; tests | [python.org/downloads](https://www.python.org/downloads/) — tick **"Add Python to PATH"** |
+| **Git** | ≥ 2.40 | Clone the repository | [git-scm.com](https://git-scm.com/download/win) |
+| **Docker Desktop** | ≥ 4.x | Build the TauSync `.dll` (step 3) | [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) |
+| **Visual Studio Build Tools 2022** | 2022 | Build the native C++ pipe module (step 4) | [VS Downloads → Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) — select the **"Desktop development with C++"** workload |
+| **CMake** | ≥ 3.20 | Configure & build the pipe module | Bundled with the C++ workload above; or [cmake.org](https://cmake.org/download/) (add to PATH) |
+| **.NET 8 SDK** | 8.x | Package the MSI installer; WiX toolset | [dotnet.microsoft.com/download/dotnet/8.0](https://dotnet.microsoft.com/download/dotnet/8.0) |
+| **WiX Toolset** | ≥ 4.x | Create the `.msi` production package | `dotnet tool install --global wix` (requires .NET SDK above) |
+
+### Installing the prerequisites
+
+Follow these steps in order — some tools depend on others (WiX requires .NET; CMake is bundled
+inside the VS Build Tools installer).
+
+#### 1. Python 3.13
+
+1. Go to [python.org/downloads](https://www.python.org/downloads/) and download the **Python 3.13**
+   Windows installer (64-bit).
+2. Run the installer. On the first screen, tick **both** checkboxes before clicking *Install Now*:
+   - ☑ **Add Python 3.13 to PATH**
+   - ☑ **Install launcher for all users**
+3. Verify:
+   ```powershell
+   python --version   # must print Python 3.13.x
+   ```
+
+> **Version is exact, not a minimum.** `match` statements, `A | B` union syntax, and `f`-string
+> `=` specifiers are used throughout the codebase — Python 3.11 / 3.12 will not work.
+
+#### 2. Git
+
+1. Download the Windows installer from [git-scm.com/download/win](https://git-scm.com/download/win).
+2. Run with default options (the defaults are fine for all prompts).
+3. Verify:
+   ```powershell
+   git --version   # must print git version 2.40 or later
+   ```
+
+#### 3. Docker Desktop
+
+Docker is the easiest way to build the TauSync `.dll` — no local .NET SDK required.
+
+1. Download Docker Desktop from [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/).
+2. Run the installer. When prompted, choose the **WSL 2** backend (recommended over Hyper-V).
+3. After installation, launch **Docker Desktop** and wait for the engine to reach *Running* state
+   (green icon in the system tray).
+4. Verify:
+   ```powershell
+   docker --version        # e.g. Docker version 26.x.x
+   docker info             # must not show "ERROR" — confirms the daemon is running
+   ```
+
+> **Docker must be running** whenever you execute `docker compose up` in step 3 of
+> [Development Setup](#development-setup). Starting Docker Desktop before opening a terminal is
+> a good habit.
+
+#### 4. Visual Studio Build Tools 2022 (C++ workload)
+
+This installs the MSVC compiler, the Windows SDK, and CMake — everything needed to build the
+native C++ pipe module. The full Visual Studio IDE is **not** required.
+
+1. Go to [visualstudio.microsoft.com/downloads](https://visualstudio.microsoft.com/downloads/)
+   and download **Build Tools for Visual Studio 2022** (under *Tools for Visual Studio*).
+2. Run `vs_BuildTools.exe`. In the workload selector, tick:
+   - ☑ **Desktop development with C++**
+     (This automatically includes MSVC v143, Windows 11 SDK, and CMake tools.)
+3. Click **Install** and wait for the download + install to complete (~3–6 GB).
+4. Verify by opening **Developer Command Prompt for VS 2022** (Start menu) and running:
+   ```cmd
+   cl           # prints: Microsoft (R) C/C++ Optimizing Compiler ...
+   cmake --version   # prints: cmake version 3.x
+   ```
+
+> **Use the Developer Command Prompt** (not plain PowerShell) when running the `cmake` build
+> commands in setup step 4, so that MSVC is on the PATH.
+
+#### 5. CMake (standalone — only if skipping VS Build Tools)
+
+CMake is **bundled** with the VS Build Tools C++ workload (step 4). Install it standalone only
+if you have an existing MSVC installation without CMake, or need a newer version.
+
+1. Download the Windows installer from [cmake.org/download](https://cmake.org/download/).
+2. During install, select **Add CMake to the system PATH for all users**.
+3. Verify:
+   ```powershell
+   cmake --version   # must print 3.20 or later
+   ```
+
+#### 6. .NET 8 SDK
+
+Required to package the MSI (`dotnet build`) and to install WiX. Also the fallback for building
+the TauSync DLL without Docker.
+
+1. Go to [dotnet.microsoft.com/download/dotnet/8.0](https://dotnet.microsoft.com/download/dotnet/8.0).
+2. Download and run the **SDK** installer for Windows x64 (not the Runtime-only package).
+3. Verify:
+   ```powershell
+   dotnet --version   # must print 8.x.x
+   ```
+
+#### 7. WiX Toolset
+
+WiX is installed as a .NET global tool — the .NET 8 SDK (step 6) must be installed first.
+
+```powershell
+dotnet tool install --global wix
+```
+
+Verify:
+
+```powershell
+wix --version   # prints: 4.x.x
+```
+
+> If `wix` is not found after install, close and reopen your terminal so the PATH is refreshed.
 
 ---
 
-## Development Installation
+## Development Setup
 
 ### 1. Clone the repository
 
@@ -76,40 +203,33 @@ cd Ecosystem
 
 ### 2. Create and activate a virtual environment
 
-A virtual environment is strongly recommended — `pythonnet` (TauSync's CLR bridge) conflicts with other packages
-if installed globally.
-
-```bash
+```powershell
 # Windows (PowerShell)
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-
-# Windows (cmd)
-python -m venv .venv
-.venv\Scripts\activate.bat
 ```
+
+`pythonnet` (TauSync's CLR bridge) conflicts with other packages when installed globally — always use a venv.
 
 ### 3. Build the TauSync DLL
 
-`tausync-py` wraps a compiled .NET 8 assembly. You must build the `.dll` before installing the Python package.
-Run Docker Compose from the **`TauSync/`** directory:
+`tausync_py` wraps a compiled .NET 8 assembly. Build it with Docker Compose from the `TauSync/` directory:
 
 ```bash
 cd TauSync/
 docker compose up
 ```
 
-This compiles `TauSync.Lib.csproj` inside a `mcr.microsoft.com/dotnet/sdk:8.0` container and writes the output
-directly to `TauSync/windows/tausync_py/dll/`. Docker is the only prerequisite — no local .NET SDK needed.
+This compiles `TauSync.Lib.csproj` inside a `mcr.microsoft.com/dotnet/sdk:8.0` container and writes the
+output to `TauSync/windows/tausync_py/dll/`. Docker is the only prerequisite — no local .NET SDK needed.
 
-> **Without Docker:** If Docker is unavailable, install the [.NET 8 SDK](https://dotnet.microsoft.com/download)
-> and run:
+> **Without Docker:** Install the [.NET 8 SDK](https://dotnet.microsoft.com/download) and run:
 > ```bash
 > cd TauSync/Tausync_Windows/TauSync.Lib/
 > dotnet publish -c Release -o ../../../windows/tausync_py/dll/
 > ```
 
-After a successful build:
+After a successful build you should see:
 ```
 TauSync/windows/tausync_py/dll/
 ├── TauSync.Lib.dll        ← loaded by pythonnet at runtime
@@ -117,104 +237,52 @@ TauSync/windows/tausync_py/dll/
 └── TauSync.Lib.pdb
 ```
 
-### 4. Install all Python dependencies
+### 4. Build the native named-pipe module
 
-```bash
-cd desktop/
-pip install -r requirements.txt
+The IPC between `SyncDose.exe` and `FileHandler.exe` uses a C++ pybind11 module. Build it with MSVC:
+
+```powershell
+cmake -S desktop/native/windows/pipe -B desktop/native/windows/pipe/build
+cmake --build desktop/native/windows/pipe/build --config Release
+Copy-Item desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd `
+          desktop/native/windows/pipe/
 ```
 
-This installs: `PySide6`, `pytest`, `pytest-qt`, `qrcode[pil]`, `pyinstaller`, and `tausync-py`
-(including `pythonnet` as its dependency). The `tausync-py` package bundles the DLL you built in Step 3
-automatically via its `package-data` declaration.
+### 5. Install Python dependencies
 
-### 5. Compile Qt resources
+```powershell
+cd desktop/
+pip install -r ../TauSync/windows/requirements.txt   # pythonnet
+pip install -r requirements.txt
+pip install ../TauSync/windows                        # tausync_py (includes the DLL from step 3)
+```
 
-Icons and QSS stylesheets are accessed through Qt's virtual filesystem and must be compiled into
-`resources_qrc.py` before the app can run. `run.py` does this automatically, but to do it manually:
+### 6. Compile Qt resources
+
+Icons and QSS stylesheets are embedded in the compiled `resources_qrc.py` module. `run.py` does this
+automatically, but to do it manually:
 
 ```bash
 pyside6-rcc resources/syncdose.qrc -o resources_qrc.py
 ```
 
-`resources_qrc.py` is auto-generated — do not edit it by hand. Re-run this command whenever you add a new
-icon or stylesheet, and commit the updated file.
-
-### 6. Verify
-
-```bash
-python -c "from PySide6.QtWidgets import QApplication; print('PySide6 OK')"
-python -c "from tausync_py import TauSync; print('TauSync OK')"
-```
+`resources_qrc.py` is auto-generated — do not edit it. Re-run this command whenever you add a new asset.
 
 ### Troubleshooting
 
-| Symptom | Likely cause | Fix |
+| Symptom | Cause | Fix |
 |---|---|---|
-| `pyside6-rcc: command not found` | PySide6 not installed or venv not active | Activate the venv and re-run `pip install -r requirements.txt` |
+| `pyside6-rcc: command not found` | PySide6 not installed or venv inactive | Activate venv, `pip install -r requirements.txt` |
 | `ModuleNotFoundError: resources_qrc` | Resources not compiled | Run `pyside6-rcc resources/syncdose.qrc -o resources_qrc.py` |
-| `FileNotFoundError: TauSync.Lib.dll not found` | DLL not built yet | Complete Step 3 — `docker compose up` from `TauSync/` |
-| `0xC0000409` fatal crash | TauSync called from a `QThread` | Never run TauSync blocking calls from a Qt-managed thread — use `threading.Thread` |
-| Qt window is blank / unstyled | `resources_qrc.py` stale or missing | Delete `resources_qrc.py` and recompile |
-| `pytest` not found | Dev deps not installed | Run `pip install -r requirements.txt` inside the venv |
-
----
-
-## Production Installation
-
-The production build is a self-contained folder — no Python, no pip, no resource compilation needed on the
-target machine.
-
-### On the build machine (developer)
-
-Follow the [Production Build](#production-build) section to produce `desktop/dist/SyncDose/`. This requires
-Docker and takes about 2–5 minutes on first run.
-
-### On the target machine (end user)
-
-**Step 1 — Install the .NET 8 Runtime**
-
-TauSync uses `pythonnet` to call into the .NET assembly at runtime. The .NET runtime is **not** bundled by
-PyInstaller and must be installed on the target machine:
-
-- Download: [https://dotnet.microsoft.com/download/dotnet/8.0](https://dotnet.microsoft.com/download/dotnet/8.0)
-- Install the **.NET 8 Runtime** (not the SDK) — the "Run apps" variant is sufficient
-
-**Step 2 — Copy the build output**
-
-Copy the entire `dist/SyncDose/` folder to any location on the target machine:
-
-```
-SyncDose/             ← copy this whole folder
-├── SyncDose.exe
-├── data/             ← app.db is created here on first launch
-├── resources/
-└── _internal/
-```
-
-There is no installer. The folder is self-contained — place it wherever you like (e.g. `C:\Program Files\SyncDose\`).
-
-**Step 3 — Run**
-
-Double-click `SyncDose.exe` or launch it from a terminal. On first launch:
-- `data/app.db` is created automatically
-- Default tools are seeded into the database
-- Nothing else needs to be configured
-
-### Production troubleshooting
-
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `FileNotFoundError: TauSync.Lib.dll not found` | DLL missing from `_internal/` | Rebuild the exe — the DLL must be present before PyInstaller runs |
-| App crashes on start with a CLR error | .NET 8 Runtime not installed | Install .NET 8 Runtime from microsoft.com/dotnet |
-| Window opens but is unstyled | `resources/` folder missing or moved | Ensure the entire `SyncDose/` folder was copied, not just `SyncDose.exe` |
-| `data/app.db` grows unexpectedly | Normal — devices write on every connect | Safe to delete; it is recreated on next launch |
+| `FileNotFoundError: TauSync.Lib.dll not found` | DLL not built | Complete step 3 |
+| `0xC0000409` fatal crash | TauSync called from a `QThread` | Never use `QThread` for TauSync I/O — use `threading.Thread` |
+| Qt window blank / unstyled | `resources_qrc.py` stale | Delete and recompile |
 
 ---
 
 ## Running the App
 
-### Standard launch (compiles resources + runs all tests, then starts)
+### Development launcher (recommended)
 
 ```bash
 python run.py
@@ -223,138 +291,65 @@ python run.py
 `run.py` always executes three steps in order:
 
 1. **Compile resources** — runs `pyside6-rcc resources/syncdose.qrc -o resources_qrc.py`
-2. **Run all unit tests** — runs `pytest unit_tests/ -v`; aborts if any test fails
-3. **Launch the app** — spawns `python main.py`
+2. **Run all tests** — runs `pytest . -v` from the `desktop/` root; aborts with a non-zero exit
+   code if any test fails, so the app never launches against a broken build
+3. **Launch the app** — spawns `python main.py` in a subprocess
 
-If any test fails, the app will not launch. Fix the failing tests before proceeding.
-
-### Direct launch (skip resource compilation and tests)
+### Direct launch (skip compile + tests)
 
 ```bash
 python main.py
 ```
 
-Use this only when you are certain the resources are already compiled and you want a faster iteration loop. This is
-the mode used by `run.py` internally after it has completed the compile and test steps.
-
-The dashboard window opens at **1100 × 720**. Closing the window minimizes it to the system tray. Right-click the
-tray icon and select **Quit** to exit, or double-click the icon to restore the window.
+`main.py` creates the `QApplication`, defers all `QObject` imports until after it exists (required
+because several singletons are instantiated at module level), then shows `MainWindow`. Use this when
+you know the resources are already compiled and want a faster iteration loop.
 
 ---
 
 ## Running Tests
 
-```bash
-pytest unit_tests/
-```
-
-Tests cover repositories, serializers, stores, services, and view-models. Shared fixtures (mock stores, mock
-serializers, in-memory repositories) are defined in `unit_tests/conftest.py`.
-
-Run a single test module:
+Tests live in `desktop/tests/` and are organised by layer:
 
 ```bash
-pytest unit_tests/repositories/test_tool.py -v
+# Run the full test suite from the desktop/ directory
+pytest .
+
+# Run a single module verbosely
+pytest tests/repositories/test_tool.py -v
+
+# Run with coverage (requires pytest-cov)
+pytest . --cov=. --cov-report=term-missing
 ```
 
-Run with coverage (requires `pytest-cov`):
-
-```bash
-pytest unit_tests/ --cov=. --cov-report=term-missing
-```
-
-> `pytest-qt` is required even for tests that do not open windows — several viewmodel tests instantiate `QObject`
-> subclasses, which require a running `QApplication`. The `pytest-qt` plugin provides the `qtapp` fixture that
-> satisfies this automatically.
-
----
-
-## Development vs Production
-
-| Concern | Development | Production |
-|---|---|---|
-| Entry point | `python run.py` or `python main.py` | `dist/SyncDose/SyncDose.exe` |
-| Resource compilation | `pyside6-rcc` run by `run.py` or manually | Must be run **before** `docker run` |
-| Tests | Always run by `run.py` before launch | Not run during the build |
-| `tausync-py` source | Installed from `requirements.txt` | Installed from the local build mounted at `/windows` |
-| Build tool | None — runs from source | PyInstaller via Docker |
-| Data directory | `desktop/data/app.db` (local) | Bundled inside `dist/SyncDose/data/` |
-| Deps in image | Only `requirements.txt` + the local `tausync_py` package | Same — PySide6 comes from `requirements.txt` |
+`pytest-qt` is required even for tests that do not open windows — `DeviceViewModel` and
+`FileTransferViewModel` instantiate `QObject` subclasses, which require a running `QApplication`.
+The `pytest-qt` plugin provides the `qtapp` fixture automatically.
 
 ---
 
 ## Production Build
 
-The production executable is a self-contained folder (`dist/SyncDose/`) built with **PyInstaller** inside a
-**Docker container**. Docker is used to guarantee a clean, reproducible Windows-targetable build environment —
-no stray local packages or path leakage.
+The production install is two separate PyInstaller executables bundled into a single MSI:
 
-### Prerequisites
+```powershell
+# Build both executables (resources must already be compiled)
+pyinstaller desktop/installer/specs/main_app.spec      # → SyncDose.exe
+pyinstaller desktop/installer/specs/file_handler.spec  # → FileHandler.exe
 
-1. **Docker** installed and running
-2. `tausync-py` **already compiled** — the build mounts `TauSync/windows/` (the Python package source) into the
-   container as a volume. Build that package first if you haven't:
-   ```bash
-   cd TauSync/windows && pip install build && python -m build
-   ```
-3. **Qt resources compiled** — run this once before building so `resources_qrc.py` exists:
-   ```bash
-   cd desktop && pyside6-rcc resources/syncdose.qrc -o resources_qrc.py
-   ```
-
-### Build steps
-
-```bash
-# 1. Build the Docker image (run from the desktop/ directory)
-cd desktop
-docker build -t syncdose-builder .
-
-# 2. Run the container, mounting the tausync_py package source
-#    The /windows volume maps to TauSync/windows/ — make_exe.sh installs it with pip install /windows
-docker run --rm \
-  -v "$(pwd)/dist:/app/dist" \
-  -v "$(pwd)/../TauSync/windows:/windows" \
-  syncdose-builder
+# Package as MSI using WiX
+dotnet build desktop/installer/ -c Release
 ```
 
-> **Windows PowerShell:** replace `$(pwd)` with `${PWD}`.
+The MSI is uploaded as an artifact by CI (`desktop.yml` → `build` job). See the
+[CI/CD section in the root README](../README.md#cicd) for the full pipeline.
 
-### What the container does
+**Why two executables?**
 
-`make_exe.sh` (the container's CMD) executes three steps:
-
-1. `pip install /windows` — installs `tausync-py` from the mounted local source
-2. `pip install -r requirements.txt` — installs all other dependencies
-3. `pyinstaller production.spec` — packages the app
-
-### Output
-
-```
-desktop/
-└── dist/
-    └── SyncDose/           # Copy this entire folder to the target machine
-        ├── SyncDose.exe    # Main executable
-        ├── data/           # Bundled database directory (app.db created on first launch)
-        ├── resources/      # Bundled icons and QSS stylesheets
-        └── _internal/      # PyInstaller runtime, compiled Python modules
-```
-
-The `dist/SyncDose/` folder is self-contained — copy it to the target Windows machine and run `SyncDose.exe`.
-No Python installation is required on the target.
-
-> **`app.db` on first launch:** The bundled `data/` directory may be empty. `DeviceRepository` and
-> `ToolRepository` create `app.db` and their tables automatically on first run. Default tools are seeded
-> on the same run. Nothing needs to be done manually.
-
-### Key differences from development
-
-- **No tests** — `run.py` (which calls pytest) is not used. PyInstaller packages `main.py` directly.
-- **No `pyside6-rcc` inside the container** — `resources_qrc.py` must exist before `docker build`, because
-  the `.dockerignore` excludes `dist/` and build artifacts but not `resources_qrc.py`.
-- **UPX compression** — `production.spec` enables UPX (`upx=True`) to reduce the bundle size. If UPX is not
-  installed in the container, PyInstaller falls back to uncompressed silently.
-- **Console window** — `console=True` in the spec means a terminal window is visible alongside the app.
-  Set `console=False` for a window-only build (no stdout).
+`SyncDose.exe` runs as the main dashboard. `FileHandler.exe` is a tiny helper registered as the
+Windows shell "Send with SyncDose" right-click handler — it receives the target file path via the
+OS, writes it to a named pipe (`\\.\pipe\FileSend`), and exits. `SyncDose.exe` reads that path
+from the pipe and initiates the file send to the connected phone. See [File Transfer & IPC](#file-transfer--ipc).
 
 ---
 
@@ -363,424 +358,656 @@ No Python installation is required on the target.
 ```
 desktop/
 │
-├── run.py                        # Dev launcher — compiles resources, runs tests, then starts the app
-├── main.py                       # Entry point — bootstraps QApplication and MainWindow
-├── requirements.txt              # Runtime + dev dependencies (PySide6 installed separately)
-├── resources_qrc.py              # AUTO-GENERATED — compiled Qt resource module; do not edit
+├── run.py                          # Dev launcher: compile resources → run tests → start app
+├── main.py                         # Entry point: QApplication + deferred imports + MainWindow
+├── requirements.txt                # Runtime + dev deps (PySide6, pytest, pytest-qt, qrcode…)
+├── resources_qrc.py                # AUTO-GENERATED by pyside6-rcc — do not edit
 │
-├── Dockerfile                    # Production build image — runs make_exe.sh inside a clean container
-├── .dockerignore                 # Excludes venv, dist, build, and compiled artifacts from the image
-├── make_exe.sh                   # Build script run inside the container: installs deps → PyInstaller
-├── production.spec               # PyInstaller spec — bundles main.py + data/ + resources/ into SyncDose.exe
+├── app/                            # Application-level singletons (not domain logic)
+│   ├── app_state.py                # AppState — the single DI root (see Architecture)
+│   ├── navigation_manager.py       # NavigationManager singleton + navigate(int) Signal
+│   └── theme_manager.py            # ThemeManager singleton — tracks Windows dark/light scheme
 │
-├── data/
-│   └── app.db                    # SQLite database — created automatically on first launch
+├── core/
+│   └── pipe_client.py              # Entry point for FileHandler.exe — writes path to named pipe
 │
-├── dto/                          # Data Transfer Objects — lightweight dicts passed from ViewModels to Views
-│   ├── device_info.py            # DeviceInfoDTO
-│   ├── previous_device.py        # PreviousDeviceDTO
-│   └── tool.py                   # ToolDTO
+├── domain/
+│   ├── dto/                        # Data Transfer Objects — lightweight, view-facing dataclasses
+│   │   ├── device_info.py          # DeviceInfoDTO family (DeviceNameDTO, DeviceOSDTO, …)
+│   │   ├── file_metadata.py        # FileMetadataDTO (name, size)
+│   │   ├── previous_device.py      # PreviousDeviceDTO (login screen device list)
+│   │   └── tool.py                 # ToolDTO
+│   ├── entities/                   # Domain entities — canonical typed dataclasses
+│   │   ├── device_info.py          # DeviceEntity (id, name, os, tag, battery, storage, ip, …)
+│   │   └── tool.py                 # ToolEntity (title, description, icon_path, is_enabled)
+│   └── enums/                      # Typed enumerations — always use these, never raw strings
+│       ├── channel.py              # Channel StrEnum — generic TauSync channel IDs
+│       ├── device_info_channels.py # DeviceInfoChannels — per-field channel names for device info
+│       ├── device_status.py        # DeviceStatus (ONLINE, RECENT, IDLE) — login card badges
+│       ├── device_type.py          # DeviceType (DEVICE_NAME, DEVICE_TYPE, BATTERY, STORAGE)
+│       ├── file_transfer_channels.py  # FileTransferChannels — metadata / response / data channels
+│       ├── file_transfer_response.py  # FileTransferResponse (ACCEPTED_FROM_PC, REJECTED_FROM_ANDROID…)
+│       ├── screen.py               # Screen IntEnum (LOGIN = 0, DASHBOARD = 1)
+│       └── session_channels.py     # SessionChannels — DISCONNECT_FROM_PHONE, DISCONNECT_FROM_PC
 │
-├── entities/                     # Domain entities — typed dataclasses; the canonical data model
-│   ├── device_info.py            # DeviceEntity (id, name, os, battery, storage, ip, last_connected, tag)
-│   └── tool.py                   # ToolEntity (title, description, icon_path, icon_bg_color, is_enabled)
+├── native/
+│   └── windows/
+│       └── pipe/                   # C++ pybind11 named-pipe module (Server / Client classes)
 │
-├── enums/                        # Typed enumerations used across all layers
-│   ├── channel.py                # Channel — TauSync named channel identifiers
-│   ├── device_info_channels.py   # DeviceInfoChannels — per-field TauSync channel IDs for device info
-│   ├── device_status.py          # DeviceStatus StrEnum (ONLINE, RECENT, IDLE) — login card badge states
-│   ├── device_type.py            # DeviceType enum (DEVICE_NAME, DEVICE_TYPE, BATTERY, STORAGE)
-│   └── screen.py                 # Screen IntEnum (LOGIN = 0, DASHBOARD = 1) — NavigationManager indices
+├── repositories/                   # Data-access layer — SQLite via sqlite3
+│   ├── repository.py               # IRepository[T, K] abstract base (get_by_id, get_all, save, delete)
+│   ├── device.py                   # DeviceRepository — devices table; emits entity_saved / entity_deleted
+│   └── tool.py                     # ToolRepository — tools table; seeds 10 defaults on first run
 │
-├── layouts/
-│   └── flow_layout.py            # FlowLayout — custom Qt layout that wraps children like inline text
+├── resources/                      # Design tokens and Qt virtual filesystem paths
+│   ├── colors.py                   # Palette → Colors (dark) + LightPalette → LightColors (light)
+│   │                               # Plus component-scoped token classes for every widget
+│   ├── spacing.py                  # Spacing scale: XS=4 · SM=8 · MD=12 · LG=16 · XL=20 · XXL=24 px
+│   ├── paths.py                    # StrEnum paths into Qt virtual filesystem
+│   │                               # (Icons, Styles, NavigationStyles, DashboardStyles, …)
+│   ├── syncdose.qrc                # Qt resource manifest — lists every icon and QSS to embed
+│   ├── icons/                      # SVG icons (logo, battery, storage, android, smartphone, …)
+│   └── styles/                     # Per-component QSS stylesheets (mirrors the views/ tree)
 │
-├── repositories/                 # Data-access layer — SQLite-backed; emit PySide6 signals on mutation
-│   ├── interfaces/
-│   │   └── base.py               # IRepository[T, K] — generic abstract base (get_by_id, get_all, save, delete)
-│   ├── device.py                 # DeviceRepository — devices table in app.db; emits entity_saved / entity_deleted
-│   └── tool.py                   # ToolRepository — tools table in app.db; seeds defaults on first run
+├── serializers/                    # Convert entities ↔ SQLite row tuples
+│   ├── serializer.py               # ISerializer[T, K] abstract base (serialize / deserialize)
+│   ├── device.py                   # DeviceSerializer — DeviceEntity ↔ 10-column row tuple
+│   ├── file_metadata.py            # FileMetadataSerializer — FileMetadataDTO ↔ JSON string
+│   └── tool.py                     # ToolSerializer — ToolEntity ↔ 4-column row tuple
 │
-├── resources/                    # Design tokens and Qt virtual filesystem paths
-│   ├── colors.py                 # Two-layer color system: Palette (raw hex) → Colors (semantic roles)
-│   ├── spacing.py                # Spacing scale constants: XS=4 · SM=8 · MD=12 · LG=16 · XL=20 · XXL=24 (px)
-│   ├── paths.py                  # StrEnum paths into Qt virtual filesystem for icons and stylesheets:
-│   │                             #   Icons, Styles, NavigationStyles, DashboardStyles,
-│   │                             #   LoginStyles, IndicatorStyles
-│   ├── syncdose.qrc              # Qt resource manifest — lists every icon and QSS file to embed
-│   ├── icons/                    # SVG icons (logo, battery, storage, disconnect, refresh, dashboard, settings, …)
-│   └── styles/                   # Per-component QSS stylesheets — mirrors the views/ widget tree
-│       ├── dashboard/
-│       │   ├── battery_info.qss
-│       │   ├── content.qss
-│       │   ├── device_status_row.qss
-│       │   ├── info_card.qss
-│       │   ├── storage_info.qss
-│       │   ├── tool_card.qss
-│       │   ├── tools_grid.qss
-│       │   └── tools_section_header.qss
-│       ├── indicators/
-│       │   └── connection_pill.qss
-│       ├── login/
-│       │   └── left-panel.qss
-│       ├── navigation/
-│       │   ├── container.qss
-│       │   ├── item.qss
-│       │   └── sidebar.qss
-│       ├── divider.qss
-│       ├── logo_widget.qss
-│       ├── section_label.qss
-│       ├── topbar.qss
-│       └── tray-menu.qss
+├── services/                       # Background services — all I/O on daemon threads, never QThread
+│   ├── connectivity.py             # ConnectivityService — TauSync TCP lifecycle
+│   ├── device_info.py              # DeviceInfoService — reads device channels, persists entity
+│   ├── file_transfer.py            # FileTransferService — send/receive files + named-pipe listener
+│   ├── phone_request.py            # PhoneRequestService — polls peer waiting channels, dispatches
+│   └── tool.py                     # ToolService — wraps ToolRepository, re-emits its signals
 │
-├── serializers/                  # Convert entities ↔ SQLite row tuples for parameterized queries
-│   ├── interfaces/
-│   │   └── base.py               # ISerializer[T, K] — serialize() and deserialize() contract
-│   ├── device.py                 # DeviceSerializer — maps DeviceEntity ↔ 10-column row tuple
-│   └── tool.py                   # ToolSerializer — maps ToolEntity ↔ 4-column row tuple
+├── utils/                          # Shared utilities (no singletons here)
+│   ├── meta.py                     # ABCQObjectMeta — metaclass bridging ABC and QObject
+│   ├── network.py                  # get_ip_by_hostname(), read_string_from_channel()
+│   └── styles.py                   # load_stylesheet(), themed() — QSS loading helpers
 │
-├── services/                     # Background services — run off the UI thread
-│   └── connectivity.py           # ConnectivityService — TauSync TCP lifecycle on a threading.Thread
-│
-├── stores/                       # DEPRECATED — no longer used by any active repository
-│   └── interfaces/
-│       └── base.py               # IStore[T, K] — load() and save() contract (retained for reference)
-│
-├── utils/                        # Application-wide singletons and helpers
-│   ├── repository_manger.py      # RepositoryManager singleton — DI root for all repositories
-│   ├── services_manager.py       # ServicesManager singleton — DI root for all services
-│   ├── viewmodel_manager.py      # ViewModelManager singleton — DI root for all viewmodels
-│   ├── navigation_manager.py     # NavigationManager singleton — emits navigate(Screen) signals
-│   ├── network.py                # get_ip() and read_from_channel() — network utilities
-│   ├── navigation_stack.py       # NavigationStack — push/pop history (reserved for future use)
-│   ├── styles.py                 # load_stylesheet() — loads a QSS file from the Qt virtual filesystem
-│   └── meta.py                   # ABCQObjectMeta — metaclass bridging ABC and QObject
-│
-├── viewmodels/                   # PySide6 QObject ViewModels — convert entities to DTOs, expose Signals
-│   ├── device.py                 # DeviceViewModel — wraps DeviceRepository + ConnectivityService
-│   └── tool.py                   # ToolViewModel — wraps ToolRepository
+├── viewmodels/                     # PySide6 QObject ViewModels — DTOs + Signals
+│   ├── device.py                   # DeviceViewModel — drives login list + dashboard device cards
+│   ├── file_transfer.py            # FileTransferViewModel — gates send/receive behind connectivity
+│   └── tool.py                     # ToolViewModel — drives the tools grid
 │
 ├── views/
+│   ├── main_window.py              # MainWindow — QStackedWidget + system tray
+│   ├── layouts/
+│   │   └── flow_layout.py          # FlowLayout — wraps children like inline text (used in ToolsGrid)
 │   ├── screens/
-│   │   ├── login.py              # LoginScreen — LeftPanel + RightPanel in a 5 : 6 stretch ratio
-│   │   └── dashboard.py          # DashboardScreen — Sidebar + Topbar + DashboardContent
+│   │   ├── login.py                # LoginScreen — LeftPanel + RightPanel in 5:6 stretch ratio
+│   │   └── dashboard.py            # DashboardScreen — Sidebar + Topbar + DashboardContent
 │   └── widgets/
 │       ├── dashboard/
-│       │   ├── battery_info.py       # BatteryInfo — circular battery gauge with charging indicator
-│       │   ├── dashboard_content.py  # DashboardContent — assembles the full dashboard content area
-│       │   ├── info_card.py          # InfoCard — generic stat card (icon + label + value)
-│       │   ├── phone_details_row.py  # PhoneDetailsRow — device name, OS, tag row at the top of dashboard
-│       │   ├── storage_info.py       # StorageInfo — storage bar with used / total labels
-│       │   ├── tool_card.py          # ToolCard — single tool tile in the tools grid
-│       │   ├── tools_grid.py         # ToolsGrid — FlowLayout container for all ToolCard widgets
-│       │   └── tools_section_header.py # ToolsSectionHeader — "Tools" section title + subtitle
+│       │   ├── battery_info.py         # BatteryInfo — circular gauge with charging indicator
+│       │   ├── dashboard_content.py    # DashboardContent — assembles the full content area
+│       │   ├── info_card.py            # InfoCard — generic stat card (icon + label + value)
+│       │   ├── phone_details_row.py    # PhoneDetailsRow — device name / OS / tag row
+│       │   ├── storage_info.py         # StorageInfo — bar with used / total labels
+│       │   ├── tool_card.py            # ToolCard — single tool tile
+│       │   ├── tools_grid.py           # ToolsGrid — FlowLayout container for ToolCard widgets
+│       │   └── tools_section_header.py # ToolsSectionHeader — section title + subtitle
+│       ├── dialogs/
+│       │   └── file_handler.py         # TransferErrorDialog — shown on file transfer errors
 │       ├── indicators/
-│       │   ├── connection_pill.py    # ConnectionPill — pill badge showing CONNECTED / DISCONNECTED
-│       │   ├── pill_wraper.py        # PillWrapper — layout host for ConnectionPill
-│       │   └── pulsing_dot.py        # PulsingDot — animated dot (used in "Waiting…" indicator)
+│       │   ├── connection_pill.py      # ConnectionPill — CONNECTED / DISCONNECTED badge
+│       │   ├── pill_wraper.py          # PillWrapper — layout host for ConnectionPill
+│       │   └── pulsing_dot.py          # PulsingDot — animated dot for "Waiting…" indicator
 │       ├── login/
-│       │   ├── left_panel.py         # LeftPanel — QR code, refresh button, pulsing-dot indicator
-│       │   ├── previous_device_card.py # PreviousDeviceCard — hover-to-connect device list entry
-│       │   ├── qr.py                 # QR — renders a QR code image with rounded corners
-│       │   └── right_panel.py        # RightPanel — scrollable list of previously connected devices
+│       │   ├── left_panel.py           # LeftPanel — QR code + Refresh button + PulsingDot
+│       │   ├── previous_device_card.py # PreviousDeviceCard — hover-to-connect device entry
+│       │   ├── qr.py                   # QR — QR code image with rounded corners + brackets
+│       │   └── right_panel.py          # RightPanel — scrollable previously connected devices
 │       ├── navigation/
-│       │   ├── container.py          # NavigationContainer — sidebar + main content area wrapper
-│       │   ├── item.py               # NavigationItem — single icon-based nav item
-│       │   └── sidebar.py            # Sidebar — vertical strip of NavigationItems + logo
-│       ├── bar.py                    # Bar — generic horizontal separator bar
-│       ├── divider.py                # Divider — thin horizontal rule between sections
-│       ├── logo_widget.py            # LogoWidget — app logo rendered from SVG
-│       └── topbar.py                 # Topbar — top bar housing ConnectionPill and device status
+│       │   ├── container.py            # NavigationContainer — sidebar + main content wrapper
+│       │   ├── item.py                 # NavigationItem — single icon-based nav item
+│       │   └── sidebar.py              # Sidebar — vertical strip of NavigationItems + logo
+│       ├── toasts/
+│       │   └── file_received.py        # FileReceivedToast — accept/reject prompt for incoming file
+│       ├── bar.py                      # Bar — generic horizontal separator bar
+│       ├── divider.py                  # Divider — thin horizontal rule between sections
+│       ├── logo_widget.py              # LogoWidget — SVG logo with gradient text
+│       └── topbar.py                   # Topbar — ConnectionPill + device status + Disconnect button
 │
-├── unit_tests/
-│   ├── conftest.py               # Shared pytest fixtures (mock stores, serializers, in-memory repos)
-│   ├── repositories/
-│   │   ├── test_device.py
-│   │   └── test_tool.py
-│   ├── serializers/
-│   │   ├── test_device_info.py
-│   │   ├── test_previous_device.py
-│   │   └── test_tool.py
-│   ├── services/
-│   │   └── test_connectivity.py
-│   ├── stores/
-│   │   ├── test_device_info.py
-│   │   ├── test_previous_device.py
-│   │   └── test_tool.py
-│   ├── utils/
-│   │   ├── test_network.py
-│   │   ├── test_repository_manager.py
-│   │   ├── test_services_manager.py
-│   │   └── test_styles.py
-│   └── view_model/
-│       ├── test_device_info.py
-│       ├── test_previous_device.py
-│       └── test_tool.py
-│
-└── windows/
-    └── main_window.py            # MainWindow — QStackedWidget screen manager + system tray
+└── tests/
+    ├── conftest.py                 # Shared pytest fixtures (in-memory repos, mock services)
+    ├── repositories/
+    │   ├── test_device.py
+    │   └── test_tool.py
+    ├── serializers/
+    │   ├── test_serializer_device_info.py
+    │   ├── test_serializer_previous_device.py
+    │   └── test_serializer_tool.py
+    ├── services/
+    │   ├── test_connectivity.py
+    │   ├── test_file_transfer.py
+    │   └── test_phone_request.py
+    ├── utils/
+    │   ├── test_network.py
+    │   └── test_styles.py
+    └── viewmodels/
+        ├── test_viewmodel_device_info.py
+        ├── test_viewmodel_file_transfer.py
+        ├── test_viewmodel_previous_device.py
+        └── test_viewmodel_tool.py
 ```
 
 ---
 
 ## Architecture
 
-SyncDose follows an **MVVM (Model-View-ViewModel)** pattern. Persistence is handled by repositories that talk
-directly to a **SQLite database** (`data/app.db`) — there is no intermediate Store layer:
+SyncDose follows **MVVM with a Services layer**. The full dependency chain:
 
 ```
 Views
-  └─ bind to ──► ViewModels (DTOs + Signals)
-                   └─ consume ──► Repositories (entities + Signals)
-                                    └─ read/write ──► SQLite (data/app.db via sqlite3)
-                                                         └─ use ──► Serializers (entity ↔ row tuple)
+  └─ bind to ──► ViewModels  (DTOs + Signals)
+                   └─ consume ──► Services  (background threads, TauSync I/O)
+                                    └─ use ──► Repositories  (SQLite via sqlite3)
+                                                 └─ use ──► Serializers  (entity ↔ row tuple)
 ```
 
-- **Entities** are plain Python dataclasses — the canonical domain model (`entities/`)
-- **Serializers** map between typed entities and SQLite row tuples for parameterized queries (`serializers/`)
-- **Repositories** own all database access — they create their tables on first use, seed default rows if the
-  table is empty, and emit PySide6 `Signal`s on every mutation (`repositories/`)
-- **ViewModels** convert entities to lightweight DTOs and re-emit signals that views bind to (`viewmodels/`)
-- **Views** are PySide6 widgets — they connect to ViewModel signals and update the UI reactively (`views/`)
+The Services layer is what separates this from a plain repository-in-ViewModel pattern:
 
-> **Note on the Stores layer:** `stores/interfaces/base.py` is retained in the repository for reference but
-> no active repository uses the `IStore` interface — both repositories open `sqlite3` connections directly.
+- **Repositories** are pure SQLite data stores — no networking, no threading of their own.
+- **Services** own all network I/O and background threading. They read from repositories and
+  emit results via Qt Signals so ViewModels never directly touch a database or a TauSync stream.
+- **ViewModels** subscribe to Service signals, convert entities to DTOs, and re-emit
+  view-ready signals. They never import from `repositories/` directly.
+- **Views** are PySide6 widgets that bind to ViewModel signals and call ViewModel methods.
+  They never import from `services/` or `repositories/`.
 
-### Layer boundaries
+---
 
-| Layer        | May import from              | Must NOT import from            |
-|--------------|------------------------------|---------------------------------|
-| Views        | ViewModels, DTOs, resources  | Repositories, Entities directly |
-| ViewModels   | Repositories, Entities, DTOs | Views                           |
-| Repositories | Serializers, Entities        | Views, ViewModels               |
+## DI Root — AppState
 
-Violating these boundaries breaks testability — repositories cannot be mocked if views import them directly.
+`app/app_state.py` constructs and wires every singleton exactly once at import time.
+A module-level `app_state` instance is the only object that needs to be imported from this module.
+**Never instantiate repositories, services, or viewmodels anywhere else.**
 
-### DI singletons
+```python
+# app/app_state.py (simplified)
+class AppState:
+    def __init__(self) -> None:
+        # Repositories
+        self.tools_repository    = ToolRepository()
+        self.device_repository   = DeviceRepository()
 
-All singletons are module-level instances constructed once at import time and imported wherever needed.
+        # Services
+        self.connectivity_service   = ConnectivityService()
+        self.device_info_service    = DeviceInfoService(connectivity, device_repository)
+        self.file_transfer_service  = FileTransferService(connectivity)
+        self.tool_service           = ToolService(tools_repository)
+        self.phone_request_service  = PhoneRequestService(connectivity, file_transfer_service)
 
-| Singleton            | Module                        | Holds                                    |
-|----------------------|-------------------------------|------------------------------------------|
-| `repository_manager` | `utils/repository_manger.py`  | `tools_repository`, `device_repository`  |
-| `services_manager`   | `utils/services_manager.py`   | `connectivity_service`                   |
-| `viewmodel_manager`  | `utils/viewmodel_manager.py`  | `device_viewmodel`                       |
-| `navigation_manager` | `utils/navigation_manager.py` | `navigate` signal (emits `Screen` value) |
+        # ViewModels
+        self.device_viewmodel        = DeviceViewModel(connectivity_service, device_info_service)
+        self.file_transfer_viewmodel = FileTransferViewModel(file_transfer_service, connectivity_service)
+        self.tool_viewmodel          = ToolViewModel(tool_service)
 
-**Dependency direction:** `viewmodel_manager` → `repository_manager` + `services_manager` → (no further singletons).
-`NavigationManager` is independent — any layer may call `navigation_manager.go_to_screen(Screen.X)` to trigger a
-screen change without knowing anything about `MainWindow`.
+app_state: Final[AppState] = AppState()
+```
 
-### Design tokens
+The two other important module-level singletons live in their own files so they can be imported
+without pulling in all of `AppState`:
 
-Never hardcode colors or spacing values in widget code. Use the centralized token files:
+| Singleton | Module | Purpose |
+|---|---|---|
+| `app_state` | `app/app_state.py` | DI root — owns all repos, services, viewmodels |
+| `navigation_manager` | `app/navigation_manager.py` | Emits `navigate(int)` Signal to switch screens |
+| `theme_manager` | `app/theme_manager.py` | Tracks Windows dark/light scheme; emits `theme_changed` |
 
-- **`resources/colors.py`** — Two-layer system: `Palette` (raw hex values) → `Colors` (semantic role names such as
-  `PRIMARY`, `SURFACE`, `ON_SURFACE_MUTED`). Always reference `Colors.X`, never `Palette.X` directly in widgets.
-- **`resources/spacing.py`** — A fixed spacing scale (`XS=4`, `SM=8`, `MD=12`, `LG=16`, `XL=20`, `XXL=24`, in px).
-  Use these constants for margins, padding, and gaps so the layout remains consistent and easy to retheme.
+`main.py` imports `theme_manager` before constructing any widget so `theme_manager.is_dark` is
+already correct when the first `_setup_style()` call runs.
 
-### Qt resources
+---
 
-Icons and QSS stylesheets are embedded in the compiled `resources_qrc.py` module and accessed through the Qt virtual
-filesystem. All virtual paths are declared as typed `StrEnum` members in `resources/paths.py` (e.g.
-`Icons.BATTERY`, `Styles.TOPBAR`). Any new asset must be:
+## Layer Boundaries
 
-1. Added to `resources/icons/` or `resources/styles/`
-2. Registered in `resources/syncdose.qrc`
-3. Assigned a `StrEnum` entry in the correct class in `resources/paths.py`
-4. Recompiled: `pyside6-rcc resources/syncdose.qrc -o resources_qrc.py`
+| Layer | May import from | Must NOT import from |
+|---|---|---|
+| Views | ViewModels, DTOs, `resources/` | Repositories, Entities, Services directly |
+| ViewModels | Services, Entities, DTOs | Views, Repositories |
+| Services | Repositories, Entities, `tausync_py` | Views, ViewModels |
+| Repositories | Serializers, Entities | Views, ViewModels, Services |
+
+Violating these boundaries breaks testability. For example, if a ViewModel imports from
+`repositories/` directly, the test must provide a real repository (with a real SQLite file) even
+when testing only ViewModel logic.
+
+---
+
+## Threading Rules
+
+**Never call TauSync blocking methods from a `QThread`.**
+
+TauSync uses pythonnet's CLR bridge to call blocking .NET async methods. Running these from a
+Qt-managed native thread corrupts the CLR thread stack and causes a fatal `0xC0000409` crash.
+
+**Rule:** All TauSync I/O runs on `threading.Thread(daemon=True)`. Every service follows the same
+pattern — a `_spawn()` helper creates a daemon thread, appends it to `self._threads`, and starts it.
+A `_lifecycle_lock` serializes `start()` / `stop()` calls; `_is_running` (a `threading.Event`)
+gates new work from being spawned during teardown.
+
+PySide6 delivers cross-thread `Signal.emit()` calls safely via queued connections — no manual
+`QMetaObject.invokeMethod` needed.
 
 ---
 
 ## Screen Navigation
 
-`MainWindow` contains a `QStackedWidget` with two screens registered in this order:
+`MainWindow` holds a `QStackedWidget` with two screens at fixed indices:
 
 ```
-index 0 — LoginScreen      (default, shown on launch)
+index 0 — LoginScreen      (shown on launch, and after a device disconnects)
 index 1 — DashboardScreen  (shown after a device connects)
 ```
 
-Navigation is handled entirely by `NavigationManager`, a thin `QObject` singleton that exposes a `navigate` signal:
+Navigation is driven exclusively by `navigation_manager.go_to_screen(Screen.X)`:
 
 ```python
-# Anywhere in the app — switch to the dashboard:
-navigation_manager.go_to_screen(Screen.DASHBOARD)
+from app.navigation_manager import navigation_manager
+from domain.enums.screen import Screen
 
-# Switch back to login (e.g. after device disconnects):
-navigation_manager.go_to_screen(Screen.LOGIN)
+navigation_manager.go_to_screen(Screen.DASHBOARD)  # → triggers DashboardScreen
+navigation_manager.go_to_screen(Screen.LOGIN)       # → triggers LoginScreen
 ```
 
-`MainWindow._connect_signals()` wires `navigation_manager.navigate` to its own `_change_page` slot, so the window
-itself never decides *when* to change screens — it only executes the change when told to. This keeps `MainWindow`
-free of business logic and makes navigation trivially testable.
+`MainWindow._connect_signals()` wires `navigation_manager.navigate` → `_change_page(index)`.
+`MainWindow` never decides *when* to navigate — it only executes the switch when told to.
+This keeps `MainWindow` free of business logic and makes navigation trivially testable.
 
-| Signal / call                                       | Who triggers it                            | Effect                         |
-|-----------------------------------------------------|--------------------------------------------|--------------------------------|
-| `navigation_manager.go_to_screen(Screen.DASHBOARD)` | `DeviceViewModel` on `device_connected`    | Switches to `DashboardScreen`  |
-| `navigation_manager.go_to_screen(Screen.LOGIN)`     | `DeviceViewModel` on `device_disconnected` | Switches back to `LoginScreen` |
+Who triggers navigation in practice:
+
+| Event | Signal chain | Outcome |
+|---|---|---|
+| Device connects | `ConnectivityService.device_connected` → `DeviceViewModel._on_device_connected` → `navigation_manager.go_to_screen(DASHBOARD)` | Dashboard shown |
+| Device disconnects | `ConnectivityService.device_disconnected` → `DeviceViewModel._on_device_disconnected` → `navigation_manager.go_to_screen(LOGIN)` | Login shown |
 
 ---
 
-## Login Screen
+## Theming System
 
-The login screen is split into two panels in a **5 : 6** stretch ratio:
+`ThemeManager` (`app/theme_manager.py`) reads the current system color scheme from the Windows
+registry at startup (Qt's `colorScheme()` is unreliable on some Windows configurations) and
+re-emits `theme_changed` whenever the user changes the system preference at runtime.
 
-### Left Panel — QR Pairing
+```python
+from app.theme_manager import theme_manager
 
-- Displays the app logo, a live QR code encoding the host's local IP address, and scan instructions
-- The QR widget (`QR`) renders with rounded corners and teal corner-bracket decorations
-- A **Refresh QR** button regenerates the code on demand by calling `network.get_ip()` again
-- A pulsing-dot **"Waiting for connection…"** indicator sits below the button, animated in CSS via a
-  `QPropertyAnimation`
+# Read current scheme
+if theme_manager.is_dark:
+    ...
 
-### Right Panel — Previously Connected Devices
+# React to changes (e.g., in a widget's __init__)
+theme_manager.theme_changed.connect(self._setup_style)
+```
 
-- Lists previously paired devices as `PreviousDeviceCard` widgets
-- Each card shows device name, OS label, tag, status badge (online / recent / idle), and last-seen time
-- On hover, the status column is replaced by a **Connect →** button that calls
-  `connectivity_service.connect_to_device(ip)`
-- An "End-to-end encrypted" footer anchors the bottom of the panel
+Widgets that support theming call a `_setup_style()` method that loads the correct QSS template,
+substituting color token values using the `themed([Colors], [LightColors], theme_manager.is_dark)`
+helper from `utils/styles.py`. QSS templates reference color tokens by name using Python format
+strings, e.g. `background: {SURFACE_PRIMARY};`.
+
+---
+
+## Design Tokens
+
+The design system is a two-layer token hierarchy split into dark and light variants.
+
+### `resources/colors.py`
+
+**Layer 1 — raw palette** (never reference directly in widgets):
+
+| Class | Contents |
+|---|---|
+| `Palette` | Raw hex values for the dark theme (e.g. `DARK_900 = "#111827"`) |
+| `LightPalette` | Mirror of `Palette` with light-theme hex values (same member names) |
+
+**Layer 2 — semantic roles** (always use these in widgets):
+
+| Class | Contents |
+|---|---|
+| `Colors` | Semantic dark-theme tokens: `SURFACE_PRIMARY`, `TEXT_PRIMARY`, `ACCENT_TEAL`, etc. |
+| `LightColors` | Mirror of `Colors` for the light theme (same member names) |
+
+**Component-scoped tokens** (use in the specific widget only):
+
+`SidebarColors`, `NavigationColors`, `DashboardColors`, `InfoCardColors`, `ToolCardColors`,
+`LoginColors`, `TopbarColors`, `FileReceivedToastColors`, `HandlerDialogColors`, `LogoColors`, …
+and their `Light*` mirrors.
+
+**Rule:** Always reference `Colors.TEXT_PRIMARY` (or its light mirror), never `Palette.SLATE_100`.
+This keeps every widget one step removed from raw hex values so the entire palette can be rethemed
+by swapping one class.
+
+### `resources/spacing.py`
+
+Fixed scale constants (in px) for margins, padding, and gaps:
+
+```
+XS = 4   SM = 8   MD = 12   LG = 16   XL = 20   XXL = 24
+```
 
 ---
 
 ## Services
 
+All services share the same internal lifecycle pattern:
+
+- `start()` / `stop()` kick off daemon `threading.Thread` workers
+- `_spawn(target, *args)` creates, registers, and starts a thread; rejected during teardown
+- `_lifecycle_lock: threading.Lock` serializes concurrent start/stop calls
+- `_is_running: threading.Event` gates new work; cleared on `stop()`
+
 ### `ConnectivityService`
 
-Manages the TauSync TCP connection lifecycle. Spawns a `threading.Thread` (not a `QThread`) to block on
-`TauSync.listen()` without freezing the UI. A `QThread` is intentionally avoided because TauSync uses blocking .NET
-async calls via pythonnet — running those from a Qt-managed native thread corrupts the CLR stack and causes a fatal
-`0xC0000409` crash.
+Manages the TauSync TCP connection lifecycle. Listens for incoming connections in server mode
+(default) or connects to a device by IP in client mode.
 
-PySide6 handles cross-thread signal emission automatically via queued connections.
+| Signal | Payload | When |
+|---|---|---|
+| `device_connected` | — | `listen()` returns a client, or `connect_to_device()` succeeds |
+| `device_disconnected` | — | `disconnect_device()` disposes the connection |
+| `connection_error` | `str` | `listen()` raises an unexpected exception |
 
-| Signal                | Payload        | Emitted when                                           |
-|-----------------------|----------------|--------------------------------------------------------|
-| `device_connected`    | —              | `listen()` returns, or `connect_to_device()` completes |
-| `device_disconnected` | —              | `disconnect_device()` disposes the connection          |
-| `connection_error`    | `str`          | `listen()` raises an exception                         |
-| `device_info_ready`   | `DeviceEntity` | All channel reads in `get_device_info()` finish        |
+`disconnect_device()` checks whether the phone sent a disconnect first (via
+`SessionChannels.DISCONNECT_FROM_PHONE`). If not, it notifies the phone
+(`SessionChannels.DISCONNECT_FROM_PC`) before closing the transport.
 
-The `@threaded` decorator (defined at module level in `connectivity.py`) wraps any bound method to run on a new
-daemon `threading.Thread`, appending it to `self._threads` so it can be joined on disconnect.
+The shared `tau` property exposes the `TauSync` instance so other services can open channels
+on the same transport without owning it.
+
+### `DeviceInfoService`
+
+Reads all device metadata from TauSync named channels and emits a fully-populated `DeviceEntity`.
+Uses a unique-ID handshake: reads the device's current ID from `DeviceInfoChannels.ID`; if empty,
+generates a new UUID that doesn't clash with any stored device and writes it back.
+
+| Signal | Payload | When |
+|---|---|---|
+| `device_info_ready` | `DeviceEntity` | All channel reads complete; entity persisted |
+| `device_saved` | `DeviceEntity` | Entity written to the repository |
+| `device_fetched` | `DeviceEntity \| None` | `fetch_device_by_id()` completes |
+| `all_devices_fetched` | `list[DeviceEntity]` | `fetch_all_devices()` completes |
+| `read_error` | `str` | Any channel read raises |
+
+### `FileTransferService`
+
+Sends and receives files over TauSync channels. Also listens on the named pipe
+`\\.\pipe\FileSend` for paths written by `FileHandler.exe` (the shell context-menu
+helper) and routes them through the same `send_file()` path.
+
+See [File Transfer & IPC](#file-transfer--ipc) for the full protocol.
+
+| Signal | Payload | When |
+|---|---|---|
+| `file_send_complete` | `(str, int)` filename + bytes | Send succeeded |
+| `file_send_rejected` | `str` filename | Receiver declined |
+| `file_send_error` | `str` | Any send failure |
+| `file_metadata_received` | `(str, int)` filename + size | Incoming file metadata arrived — show prompt |
+| `file_receive_complete` | `(str, str)` filename + path | Receive succeeded |
+| `file_receive_error` | `str` | Any receive failure |
+
+### `PhoneRequestService`
+
+Polls `tau.get_peer_waiting_words()` to detect channels the phone has opened before `SyncDose`
+has called `connect()` on them. Routes each detected channel to a registered handler.
+
+Default handler map (registered in `AppState`):
+
+| Channel | Handler |
+|---|---|
+| `FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC` | `FileTransferService.receive_metadata` |
+| `SessionChannels.DISCONNECT_FROM_PHONE` | `ConnectivityService.disconnect_device` |
+
+### `ToolService`
+
+A thin wrapper around `ToolRepository`. Re-emits the repository's mutation signals at the service
+boundary so ViewModels never need to import from `repositories/`.
+
+| Signal | Payload | When |
+|---|---|---|
+| `tool_added` | `ToolEntity` | Forwarded from `ToolRepository.entity_saved` |
+| `tool_deleted` | `str` (title) | Forwarded from `ToolRepository.entity_deleted` |
+| `all_enabled_tools_fetched` | `list[ToolEntity]` | `fetch_all_enabled()` completes |
+
+---
+
+## ViewModels
+
+ViewModels are `QObject` subclasses. They subscribe to service signals in `__init__`, convert
+entities to DTOs, and expose their own signals for the view to bind to. They hold no network or
+database state — that lives in services and repositories.
+
+### `DeviceViewModel`
+
+Drives both the login screen device list and the dashboard device cards.
+
+| Signal | Payload | When |
+|---|---|---|
+| `device_infos_updated` | `list[DeviceInfoDTO]` | Current device data changed (refresh or new connect) |
+| `previous_devices_updated` | `list[PreviousDeviceDTO]` | All historical devices loaded |
+| `device_connected` | — | Forwarded from `ConnectivityService` |
+| `device_disconnected` | — | Forwarded from `ConnectivityService` |
+
+A `QTimer` fires every 10 minutes while connected to pull a fresh `DeviceEntity` from
+`DeviceInfoService.fetch_device_info()`, keeping the dashboard cards up to date without
+manual user action.
+
+The ViewModel also seeds a mock `DeviceEntity` on construction so the dashboard renders
+with placeholder data before any real phone connects.
+
+### `FileTransferViewModel`
+
+Gates all send/receive-metadata calls behind a connectivity flag. Operations started while
+connected that complete or fail after a disconnect still surface their result (in-flight transfers
+are not aborted).
+
+| Signal | Payload | When |
+|---|---|---|
+| `send_complete` | `(str, int)` | File sent successfully |
+| `send_error` | `str` | Send failed or rejected |
+| `metadata_received` | `(str, int)` | Show accept/reject toast |
+| `receive_complete` | `(str, str)` | File saved |
+| `receive_error` | `str` | Receive failed |
+
+`MainWindow` listens to `metadata_received` and shows a `FileReceivedToast`. The toast calls
+back into the ViewModel via `receive_file(dest_path, size)` or `reject_receive()`.
+
+### `ToolViewModel`
+
+Drives the tools grid. Maintains an in-memory `list[ToolDTO]` of enabled tools.
+On construction it calls `ToolService.start()` + `fetch_all_enabled()` so the grid is populated
+asynchronously without blocking the UI thread.
+
+| Signal | Payload | When |
+|---|---|---|
+| `tools_loaded` | `list[ToolDTO]` | `load_enabled_tools()` called |
+| `tool_added` | `ToolDTO` | New tool saved |
+| `tool_deleted` | `str` (title) | Tool removed |
+| `tool_updated` | `str` (title) | Tool modified |
+| `tool_count_changed` | `int` | Enabled count changed |
+
+---
+
+## Repositories
+
+Both repositories use the same `IRepository[T, K]` interface from `repositories/repository.py`:
+
+| Method | Description |
+|---|---|
+| `get_by_id(id: K) → T \| None` | Fetch a single entity by primary key |
+| `get_all() → list[T]` | Fetch all entities |
+| `save(entity: T) → None` | Insert or replace an entity (upsert via `REPLACE INTO`) |
+| `delete(id: K) → None` | Remove an entity by primary key |
+
+Both also emit `entity_saved: Signal` and `entity_deleted: Signal` after mutations.
+
+Each method opens a short-lived `sqlite3` connection, making the repositories safe to call from
+any thread simultaneously. The `ABCQObjectMeta` metaclass in `utils/meta.py` bridges Python's
+`ABCMeta` with Qt's `type` so that the abstract base and `QObject` can be combined without a
+metaclass conflict.
+
+### `ToolRepository`
+
+Adds `get_all_enabled()` → `list[ToolEntity]` (queries `WHERE is_enabled = 1`) and
+`id_exists(title)` → `bool`.
+
+Seeds the `tools` table with 10 placeholder tools on the first run (when the table is empty).
+Tools 1, 2, 3, 4, 6, 8, 10 seed as enabled; Tools 5, 7, 9 seed as disabled.
+
+### `DeviceRepository`
+
+Adds `id_exists(id)` → `bool`. Stores the full device history — every paired device is persisted
+with its last-known battery, storage, IP, and timestamp.
 
 ---
 
 ## Serializers
 
-Serializers map between **typed Python entities** and **SQLite row tuples** used in parameterized queries. They live
-in `serializers/` and implement the generic `ISerializer[T, K]` interface from `serializers/interfaces/base.py`:
+Serializers convert between typed entities and raw SQLite row tuples. All implement
+`ISerializer[T, K]` from `serializers/serializer.py`:
 
-| Method                                 | Description                                                                      |
-|----------------------------------------|----------------------------------------------------------------------------------|
-| `serialize(entity: T) → tuple \| None` | Convert an entity into a positional tuple for a parameterized `INSERT`/`REPLACE` |
-| `deserialize(row: tuple) → T \| None`  | Reconstruct a typed entity from a `sqlite3` row; returns `None` for empty rows   |
+| Method | Description |
+|---|---|
+| `serialize(entity: T) → tuple \| None` | Entity → positional tuple for a parameterized `INSERT`/`REPLACE` |
+| `deserialize(row: tuple) → T \| None` | Row tuple → entity; returns `None` for `None` or empty input |
 
 ### `DeviceSerializer`
 
-Maps `DeviceEntity ↔ 10-column row tuple` in the order `(id, name, os, tag, last_connected, battery_level,
-battery_charging, storage_used, storage_total, ip)`. Coerces `last_connected` between `datetime.date` and an
-ISO-format string (`%Y-%m-%d`) on the boundary. Returns `None` for a `None` entity or an empty row.
+Maps `DeviceEntity ↔ (id, name, os, tag, last_connected, battery_level, battery_charging, storage_used, storage_total, ip)`.
+`last_connected` is coerced between `datetime.date` and an ISO string (`%Y-%m-%d`) at the boundary.
 
 ### `ToolSerializer`
 
-Maps `ToolEntity ↔ 4-column row tuple` in the order `(title, description, icon_path, is_enabled)`.
+Maps `ToolEntity ↔ (title, description, icon_path, is_enabled)`.
+
+### `FileMetadataSerializer`
+
+Converts `FileMetadataDTO ↔ JSON string`. Used by `FileTransferService` to transmit file name
+and size over the `file_meta` TauSync channel before the raw bytes are sent.
 
 ---
 
 ## Database
 
-Both repositories share a single SQLite file at `data/app.db`, created automatically on the first launch.
-No migration tooling is needed — each repository calls `CREATE TABLE IF NOT EXISTS` on construction.
+Both repositories share a single SQLite file at:
+
+```
+%APPDATA%\SyncDose\app.db
+```
+
+(`Path(os.environ["APPDATA"]) / "SyncDose" / "app.db"`)
+
+The directory and file are created automatically on first run. There is no migration tooling —
+both repositories call `CREATE TABLE IF NOT EXISTS` on construction.
+
+To reset to factory state: delete `%APPDATA%\SyncDose\app.db` and relaunch.
 
 ### Schema
 
-**`devices` table** — managed by `DeviceRepository`:
+**`devices` table** (managed by `DeviceRepository`):
 
-| Column             | Type               | Notes                                           |
-|--------------------|--------------------|-------------------------------------------------|
-| `id`               | `TEXT PRIMARY KEY` | UUID; generated if the device does not send one |
-| `name`             | `TEXT`             | Human-readable device name                      |
-| `os`               | `TEXT`             | OS label (e.g. `"Android 14"`)                  |
-| `tag`              | `TEXT`             | User-assigned tag; defaults to `"default"`      |
-| `last_connected`   | `DATETIME`         | ISO date string (`%Y-%m-%d`)                    |
-| `battery_level`    | `INTEGER`          | 0–100                                           |
-| `battery_charging` | `BOOLEAN`          | `1` = charging                                  |
-| `storage_used`     | `INTEGER`          | Bytes used                                      |
-| `storage_total`    | `INTEGER`          | Total bytes                                     |
-| `ip`               | `TEXT`             | Last known IP address                           |
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `TEXT PRIMARY KEY` | UUID; assigned by SyncDose if the phone has none |
+| `name` | `TEXT` | Human-readable device name |
+| `os` | `TEXT` | OS version string (e.g. `"Android 14"`) |
+| `tag` | `TEXT` | User label; defaults to `"default"` |
+| `last_connected` | `DATETIME` | ISO date string (`%Y-%m-%d`) |
+| `battery_level` | `INTEGER` | 0–100 |
+| `battery_charging` | `BOOLEAN` | `1` = charging |
+| `storage_used` | `INTEGER` | Bytes used |
+| `storage_total` | `INTEGER` | Total bytes |
+| `ip` | `TEXT` | Last known IP address |
 
-**`tools` table** — managed by `ToolRepository`:
+**`tools` table** (managed by `ToolRepository`):
 
-| Column        | Type               | Notes                                                     |
-|---------------|--------------------|-----------------------------------------------------------|
-| `title`       | `TEXT PRIMARY KEY` | Tool name; also used as the display label                 |
-| `description` | `TEXT`             | Short description shown on the tool card                  |
-| `icon_path`   | `TEXT`             | Qt virtual filesystem path (e.g. `":/icons/android.svg"`) |
-| `is_enabled`  | `BOOLEAN`          | `1` = shown in the tools grid                             |
+| Column | Type | Notes |
+|---|---|---|
+| `title` | `TEXT PRIMARY KEY` | Tool name; used as the display label and primary key |
+| `description` | `TEXT` | Short description on the tool card |
+| `icon_path` | `TEXT` | Qt virtual filesystem path (e.g. `":/icons/android.svg"`) |
+| `is_enabled` | `BOOLEAN` | `1` = shown in the tools grid |
 
-### Seed data
+---
 
-`ToolRepository` seeds 10 default tools (`Tool 1` … `Tool 10`) into the `tools` table when the table is empty
-(i.e. on a fresh install). Seeds are only written once — runtime mutations survive restarts.
-To reset to defaults, delete `data/app.db` and relaunch.
+## File Transfer & IPC
 
-### Data flow summary
+File transfer involves two independent flows:
 
+### Flow 1 — Send from SyncDose dashboard
+
+1. User selects a file in the SyncDose dashboard → `FileTransferViewModel.send_file(path)` →
+   `FileTransferService.send_file(path)` on a background thread.
+2. Metadata (name + size as JSON) is sent over `FileTransferChannels.REGULAR_FILE_METADATA_PC_TO_ANDROID`.
+3. Service waits for accept/reject on `FileTransferChannels.REGULAR_FILE_RESPONSE_FROM_ANDROID`.
+4. If accepted: raw bytes are streamed over `FileTransferChannels.REGULAR_FILE_DATA_PC_TO_ANDROID`
+   using `stream.write_file()` (constant memory, any file size).
+
+### Flow 2 — Send via Windows shell "Send with SyncDose"
+
+`FileHandler.exe` is registered in the Windows shell as a context-menu handler for
+"Send with SyncDose". When the user right-clicks a file and selects it:
+
+1. The OS launches `FileHandler.exe` (`core/pipe_client.py`) with the file path as an argument.
+2. `FileHandler.exe` connects to the named pipe `\\.\pipe\FileSend` (served by `SyncDose.exe`)
+   and writes the file path, then exits.
+3. `SyncDose.exe` reads the path from the pipe inside `FileTransferService._listen_for_file_to_send()`
+   (which loops on `Server.wait_for_client()`) and calls `send_file(path)`.
+
+The named pipe IPC is implemented in `desktop/native/windows/pipe/` — a C++ pybind11 module that
+exposes `Server` and `Client` classes.
+
+### Flow 3 — Receive from phone
+
+The phone initiates the transfer. `PhoneRequestService` detects the phone's waiting channel
+(`FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC`) and calls
+`FileTransferService.receive_metadata()`:
+
+1. Metadata is received and `FileTransferService.file_metadata_received` is emitted.
+2. `FileTransferViewModel` forwards this to `MainWindow` via its own `metadata_received` signal.
+3. `MainWindow` shows a `FileReceivedToast` with the filename and size.
+4. User clicks **Save** → toast calls `FileTransferViewModel.receive_file(dest_path, size)` →
+   service writes accept token and streams bytes to disk via `stream.read_to_file()`.
+5. User clicks **Cancel** → toast calls `FileTransferViewModel.reject_receive()` →
+   service writes reject token; sender aborts.
+
+---
+
+## Qt Resources
+
+Icons and QSS stylesheets are embedded in the compiled `resources_qrc.py` module and accessed
+through Qt's virtual filesystem. All virtual paths are declared as typed `StrEnum` members in
+`resources/paths.py`.
+
+**Adding a new asset:**
+
+1. Place the file in `resources/icons/` or `resources/styles/`
+2. Register it in `resources/syncdose.qrc`
+3. Add a `StrEnum` entry in the correct class in `resources/paths.py`
+4. Recompile: `pyside6-rcc resources/syncdose.qrc -o resources_qrc.py`
+5. Commit `resources_qrc.py` — it must be up to date in version control
+
+**Loading QSS in a widget:**
+
+```python
+from utils.styles import load_stylesheet, themed
+from resources.colors import Colors, LightColors
+from resources.paths import DashboardStyles
+from app.theme_manager import theme_manager
+
+def _setup_style(self) -> None:
+    self.setStyleSheet(
+        load_stylesheet(
+            DashboardStyles.INFO_CARD,
+            themed([Colors], [LightColors], theme_manager.is_dark),
+        )
+    )
 ```
-data/app.db
-  └─ Repository.get_all() ──► Serializer.deserialize(row) ──► Entities ──► ViewModel ──► View
 
-View ──► ViewModel ──► Repository.save(entity) ──► Serializer.serialize(entity) ──► data/app.db
-```
-
----
-
-## Repository Interfaces
-
-All repositories are built on a typed abstract base in `repositories/interfaces/base.py`, making them easy to
-swap or mock in tests.
-
-### `IRepository[T, K]`
-
-| Method                         | Description                          |
-|--------------------------------|--------------------------------------|
-| `get_by_id(id: K) → T \| None` | Fetch a single entity by its ID      |
-| `get_all() → list[T]`          | Fetch all entities                   |
-| `save(entity: T) → None`       | Persist an entity (insert or update) |
-| `delete(id: K) → None`         | Remove an entity by ID               |
-
-### Why interfaces?
-
-ViewModels depend only on the interface type, not the concrete class. This means:
-
-- Unit tests inject a stub repository without touching `RepositoryManager`
-- The data source (JSON file, IPC, network) can be swapped behind the interface without changing any ViewModel or View
-
----
-
-## Configuration
-
-### Tools
-
-Tools are stored in the `tools` table of `data/app.db`. To modify them, either:
-
-- **Edit via SQL** — open `data/app.db` with any SQLite client (e.g. DB Browser for SQLite) and
-  `UPDATE tools SET is_enabled = 0 WHERE title = 'Tool 3';`
-- **Reset to defaults** — delete `data/app.db` and relaunch; `ToolRepository` will re-seed the 10 default tools
-- **Add a new tool** — insert a row directly or implement a UI action that calls `ToolRepository.save(entity)`
-
-The seed defaults are defined in `_SEED_TOOLS` at the top of `repositories/tool.py`.
-
-### Device History
-
-Previously connected devices are stored in the `devices` table of `data/app.db`. The database is updated
-automatically each time a device connects. To clear all device history, delete `data/app.db` and relaunch.
-
----
-
-## License
-
-See `LICENSE` for details.
+`load_stylesheet(path, substitutions)` reads the QSS file from the virtual filesystem and applies
+`str.format_map(substitutions)` to replace `{TOKEN_NAME}` placeholders with actual hex values.
+`themed(dark_enums, light_enums, is_dark)` merges the appropriate color enum members into a single
+substitution dict, so the same QSS template works for both themes.

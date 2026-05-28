@@ -1,0 +1,19 @@
+name: TauSync
+
+on:
+  [ workflow_call ]
+
+jobs:
+  #  run tests after finish configure
+
+  build-windows:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build windows DLL
+        run: docker compose  -f TauSync/docker-compose.yml up --build --force-recreate
+
+
+
+

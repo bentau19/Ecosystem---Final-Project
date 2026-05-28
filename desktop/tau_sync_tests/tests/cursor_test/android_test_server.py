@@ -61,7 +61,7 @@ def serve_manual_echo_loop(tau):
             print(f"  [manual] Channel ended: {exception}")
 
 
-#── Individual test handlers ──────────────────────────────────────────
+#── Individual test dialogs ──────────────────────────────────────────
 
 def serve_message_echo(tau):
     """Test 1: read a line from the client and echo it back."""

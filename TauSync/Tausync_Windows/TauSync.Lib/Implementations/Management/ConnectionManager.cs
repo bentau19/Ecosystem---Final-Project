@@ -35,6 +35,7 @@ namespace TauSync.Implementations.Management
         /// <inheritdoc />
         public void Initialize(ITransport transport)
         {
+
             if (transport == null)
                 throw new ArgumentNullException(nameof(transport));
             if (_wifiTransport != null)
@@ -43,16 +44,25 @@ namespace TauSync.Implementations.Management
         }
 
         /// <inheritdoc />
-        public async Task ConnectTransport(string? targetId)
+        public async Task ConnectTransport(string? targetId, int? timeoutSeconds = null)
         {
-            await ConnectionContext.Instance.InitializeTransports(targetId).ConfigureAwait(false);
+            await ConnectionContext.Instance.InitializeTransports(targetId, timeoutSeconds).ConfigureAwait(false);
         }
 
         /// <inheritdoc />
         public bool IsConnected() => _wifiTransport?.IsConnected() ?? false;
 
+
+        public void Disconnect()  {
+            if (_disposed || !IsConnected()) {
+                    return;
+            }
+            _wifiTransport.Disconnect();
+
+        }
+
         /// <inheritdoc />
-        public async Task<Stream> Connect(string word)
+        public async Task<Stream> Connect(string word, int? timeoutSeconds = null)
         {
             ValidateConnectState(word);
             string wordTrimmed = word.Trim();
@@ -62,7 +72,7 @@ namespace TauSync.Implementations.Management
             var ctx = ConnectionContext.Instance;
             ConnectAttempt attempt = CreateConnectAttempt(ctx);
             await SendWordRequestAsync(wordTrimmed, attempt.LocalId).ConfigureAwait(false);
-            return await ResolveConnectRaceAsync(ctx, channel, attempt).ConfigureAwait(false);
+            return await ResolveConnectRaceAsync(ctx, channel, attempt, timeoutSeconds).ConfigureAwait(false);
         }
 
         private void ValidateConnectState(string word)
@@ -112,9 +122,9 @@ namespace TauSync.Implementations.Management
         /// This guarantees both sides pick complementary streams so data flows correctly.
         /// Falls back to the other path if the preferred one fails.
         /// </summary>
-        private async Task<Stream> ResolveConnectRaceAsync(ConnectionContext ctx, Channel<Stream> channel, ConnectAttempt attempt)
+        private async Task<Stream> ResolveConnectRaceAsync(ConnectionContext ctx, Channel<Stream> channel, ConnectAttempt attempt, int? timeoutSeconds)
         {
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(CoreConfig.HandshakeTimeoutSeconds));
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds ?? CoreConfig.HandshakeTimeoutSeconds));
             timeoutCts.Token.Register(() => attempt.ResponseTcs.TrySetException(new TimeoutException("Handshake timeout.")));
 
             Task<Stream> streamFromOwnRequest = WaitForOkAndBuildStreamAsync(attempt.ResponseTcs.Task, ctx, attempt.LocalId, attempt.BackStream);
@@ -339,6 +349,7 @@ namespace TauSync.Implementations.Management
             foreach (Channel<Stream> ch in _incomingByWord.Values)
                 ch.Writer.Complete();
             _incomingByWord.Clear();
+            _wifiTransport?.Dispose();
         }
     }
 
@@ -375,6 +386,7 @@ namespace TauSync.Implementations.Management
             if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
             return _readStream.Read(buffer, offset, count);
         }
+
 
         public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {

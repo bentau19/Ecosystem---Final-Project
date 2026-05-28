@@ -23,6 +23,8 @@ namespace TauSync.Implementations.Transport
         private bool _isConnected;
         private bool _disposed;
         private CancellationTokenSource? _receiveCts;
+        // for timeout
+        private CancellationTokenSource? _timeoutCts;
         private Task? _receiveTask;
         private Task? _acceptTask;
         private TaskCompletionSource? _connectionTcs;
@@ -48,7 +50,7 @@ namespace TauSync.Implementations.Transport
         }
 
         /// <inheritdoc />
-        public async Task Connect(string? targetId)
+        public async Task Connect(string? targetId, int? timeoutSeconds = null)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SocketTransport));
@@ -61,13 +63,13 @@ namespace TauSync.Implementations.Transport
 
             if (_isServerMode)
             {
-                StartListeningInternal();
+                StartListeningInternal(timeoutSeconds);
                 await WaitForConnectionInternalAsync().ConfigureAwait(false);
                 return;
             }
 
             _targetId = targetId;
-            await ConnectToServerWithRetryAsync(targetId!).ConfigureAwait(false);
+            await ConnectToServerWithRetryAsync(targetId!, timeoutSeconds).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -75,32 +77,61 @@ namespace TauSync.Implementations.Transport
         /// Retries are driven by a timer (no busy loop): the calling thread awaits once; a background
         /// loop runs TryConnectOnce after each delay until connected or disposed.
         /// </summary>
-        private async Task ConnectToServerWithRetryAsync(string host)
+        private async Task ConnectToServerWithRetryAsync(string host, int? timeoutSeconds)
         {
             var connectedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             int delayMs = CoreConfig.ClientConnectRetryDelaySeconds * 1000;
             var tryLock = new SemaphoreSlim(1, 1);
 
-            _ = RunConnectRetryLoopAsync(host, connectedTcs, delayMs, tryLock);
+            _timeoutCts = new CancellationTokenSource(GetTimeout(timeoutSeconds));
+
+            _ = RunConnectRetryLoopAsync(host, connectedTcs, delayMs, tryLock, _timeoutCts.Token);
             await connectedTcs.Task.ConfigureAwait(false);
         }
 
-        private async Task RunConnectRetryLoopAsync(string host, TaskCompletionSource connectedTcs, int delayMs, SemaphoreSlim tryLock)
+        private async Task RunConnectRetryLoopAsync(string host, TaskCompletionSource connectedTcs, int delayMs, SemaphoreSlim tryLock, CancellationToken ct)
         {
-            await TryConnectOnceAsync(host, connectedTcs, tryLock).ConfigureAwait(false);
-            while (!connectedTcs.Task.IsCompleted && !_disposed)
+            while (!connectedTcs.Task.IsCompleted && !_disposed && !ct.IsCancellationRequested)
             {
-                await Task.Delay(delayMs).ConfigureAwait(false);
-                if (_disposed)
+                // if (_disposed)
+                // {
+                // connectedTcs.TrySetException(new ObjectDisposedException(nameof(SocketTransport)));
+                // break;
+                // }
+
+                try
                 {
-                    connectedTcs.TrySetException(new ObjectDisposedException(nameof(SocketTransport)));
+                    await TryConnectOnceAsync(host, connectedTcs, tryLock, ct).ConfigureAwait(false);
+                    await Task.Delay(delayMs, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    if (_timeoutCts != null && _timeoutCts.IsCancellationRequested)
+                    {
+                        connectedTcs.TrySetException(new TimeoutException("Failed to connect within the timeout period."));
+                    }
                     break;
                 }
-                await TryConnectOnceAsync(host, connectedTcs, tryLock).ConfigureAwait(false);
+
+
             }
+            if (ct.IsCancellationRequested && !connectedTcs.Task.IsCompleted)
+            {
+                connectedTcs.TrySetException(new TimeoutException("Failed to connect within the timeout period."));
+            }
+
         }
 
-        private async Task TryConnectOnceAsync(string host, TaskCompletionSource connectedTcs, SemaphoreSlim tryLock)
+
+        // for easy conversion. if timeoutSeconds is null, returns infinite timespan; otherwise, returns the corresponding timespan.
+        private static TimeSpan GetTimeout(int? timeoutSeconds)
+        {
+            return timeoutSeconds.HasValue ? TimeSpan.FromSeconds(timeoutSeconds.Value) : Timeout.InfiniteTimeSpan;
+        }
+
+
+        private async Task TryConnectOnceAsync(
+            string host, TaskCompletionSource connectedTcs, SemaphoreSlim tryLock, CancellationToken ct)
         {
             if (_disposed)
             {
@@ -108,16 +139,16 @@ namespace TauSync.Implementations.Transport
                 return;
             }
 
-            await tryLock.WaitAsync().ConfigureAwait(false);
             try
             {
+                await tryLock.WaitAsync(ct).ConfigureAwait(false);
                 if (connectedTcs.Task.IsCompleted || _disposed)
                     return;
 
                 var client = new TcpClient();
                 try
                 {
-                    await client.ConnectAsync(host, Port).ConfigureAwait(false);
+                    await client.ConnectAsync(host, Port).WaitAsync(ct).ConfigureAwait(false);
                     if (connectedTcs.Task.IsCompleted || _disposed)
                     {
                         client.Close();
@@ -135,6 +166,11 @@ namespace TauSync.Implementations.Transport
                 {
                     client.Close();
                 }
+                catch (OperationCanceledException)
+                {
+                    client.Close();
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     client.Close();
@@ -150,7 +186,7 @@ namespace TauSync.Implementations.Transport
         /// <summary>
         /// Internal: start listening (server mode). Used only by <see cref="Connect"/> when targetId is null/empty.
         /// </summary>
-        private void StartListeningInternal()
+        private void StartListeningInternal(int? timeoutSeconds = null)
         {
             if (_tcpListener != null)
                 return;
@@ -158,8 +194,13 @@ namespace TauSync.Implementations.Transport
             _connectionTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _tcpListener = new TcpListener(System.Net.IPAddress.Any, Port);
             _tcpListener.Start();
+
             _receiveCts = new CancellationTokenSource();
-            _acceptTask = Task.Run(() => AcceptLoopAsync(_receiveCts.Token));
+
+            _timeoutCts = new CancellationTokenSource(GetTimeout(timeoutSeconds));
+
+            var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_receiveCts.Token, _timeoutCts.Token);
+            _acceptTask = Task.Run(() => AcceptLoopAsync(linkedCts.Token));
         }
 
         /// <summary>
@@ -203,14 +244,22 @@ namespace TauSync.Implementations.Transport
         public void Disconnect()
         {
             if (!_isConnected) return;
-            _isConnected = false;
-            _receiveCts?.Cancel();
+           _receiveCts?.Cancel();
             try { _receiveTask?.Wait(TimeSpan.FromSeconds(2)); } catch { }
-            _stream?.Close();
+                try { _acceptTask?.Wait(TimeSpan.FromSeconds(1)); } catch { }
+              _tcpListener?.Stop();
+             _stream?.Close();
             _tcpClient?.Close();
+
+             _tcpListener = null;
             _stream = null;
-            _tcpClient = null;
-            _targetId = null;
+             _tcpClient = null;
+             _isConnected = false;
+            _receiveCts = null;
+             _timeoutCts = null;
+            _receiveTask = null;
+            _acceptTask = null;
+            _connectionTcs = null;
         }
 
         private async Task AcceptLoopAsync(CancellationToken ct)
@@ -227,7 +276,18 @@ namespace TauSync.Implementations.Transport
                     _connectionTcs?.TrySetResult();
                     break;
                 }
-                catch (OperationCanceledException) { break; }
+                catch (OperationCanceledException)
+                {
+                    _tcpClient?.Close();
+                    _tcpClient = null;
+                    _tcpListener?.Stop();
+                    _tcpListener = null;
+                    if (_timeoutCts != null && _timeoutCts.IsCancellationRequested)
+                    {
+                        _connectionTcs?.TrySetException(new TimeoutException("No client connected within the timeout period."));
+                    }
+                    break;
+                }
                 catch (Exception) { break; }
             }
         }

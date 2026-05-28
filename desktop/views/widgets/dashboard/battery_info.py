@@ -1,10 +1,11 @@
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QFrame, QWidget
 
-from resources.colors import DashboardColors, BatteryBarColors
+from app.theme_manager import theme_manager
+from resources.colors import Colors, LightColors, BatteryBarColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
-from utils.styles import load_stylesheet
+from utils.styles import load_stylesheet, themed
 from views.widgets.bar import Bar
 
 
@@ -35,20 +36,21 @@ class BatteryInfo(QFrame):
 
         self._setup_ui()
         self.setup_style()
+        self._connect_signals()
 
     def _setup_ui(self) -> None:
-        """Set up the user interface."""
+        # Create widgets and build the vertical layout.
         self._create_widgets()
         self._create_layout()
 
     def _create_widgets(self) -> None:
-        """Create all child widgets for the battery card."""
+        # Create value label, gradient bar, and charging status label.
         self._battery_value_label: QLabel = self._create_battery_value_label()
         self._battery_bar: Bar = self._create_battery_bar()
         self._charging_label: QLabel = self._create_charging_label()
 
     def _create_layout(self) -> None:
-        """Create and configure the vertical layout for the battery card."""
+        # Build the vertical card layout: percentage → bar → charging label → stretch.
         layout: QVBoxLayout = QVBoxLayout(self)
         layout.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.NONE)
 
@@ -65,26 +67,25 @@ class BatteryInfo(QFrame):
 
     def setup_style(self) -> None:
         """Load and apply QSS styling to the battery card."""
-        qss = load_stylesheet(DashboardStyles.BATTERY_INFO, [DashboardColors])
+        qss = load_stylesheet(
+            DashboardStyles.BATTERY_INFO,
+            themed([Colors], [LightColors], theme_manager.is_dark),
+        )
         self.setStyleSheet(qss)
 
-    def _create_battery_value_label(self) -> QLabel:
-        """Create the battery percentage value label.
+    def _connect_signals(self) -> None:
+        # Wire theme_changed to re-apply the stylesheet.
+        theme_manager.theme_changed.connect(self.setup_style)
 
-        Returns:
-            QLabel: A label displaying battery percentage.
-        """
+    def _create_battery_value_label(self) -> QLabel:
+        # Create the 'N%' percentage display label.
         percentage_str = f"{self._battery_percentage}%"
         val = QLabel(percentage_str)
         val.setObjectName("batteryValue")
         return val
 
     def _create_battery_bar(self) -> Bar:
-        """Create the battery level progress bar.
-
-        Returns:
-            BatteryBar: A battery bar widget showing battery charge.
-        """
+        # Create the gradient fill bar scaled to current battery percentage.
         bar = Bar(self._battery_percentage,QColor(BatteryBarColors.GRADIENT_START),QColor (
             BatteryBarColors.GRADIENT_END))
         bar.setObjectName("batteryBar")
@@ -92,11 +93,7 @@ class BatteryInfo(QFrame):
 
     @staticmethod
     def _create_charging_label() -> QLabel:
-        """Create the charging.svg status label.
-
-        Returns:
-            QLabel: A label displaying charging.svg status with lightning bolt icon and time estimate.
-        """
+        # Create the charging status label (static text for now).
         charging = QLabel("⚡ Charging… ~35 min to full")
         charging.setObjectName("batteryCharging")
         return charging

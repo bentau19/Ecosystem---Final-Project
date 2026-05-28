@@ -1,88 +1,72 @@
-# הרצת בדיקות Integration ל-TauSync Android
+# Running TauSync Android Integration Tests
 
-## דרכים להרצת הבדיקות:
+The integration tests live in `src/test/java/com/example/tausync_lib/IntegrationTest.java`.
+They spin up a local TCP server and client within the same JVM, so no Android device or
+emulator is needed — but the project must be compiled first.
 
-### אופציה 1: דרך Android Studio (מומלץ)
+---
 
-**⚠️ חשוב:** Android Studio לא יכול להריץ בדיקות integration עם `main()` דרך Gradle. השתמש באחת מהדרכים הבאות:
+## What the tests cover
 
-#### דרך A: הרצה ישירה דרך Terminal ב-Android Studio
+| Test | Description |
+|---|---|
+| `testStandardFlow` | Full handshake + bidirectional streaming |
+| `testInterruptDuringStream` | Interrupt handling during an active full-duplex stream |
+| `testConcurrentInterrupts` | Multiple concurrent interrupts during a transfer |
 
-1. **פתח את הפרויקט ב-Android Studio**
-   - פתח את התיקייה `TauSync/android/tausync-lib`
+---
 
-2. **בנה את הפרויקט**
-   - לחץ על `Build > Make Project` (או `Ctrl+F9`)
-   - או לחץ על `Build > Rebuild Project`
+## Prerequisites
 
-3. **פתח את ה-Terminal ב-Android Studio** (View > Tool Windows > Terminal)
+- JDK 11 or newer on `PATH`
+- The project built at least once in Android Studio so `classes.jar` is available
 
-4. **הרץ את הסקריפט:**
-   ```powershell
-   .\run_tests_simple.bat
-   ```
+---
 
-#### דרך B: הרצה ידנית דרך Terminal
+## Option 1 — Python runner (recommended)
 
-אחרי Build, פתח PowerShell/CMD ונווט לתיקייה:
-```powershell
-cd "C:\Users\User\Desktop\OneDrive\CS_BA\Third_Year\final_project\Ecosystem---Final-Project\TauSync\android\tausync-lib"
-.\run_tests_simple.bat
+The repo includes a cross-platform runner that compiles and executes the test class
+without needing Android Studio open:
+
+```bash
+cd TauSync/Tausync_Android/tausync-lib/
+python run_integration_tests.py
 ```
 
-### אופציה 2: דרך Command Line (אחרי Build)
+The script locates `classes.jar` from the Gradle intermediate output, compiles
+`IntegrationTest.java`, and runs `com.example.tausync_lib.IntegrationTest`.
 
-אחרי שבנית את הפרויקט ב-Android Studio:
+---
 
-1. **פתח PowerShell או CMD**
-2. **נווט לתיקיית הפרויקט:**
-   ```powershell
-   cd "C:\Users\User\Desktop\OneDrive\CS_BA\Third_Year\final_project\Ecosystem---Final-Project\TauSync\android\tausync-lib"
-   ```
+## Option 2 — Manual (post-build)
 
-3. **הרץ את הסקריפט:**
-   ```powershell
-   .\run_tests_simple.bat
-   ```
-
-### אופציה 3: הרצה ידנית
-
-אם הפרויקט כבר built:
+After building the project in Android Studio (`Build > Make Project`):
 
 ```powershell
-# Compile
-javac -cp "build\intermediates\compile_library_classes_jar\debug\bundleLibCompileToJarDebug\classes.jar;." -d "build\test-classes" "src\test\java\com\example\tausync_lib\IntegrationTest.java"
+# From TauSync/Tausync_Android/tausync-lib/
 
-# Run
-java -cp "build\test-classes;build\intermediates\compile_library_classes_jar\debug\bundleLibCompileToJarDebug\classes.jar;." com.example.tausync_lib.IntegrationTest
+# 1. Compile the test class against the library JAR
+$jar = "build\intermediates\compile_library_classes_jar\debug\bundleLibCompileToJarDebug\classes.jar"
+javac -cp "$jar;." -d "build\test-classes" `
+      "src\test\java\com\example\tausync_lib\IntegrationTest.java"
+
+# 2. Run
+java -cp "build\test-classes;$jar;." com.example.tausync_lib.IntegrationTest
 ```
 
-## מה הבדיקות בודקות:
+---
 
-1. **testInterruptDuringStream** - בודק interrupts במהלך streaming (full-duplex)
-2. **testStandardFlow** - בודק handshake + streaming
-3. **testConcurrentInterrupts** - בודק מספר interrupts במהלך transfer
+## Troubleshooting
 
-## פתרון בעיות:
+**`classes.jar not found`**
+: Build the project in Android Studio (`Build > Make Project`) and retry.
 
-### שגיאת "classes.jar not found"
-- פתח את הפרויקט ב-Android Studio
-- בנה את הפרויקט (`Build > Make Project`)
-- נסה שוב
+**Compilation errors (`cannot find symbol`)**
+: Clean and rebuild: `Build > Clean Project` → `Build > Rebuild Project`.
 
-### שגיאת קומפילציה
-- ודא שהפרויקט built בהצלחה ב-Android Studio
-- ודא שיש לך JDK 11+ מותקן
-- אם יש שגיאות של "cannot find symbol", נסה:
-  1. `Build > Clean Project`
-  2. `Build > Rebuild Project`
-  3. נסה שוב
+**Port already in use**
+: The tests use ports 8888, 8898, and 8908. Close any other process occupying those ports.
 
-### שגיאת "SourceSet with name 'unitTest' not found"
-- **זו שגיאה של Android Studio** - הוא מנסה להריץ דרך Gradle
-- **פתרון:** השתמש ב-`run_tests_simple.bat` במקום להריץ דרך Android Studio
-- או הרץ ידנית דרך Terminal (ראה "אופציה 3")
-
-### שגיאת הרצה
-- ודא שהפורט 8888 (או 8898, 8908) לא תפוס
-- סגור תוכניות אחרות שמשתמשות בפורטים האלה
+**`SourceSet with name 'unitTest' not found`**
+: Android Studio is trying to run via Gradle. Use Option 1 or Option 2 above instead of
+  the Run/Debug configuration in the IDE.
