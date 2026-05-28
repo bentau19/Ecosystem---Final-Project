@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.Toast;
@@ -19,7 +20,7 @@ import com.example.android.R;
 import com.example.android.ui.fragments.ActionsFragment;
 import com.example.android.ui.fragments.ConnectFragment;
 import com.example.android.viewmodel.MainViewModel;
-import com.example.android.viewmodel.MainViewModelFactory; // הייבוא החדש
+import com.example.android.viewmodel.MainViewModelFactory;
 import com.google.zxing.integration.android.IntentIntegrator;
 import com.google.zxing.integration.android.IntentResult;
 
@@ -41,7 +42,6 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         // 1. Initialize the shared ViewModel using the Factory
-        // כאן אנחנו מעבירים את ה-Application ל-Factory כדי שהוא יכין את ה-Repository
         MainViewModelFactory factory = new MainViewModelFactory(this.getApplication());
         viewModel = new ViewModelProvider(this, factory).get(MainViewModel.class);
 
@@ -65,10 +65,10 @@ public class MainActivity extends AppCompatActivity {
         boolean success = viewModel.handleQr(qrData);
 
         if (success) {
-            // בדיקת הרשאות נוטיפיקציה (לאנדרואיד 13+) לפני הפעלת הסרוויס
+            // Check notification permission (Android 13+) before starting service
             checkNotificationPermission();
 
-            // הפעלת הסרוויס - כאן הקסם קורה!
+            // Start the service
             startConnectivityService();
 
             navigateToActions();
@@ -82,20 +82,15 @@ public class MainActivity extends AppCompatActivity {
      * Starts the Foreground Service to maintain the PC connection.
      */
     private void startConnectivityService() {
-        // 1. Extract the IP from the ViewModel (the IP extracted from the QR and saved in the Repository)
         String ip = "";
         if (viewModel.getConnectionState().getValue() != null &&
                 viewModel.getConnectionState().getValue().getRemotePC() != null) {
             ip = viewModel.getConnectionState().getValue().getRemotePC().getPcIp();
         }
 
-        // 2. Create the Intent and add the IP as an "Extra"
-        // 3. Important: The Repository is already initialized by the ViewModel in onCreate()
-        // This ensures that when the service's onCreate() is called, the repository is ready
         Intent serviceIntent = new Intent(this, ConnectivityService.class);
-        serviceIntent.putExtra("TARGET_IP", ip); // This key must match what the service expects!
+        serviceIntent.putExtra("TARGET_IP", ip);
 
-        // 4. Start the service
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ContextCompat.startForegroundService(this, serviceIntent);
         } else {
@@ -118,16 +113,16 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Orchestrates the disconnection sequence.
-     * Updates the repository and reverts the UI to the connection screen.
      */
     public void disconnect() {
-        // עצירת הסרוויס כשמתנתקים
+        Log.d("TauSyncFlow", "Disconnect clicked, clearing state first...");
+        // Stop service when disconnecting
         stopService(new Intent(this, ConnectivityService.class));
 
         // Switch back to the connection setup screen
         navigateToConnect();
 
-        // Update the state (this will trigger observers across the app)
+        // Update the state
         viewModel.disconnect();
         Toast.makeText(this, "Disconnected", Toast.LENGTH_SHORT).show();
     }

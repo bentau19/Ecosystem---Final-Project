@@ -73,10 +73,22 @@ public class ChannelHandlerRegistry {
      * Called when the service is shutting down.
      */
     public void shutdownAll() {
-        Log.d(TAG, "Shutting down " + handlers.size() + " handlers");
-        for (String channel : handlers.keySet()) {
-            unregisterHandler(channel);
+        // 1. יוצרים עותק נפרד של המפתחות כדי לא לרוץ ישירות על המפה הפעילה
+        java.util.List<String> channelKeys = new java.util.ArrayList<>(handlers.keySet());
+
+        // 2. רצים על העותק הבטוח
+        for (String channel : channelKeys) {
+            ChannelHandler handler = handlers.get(channel);
+            if (handler != null) {
+                try {
+                    handler.onShutdown();
+                } catch (Exception e) {
+                    android.util.Log.e("Registry", "Error shutting down handler for " + channel, e);
+                }
+            }
         }
+
+        // 3. מנקים את המפה בבת אחת בסוף, בבטחה
         handlers.clear();
     }
 
