@@ -15,8 +15,8 @@ import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.domain.enums.ConnectionType;
 import com.example.android.enums.DeviceInfoChannels;
-import com.example.android.network.handlers.BatteryLevelChannelHandler;
 import com.example.android.network.handlers.ChannelHandlerRegistry;
+import com.example.android.network.handlers.DeviceInfoChannelHandler;
 import com.example.android.network.handlers.PCNameChannelHandler;
 import com.example.android.network.transport.TransportManager;
 import com.example.android.network.transport.TransportStatus;
@@ -24,14 +24,16 @@ import com.example.android.network.transport.TauSyncTransportManager;
 import com.example.android.repositories.DeviceRepository;
 
 /**
- * ConnectivityService - Orchestrator for managing remote PC connections.
- * Manages notification lifecycle and listens to repository changes directly.
+ * ConnectivityService - Thin Orchestrator for managing remote PC connections.
+ * This foreground service acts as a mediator between the Transport Layer (TauSync)
+ * and the application state (DeviceRepository), managing the connection lifecycle
+ * and persistent notifications.
  */
 public class ConnectivityService extends Service implements TransportManager.TransportListener {
 
     private static final String TAG = "TauSyncFlow";
 
-    // Core components
+    // Core infrastructure components
     private TransportManager transportManager;
     private ChannelHandlerRegistry handlerRegistry;
     private SystemDataSource systemDataSource;
@@ -43,15 +45,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         super.onCreate();
         Log.d(TAG, "Service created");
 
-        // 1. Initialize notification manager and START LISTENING
-        // This ensures notification updates work even if the Activity is destroyed.
+        // Initialize notification management and start observing repository state changes
         notificationManager = new AppNotificationManager(this);
         notificationManager.startListeningToConnectionChanges();
 
-        // Initialize dependencies
         systemDataSource = new SystemDataSource(this);
 
-        // Initialize Repository (with fallback for Android 14+ race condition)
+        // Safely retrieve the Singleton Repository instance with a fallback mechanism
+        // to circumvent eventual race conditions on Android 14+ startup sequences
         try {
             deviceRepository = DeviceRepository.getInstance();
         } catch (IllegalStateException e) {
@@ -62,37 +63,53 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             );
         }
 
-        // Initialize transport manager (uses TauSync under the hood)
         transportManager = new TauSyncTransportManager();
-
-        // Initialize channel handler registry
         handlerRegistry = new ChannelHandlerRegistry();
         registerChannelHandlers();
 
         Log.d(TAG, "Service initialization complete");
     }
 
+    /**
+     * Registers dedicated and generic channel handlers for decoupled message dispatching.
+     */
     private void registerChannelHandlers() {
-        Log.d(TAG, "Registering channel handlers...");
+        Log.d(TAG, "Registering channel handlers using generic DeviceInfoChannelHandler...");
 
-        handlerRegistry.registerHandler(
-                DeviceInfoChannels.BATTERY_LEVEL.getValue(),
-                new BatteryLevelChannelHandler(systemDataSource, transportManager)
-        );
-
+        // PC_NAME uses a specialized class because it acts as a Setter (receives data and modifies local state)
         handlerRegistry.registerHandler(
                 DeviceInfoChannels.PC_NAME.getValue(),
                 new PCNameChannelHandler(deviceRepository, transportManager)
         );
 
+        // All other device telemetry data types are registered inline as Getters using generic Lambda functional interfaces
+        registerDeviceInfoHandler(DeviceInfoChannels.NAME.getValue(), this::getDeviceName);
+        registerDeviceInfoHandler(DeviceInfoChannels.OS.getValue(), this::getDeviceOs);
+        registerDeviceInfoHandler(DeviceInfoChannels.ID.getValue(), this::getLocalDeviceIdValue);
+        registerDeviceInfoHandler(DeviceInfoChannels.IP.getValue(), this::getDeviceIp);
+        registerDeviceInfoHandler(DeviceInfoChannels.BATTERY_LEVEL.getValue(), this::getBatteryLevel);
+        registerDeviceInfoHandler(DeviceInfoChannels.BATTERY_CHARGING.getValue(), this::getBatteryCharging);
+        registerDeviceInfoHandler(DeviceInfoChannels.STORAGE_TOTAL.getValue(), this::getStorageTotal);
+        registerDeviceInfoHandler(DeviceInfoChannels.STORAGE_USED.getValue(), this::getStorageUsed);
+
         Log.d(TAG, "Registered " + handlerRegistry.getHandlerCount() + " handlers");
+    }
+
+    /**
+     * Structural helper to bind a data channel with a specific lambda implementation of ValueProvider.
+     */
+    private void registerDeviceInfoHandler(String channel, DeviceInfoChannelHandler.ValueProvider valueProvider) {
+        handlerRegistry.registerHandler(
+                channel,
+                new DeviceInfoChannelHandler(channel, transportManager, valueProvider)
+        );
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.d(TAG, "onStartCommand: Service starting");
 
-        // Immediate startForeground to satisfy system requirements
+        // Enforce immediate foreground promotion to fulfill Android's strict background execution policies
         Notification notification = notificationManager.buildNotification("Connecting to PC...");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(AppNotificationManager.NOTIFICATION_ID, notification,
@@ -133,19 +150,18 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     @Override
     public void onDestroy() {
         Log.d(TAG, "Service destroyed");
-
-        // 2. STOP LISTENING to prevent memory leaks
         if (notificationManager != null) {
             notificationManager.stopListeningToConnectionChanges();
         }
-
         cleanup();
         super.onDestroy();
     }
 
+    /**
+     * Gracefully releases open sockets, unregisters sub-components, and resets the local connection state.
+     */
     private void cleanup() {
         Log.d(TAG, "Cleanup started - stopping threads and shutting down network");
-
         if (handlerRegistry != null) {
             handlerRegistry.shutdownAll();
         }
@@ -153,24 +169,24 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             transportManager.shutdown();
         }
         if (deviceRepository != null) {
-            // CRITICAL: Call disconnect() instead of just updateConnectionStatus.
-            // This clears the RemotePC object from the state, ensuring the app 
-            // starts on the Connect screen next time it's launched after a Swipe.
+            // Hard disconnect resets state models so the application re-opens directly on the connect screen
             deviceRepository.disconnect();
         }
     }
 
-    // ============ TransportListener Implementation ============
+    // ============ TransportManager.TransportListener Implementation ============
 
     @Override
     public void onStatusChanged(TransportStatus status) {
         Log.d(TAG, "Transport status changed: " + status);
 
+        // 1. Immediately emit status updates on the current execution thread to unblock the notification manager UI
         ConnectionStatus connectionStatus = mapTransportStatusToConnectionStatus(status);
         deviceRepository.updateConnectionStatus(connectionStatus);
 
+        // 2. Offload heavy network-bound synchronization routines to a worker thread to ensure zero UI stutter
         if (status == TransportStatus.CONNECTED) {
-            sendInitialDeviceInfo();
+            new Thread(this::sendInitialDeviceInfo, "InitialDeviceSenderThread").start();
         }
     }
 
@@ -178,25 +194,28 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     public void onPeerRequestsAvailable(java.util.List<String> channels) {
         Log.d(TAG, "Peer requests available for channels: " + channels);
 
-        if (deviceRepository.getCurrentConnectionStatus() == ConnectionStatus.CONNECTED &&
-                transportManager.isConnected()) {
+        // Handle sequential polling requests from the desktop server on a dedicated worker thread to maintain thread safety
+        new Thread(() -> {
+            if (deviceRepository.getCurrentConnectionStatus() == ConnectionStatus.CONNECTED &&
+                    transportManager.isConnected()) {
 
-            boolean shouldSendInitialData = false;
-            try {
-                String name = transportManager.readFromChannel(DeviceInfoChannels.NAME.getValue());
-                shouldSendInitialData = name == null || name.isEmpty();
-            } catch (Exception e) {
-                shouldSendInitialData = true;
+                boolean shouldSendInitialData = false;
+                try {
+                    String name = transportManager.readFromChannel(DeviceInfoChannels.NAME.getValue());
+                    shouldSendInitialData = name == null || name.isEmpty();
+                } catch (Exception e) {
+                    shouldSendInitialData = true;
+                }
+
+                if (shouldSendInitialData) {
+                    sendInitialDeviceInfo();
+                }
             }
 
-            if (shouldSendInitialData) {
-                sendInitialDeviceInfo();
+            for (String channel : channels) {
+                handlerRegistry.handlePeerRequest(channel);
             }
-        }
-
-        for (String channel : channels) {
-            handlerRegistry.handlePeerRequest(channel);
-        }
+        }, "PeerRequestHandlerThread").start();
     }
 
     @Override
@@ -211,6 +230,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         deviceRepository.updateConnectionStatus(ConnectionStatus.RECONNECTING);
     }
 
+    /**
+     * Maps the internal, concrete transport statuses directly into the generic domain model ConnectionStatus.
+     */
     private ConnectionStatus mapTransportStatusToConnectionStatus(TransportStatus transportStatus) {
         switch (transportStatus) {
             case CONNECTING:
@@ -228,6 +250,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         }
     }
 
+    /**
+     * Collects active hardware telemetry from system resources and transmits it sequentially as a handshake packet.
+     */
     private void sendInitialDeviceInfo() {
         Log.d(TAG, "Sending initial device info");
         try {
@@ -244,6 +269,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         }
     }
 
+    /**
+     * Executes the standard write wrapper to push localized values into specific connection tracks.
+     */
     private void sendDeviceInfo(String channel, String value) {
         try {
             Log.v(TAG, "Sending [" + channel + "]: " + value);
@@ -256,6 +284,19 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     @Nullable
     @Override
     public IBinder onBind(Intent intent) {
+        // Return null as this service is initialized exclusively via startService commands (Started Service),
+        // decoupling UI layout instances from the core connectivity loop and communicating solely via the Repository layer.
         return null;
     }
+
+    // ============ Generic Value Providers for Handlers (Telemetry Getters) ============
+
+    private String getDeviceName() { return systemDataSource.getDeviceModel(); }
+    private String getDeviceOs() { return "Android " + Build.VERSION.RELEASE; }
+    private String getLocalDeviceIdValue() { return systemDataSource.getDeviceId(); }
+    private String getDeviceIp() { return systemDataSource.getLocalIp(); }
+    private String getBatteryLevel() { return String.valueOf(systemDataSource.getBattery()); }
+    private String getBatteryCharging() { return String.valueOf(systemDataSource.isDeviceCharging()); }
+    private String getStorageTotal() { return String.valueOf(systemDataSource.getRawStorageStats().getTotal()); }
+    private String getStorageUsed() { return String.valueOf(systemDataSource.getRawStorageStats().getUsed()); }
 }
