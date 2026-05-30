@@ -17,6 +17,7 @@ import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.R;
+import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.ui.fragments.ActionsFragment;
 import com.example.android.ui.fragments.ConnectFragment;
 import com.example.android.viewmodel.MainViewModel;
@@ -47,13 +48,29 @@ public class MainActivity extends AppCompatActivity {
 
         // 2. Smart navigation logic: Check current connection state from the repository
         if (savedInstanceState == null) {
-            if (viewModel.getConnectionState().getValue() != null &&
-                    viewModel.getConnectionState().getValue().isConnected()) {
+            if (viewModel.getConnectionStatus().getValue() == ConnectionStatus.CONNECTED) {
                 replaceFragment(new ActionsFragment());
             } else {
                 replaceFragment(new ConnectFragment());
             }
         }
+        // 3. Listen to real TCP connection status → drive navigation
+        viewModel.getConnectionStatus().observe(this, status -> {
+            if (status == null) return;
+            switch (status) {
+                case CONNECTING:
+                    Toast.makeText(this, "Connecting...", Toast.LENGTH_SHORT).show();
+                    break;
+                case CONNECTED:
+                    navigateToActions();
+                    Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
+                    break;
+                case FAILED:
+                    navigateToConnect();
+                    Toast.makeText(this, "Connection failed. Try again.", Toast.LENGTH_LONG).show();
+                    break;
+            }
+        });
     }
 
     /**
@@ -71,8 +88,8 @@ public class MainActivity extends AppCompatActivity {
             // Start the service
             startConnectivityService();
 
-            navigateToActions();
-            Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
+//            navigateToActions();
+//            Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
         } else {
             Toast.makeText(this, "Invalid QR Code. Please try again.", Toast.LENGTH_LONG).show();
         }

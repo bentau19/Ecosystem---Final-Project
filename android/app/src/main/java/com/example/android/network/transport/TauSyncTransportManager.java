@@ -8,6 +8,7 @@ import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.utils.NetworkHandler;
 import com.example.tausync_lib.sdk.TauSync;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -39,7 +40,7 @@ public class TauSyncTransportManager implements TransportManager {
     // Retry configuration
     private static final int INITIAL_RETRY_DELAY_MS = 1000;      // 1 second
     private static final int MAX_RETRY_DELAY_MS = 30000;         // 30 seconds
-    private static final int MAX_RETRY_ATTEMPTS = 10;
+    private static final int MAX_RETRY_ATTEMPTS = 1;
     private static final int POLLING_INTERVAL_MS = 2000;         // 2 seconds
 
     // State management
@@ -83,26 +84,38 @@ public class TauSyncTransportManager implements TransportManager {
      * Internal method that handles the actual connection attempt with retry logic.
      */
     private void attemptConnection() {
-        if (isShuttingDown.get()) {
+        if (isShuttingDown.get() || currentRemoteDevice == null) {
+            Log.w(TAG, "Attempt connection bypassed: Manager is shutting down or device is null.");
             return;
         }
 
         connectionExecutor.execute(() -> {
+            Log.d(TAG, "🔵 Thread started, about to call connectTo");
             try {
-                Log.i(TAG, "Attempting connection to: " + currentRemoteDevice.getPcIp() +
-                        " (attempt " + (currentRetryAttempt + 1) + "/" + MAX_RETRY_ATTEMPTS + ")");
-
                 // Notify listener of reconnect attempt (only if this is a retry)
                 if (currentRetryAttempt > 0 && listener != null) {
                     mainHandler.post(() -> listener.onReconnectAttempt(currentRetryAttempt, MAX_RETRY_ATTEMPTS));
                 }
 
-                // Create TauSync instance and attempt connection
                 tauSync = new TauSync();
-                tauSync.connectTo(currentRemoteDevice.getPcIp());
+                Log.d(TAG, "🔵 TauSync created, calling connectTo...");
 
-                // Success!
-                Log.i(TAG, "✔ Successfully connected to: " + currentRemoteDevice.getPcIp());
+                // connect to PC with tauSync
+                // 5 sec timeout
+                java.util.concurrent.Future<?> connectFuture = java.util.concurrent.Executors
+                        .newSingleThreadExecutor()
+                        .submit(() -> tauSync.connectTo(currentRemoteDevice.getPcIp()));
+
+                try {
+                    connectFuture.get(5, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (java.util.concurrent.TimeoutException e) {
+                    connectFuture.cancel(true);
+                    throw new Exception("Connection timed out after 5 seconds");
+                }
+
+                // connect success
+                Log.d(TAG, "🟢 connectTo returned successfully");
+
                 currentRetryAttempt = 0;
                 nextRetryDelayMs = INITIAL_RETRY_DELAY_MS;
 
@@ -110,8 +123,10 @@ public class TauSyncTransportManager implements TransportManager {
                 startPollingForPeerRequests();
 
             } catch (Exception e) {
-                Log.e(TAG, "Connection failed: " + e.getMessage());
+                Log.e(TAG, "🔴 CAUGHT exception: " + e.getClass().getName() + " - " + e.getMessage());
                 handleConnectionFailure(e);
+            } catch (Throwable t) {
+                Log.e(TAG, "🔴 CAUGHT throwable: " + t.getClass().getName() + " - " + t.getMessage());
             }
         });
     }
@@ -171,7 +186,7 @@ public class TauSyncTransportManager implements TransportManager {
             });
         }
 
-        pollingExecutor.scheduleAtFixedRate(() -> {
+        pollingExecutor.scheduleWithFixedDelay(() -> {
             if (isShuttingDown.get() || status != TransportStatus.CONNECTED) {
                 return;
             }
@@ -258,6 +273,8 @@ public class TauSyncTransportManager implements TransportManager {
     @Override
     public void disconnect() {
         Log.d(TAG, "Disconnect requested");
+        mainHandler.removeCallbacks(this::attemptConnection);
+
         updateStatus(TransportStatus.DISCONNECTING);
 
         // Stop polling
@@ -267,6 +284,7 @@ public class TauSyncTransportManager implements TransportManager {
         if (tauSync != null) {
             try {
                 tauSync.dispose();
+                Log.d(TAG, "TauSync disposed");
             } catch (Exception e) {
                 Log.d(TAG, "Error during TauSync disposal: " + e.getMessage());
             }
@@ -290,14 +308,14 @@ public class TauSyncTransportManager implements TransportManager {
 
     @Override
     public void shutdown() {
-        Log.d(TAG, "Shutdown initiated");
+        Log.d(TAG, "⚠️ Shutdown called from: " + Arrays.toString(Thread.currentThread().getStackTrace()));
         isShuttingDown.set(true);
 
         disconnect();
 
         try {
             connectionExecutor.shutdown();
-            if (!connectionExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+            if (!connectionExecutor.awaitTermination(20, TimeUnit.SECONDS)) {
                 Log.w(TAG, "Connection executor did not terminate gracefully, forcing shutdown");
                 connectionExecutor.shutdownNow();
             }

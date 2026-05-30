@@ -180,14 +180,27 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     public void onStatusChanged(TransportStatus status) {
         Log.d(TAG, "Transport status changed: " + status);
 
-        // 1. Immediately emit status updates on the current execution thread to unblock the notification manager UI
+        // Map transport status to domain status
         ConnectionStatus connectionStatus = mapTransportStatusToConnectionStatus(status);
-        deviceRepository.updateConnectionStatus(connectionStatus);
 
-        // 2. Offload heavy network-bound synchronization routines to a worker thread to ensure zero UI stutter
-        if (status == TransportStatus.CONNECTED) {
-            new Thread(this::sendInitialDeviceInfo, "InitialDeviceSenderThread").start();
+        // ◄ הגנה: אם המצב הנוכחי באפליקציה הוא כבר FAILED, אל תיתן לשום סטטוס משני לדרוס אותו
+        if (deviceRepository.getCurrentConnectionStatus() == ConnectionStatus.FAILED) {
+            Log.w(TAG, "Connection already marked as FAILED. Ignoring secondary status: " + status);
+            return;
         }
+
+        // עדכון הסטטוס ברפוזיטורי רק עבור מצבים קריטיים
+        if (status == TransportStatus.CONNECTED) {
+            deviceRepository.updateConnectionStatus(ConnectionStatus.CONNECTED);
+            // מריצים את השליחה רק כשיש חיבור ראשוני תקין ב-100%
+            new Thread(this::sendInitialDeviceInfo, "InitialDeviceSenderThread").start();
+        } else if (status == TransportStatus.CONNECTING || status == TransportStatus.RECONNECTING) {
+            deviceRepository.updateConnectionStatus(connectionStatus);
+        } else if (status == TransportStatus.FAILED) {
+            deviceRepository.updateConnectionStatus(ConnectionStatus.FAILED);
+        }
+
+        // מצבי IDLE ו-DISCONNECTING לא מעדכנים את ה-UI אוטומטית כדי למנוע קפיצות מסך
     }
 
     @Override
@@ -196,22 +209,6 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
         // Handle sequential polling requests from the desktop server on a dedicated worker thread to maintain thread safety
         new Thread(() -> {
-            if (deviceRepository.getCurrentConnectionStatus() == ConnectionStatus.CONNECTED &&
-                    transportManager.isConnected()) {
-
-                boolean shouldSendInitialData = false;
-                try {
-                    String name = transportManager.readFromChannel(DeviceInfoChannels.NAME.getValue());
-                    shouldSendInitialData = name == null || name.isEmpty();
-                } catch (Exception e) {
-                    shouldSendInitialData = true;
-                }
-
-                if (shouldSendInitialData) {
-                    sendInitialDeviceInfo();
-                }
-            }
-
             for (String channel : channels) {
                 handlerRegistry.handlePeerRequest(channel);
             }
@@ -222,6 +219,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     public void onConnectionError(Exception error) {
         Log.e(TAG, "Connection error: " + error.getMessage(), error);
         deviceRepository.updateConnectionStatus(ConnectionStatus.FAILED);
+        stopSelf();
     }
 
     @Override

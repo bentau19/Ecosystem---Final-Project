@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel;
 import com.example.android.domain.entities.DeviceConnectionState;
 import com.example.android.domain.entities.DeviceStorageStats;
 import com.example.android.domain.entities.RemoteDeviceInfo;
+import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
 import com.example.android.domain.usecases.ParseQrDataUseCase;
@@ -40,6 +41,9 @@ public class MainViewModel extends ViewModel {
      */
     public LiveData<DeviceConnectionState> getConnectionState() {
         return repository.getConnectionState();
+    }
+    public LiveData<ConnectionStatus> getConnectionStatus() {
+        return repository.getConnectionStatus();
     }
 
     /**
