@@ -6,7 +6,7 @@ and emits a fully-populated DeviceEntity so the ViewModel can persist and
 display it without touching the network layer directly.
 """
 import threading
-import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 from PySide6.QtCore import QObject, Signal
@@ -130,25 +130,6 @@ class DeviceInfoService(QObject):
         """Stop the service on a background thread, joining all pending workers."""
         threading.Thread(target=self._stop, daemon=True).start()
 
-    def _start(self) -> None:
-        # Guard against double-start with the lifecycle lock.
-        with self._lifecycle_lock:
-            if self._is_running.is_set():
-                return
-            self._is_running.set()
-
-    def _stop(self) -> None:
-        # Join every worker except the calling thread to avoid a deadlock.
-        with self._lifecycle_lock:
-            if not self._is_running.is_set():
-                return
-            self._is_running.clear()
-            pending_threads: list[threading.Thread] = self._get_pending_threads()
-            for t in pending_threads:
-                if t == threading.current_thread():
-                    continue
-                t.join()
-
     def fetch_device_info(self) -> None:
         """Request a fresh device-info read from TauSync channels on a background thread.
 
@@ -214,53 +195,34 @@ class DeviceInfoService(QObject):
             return [t for t in self._threads if t.is_alive()]
 
     def _get_device_info(self) -> None:
-        # Read all device channels sequentially, build the entity, persist, and emit.
+        # Read all device channels in parallel, build the entity, persist, and emit.
         tau = self._connectivity.tau
         if not tau.is_connected:
             return
         try:
+            read = utils.network.read_string_from_channel
+            with ThreadPoolExecutor() as pool:
+                f_id       = pool.submit(read, tau, DeviceInfoChannels.ID.value)
+                f_name     = pool.submit(read, tau, DeviceInfoChannels.NAME_FROM_ANDROID.value)
+                f_os       = pool.submit(read, tau, DeviceInfoChannels.OS_FROM_ANDROID.value)
+                f_battery  = pool.submit(read, tau, DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.value)
+                f_charging = pool.submit(read, tau, DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.value)
+                f_stor_tot = pool.submit(read, tau, DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.value)
+                f_stor_use = pool.submit(read, tau, DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.value)
+                f_ip       = pool.submit(read, tau, DeviceInfoChannels.IP_FROM_ANDROID.value)
             entity = DeviceEntity(
-                id=self._read_device_id(),
-                tag=utils.network.read_string_from_channel(tau, DeviceInfoChannels.TAG_FROM_ANDROID.value) or "default",
-                name=utils.network.read_string_from_channel(tau, DeviceInfoChannels.NAME_FROM_ANDROID.value),
-                os=utils.network.read_string_from_channel(tau, DeviceInfoChannels.OS_FROM_ANDROID.value),
-                battery_level=int(utils.network.read_string_from_channel(tau, DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.value)),
-                battery_charging=(
-                        utils.network.read_string_from_channel(tau,
-                                                               DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.value).lower() == "true"
-                ),
-                storage_total=int(utils.network.read_string_from_channel(tau, DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.value)),
-                storage_used=int(utils.network.read_string_from_channel(tau, DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.value)),
-                last_connected=date.fromisoformat(
-                    utils.network.read_string_from_channel(tau, DeviceInfoChannels.LAST_SEEN_FROM_ANDROID.value)
-                ),
-                ip=utils.network.read_string_from_channel(tau, DeviceInfoChannels.IP_FROM_ANDROID.value),
+                id=f_id.result(),
+                tag="",
+                name=f_name.result(),
+                os=f_os.result(),
+                battery_level=int(f_battery.result()),
+                battery_charging=f_charging.result().lower() == "true",
+                storage_total=round(int(f_stor_tot.result()) / (1000 ** 3), 1),
+                storage_used=round(int(f_stor_use.result()) / (1000 ** 3), 1),
+                last_connected=date.today(),
+                ip=f_ip.result(),
             )
-            print(entity)
             self.save(entity)
             self.device_info_ready.emit(entity)
         except Exception as exc:
             self.read_error.emit(str(exc))
-
-    def _read_device_id(self) -> str:
-        # Exchange ID with the remote device: read what the phone has, assign a new one if empty.
-        tau = self._connectivity.tau
-
-        device_id: str
-        with tau.connect(DeviceInfoChannels.ID.value) as stream:
-            resp = stream.read_line().decode("utf-8").replace("\n", "")
-
-            # Empty string means the remote device has no previously assigned ID.
-            if resp == "":
-                device_id = self._generate_unique_id()
-            else:
-                device_id = resp
-            stream.write_string(device_id)
-        return device_id
-
-    def _generate_unique_id(self) -> str:
-        # Retry until a UUID hex that doesn't collide with any stored device is found.
-        while True:
-            candidate_id = str(uuid.uuid4().hex)
-            if not self._device_repository.id_exists(candidate_id):
-                return candidate_id

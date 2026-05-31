@@ -53,8 +53,8 @@ class DeviceRepository(
             cursor.execute("CREATE TABLE IF NOT EXISTS devices "
                            "(id TEXT PRIMARY KEY, name TEXT,"
                            " os TEXT, tag TEXT, last_connected DATETIME, battery_level INTEGER,"
-                           " battery_charging BOOLEAN, storage_used INTEGER,"
-                           " storage_total INTEGER, ip TEXT)")
+                           " battery_charging BOOLEAN, storage_used REAL,"
+                           " storage_total REAL, ip TEXT)")
             conn.commit()
 
     def id_exists(self, id: str) -> bool:

@@ -97,6 +97,11 @@
       "name": "IP_FROM_PC",
       "value": "ip_pc",
       "description": "PC pushes its last known LAN IP address to Android. Reserved for future bidirectional device info exchange."
+    },
+    {
+      "name": "PC_NAME",
+      "value": "pc_name",
+      "description": "The human-readable name of the Windows PC."
     }
   ]
 }

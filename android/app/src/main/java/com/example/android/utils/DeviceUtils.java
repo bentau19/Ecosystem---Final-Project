@@ -45,7 +45,7 @@ public class DeviceUtils {
      * @return Total storage size in bytes.
      */
     public static long getTotalStorage() {
-        File path = Environment.getDataDirectory();
+        File path = Environment.getExternalStorageDirectory();
         StatFs stat = new StatFs(path.getPath());
         return stat.getTotalBytes();
     }
@@ -55,8 +55,23 @@ public class DeviceUtils {
      * @return Available storage size in bytes.
      */
     public static long getAvailableStorage() {
-        File path = Environment.getDataDirectory();
+        File path = Environment.getExternalStorageDirectory();
         StatFs stat = new StatFs(path.getPath());
         return stat.getAvailableBytes();
+    }
+    /**
+     * Checks if the device is currently plugged into a power source.
+     * @param context Application or Activity context to access system services.
+     * */
+    public static boolean isCharging(Context context) {
+        android.content.IntentFilter ifilter = new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED);
+        android.content.Intent batteryStatus = context.registerReceiver(null, ifilter);
+
+        if (batteryStatus != null) {
+            int status = batteryStatus.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
+            return status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                    status == android.os.BatteryManager.BATTERY_STATUS_FULL;
+        }
+        return false;
     }
 }

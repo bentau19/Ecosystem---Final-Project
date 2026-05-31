@@ -1,6 +1,7 @@
 package com.example.android.domain.entities;
 
 import com.example.android.domain.enums.ConnectionType;
+import com.google.gson.annotations.SerializedName;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -10,9 +11,10 @@ import java.util.Map;
  * Stores hardware identification and real-time dynamic statistics received from the PC.
  */
 public class RemoteDeviceInfo {
-    private final String pcName;
+    private String pcName;
+    @SerializedName("ip")
     private final String ipAddress;
-    private final ConnectionType connectionType;
+    private ConnectionType connectionType;
 
     // Stores flexible system stats (e.g., CPU temp, RAM usage) sent by the PC client
     private final Map<String, String> dynamicStats = new HashMap<>();
@@ -27,6 +29,21 @@ public class RemoteDeviceInfo {
     public String getPcName() { return pcName; }
     public String getPcIp() { return ipAddress; }
     public ConnectionType getConnectionType() { return connectionType; }
+    /**
+     * Updates the PC name once it is retrieved via the network handshake.
+     * @param pcName The hostname sent by the desktop client.
+     */
+    public void setPcName(String pcName) {
+        this.pcName = pcName;
+    }
+
+    /**
+     * Updates the connection type (e.g., once confirmed as WIFI/BLUETOOTH).
+     * @param connectionType The active connection protocol.
+     */
+    public void setConnectionType(ConnectionType connectionType) {
+        this.connectionType = connectionType;
+    }
 
     /**
      * @return A map of dynamic system metrics provided by the remote host.

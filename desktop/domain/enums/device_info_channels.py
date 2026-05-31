@@ -63,3 +63,6 @@ class DeviceInfoChannels(StrEnum):
 
     # PC pushes its last known LAN IP address to Android. Reserved for future bidirectional device info exchange.
     IP_FROM_PC = "ip_pc"
+
+    # The human-readable name of the Windows PC.
+    PC_NAME = "pc_name"

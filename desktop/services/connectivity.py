@@ -4,7 +4,6 @@ Device connectivity service.
 Manages the TauSync TCP connection lifecycle on a background thread,
 emitting Qt signals when a device connects or disconnects.
 """
-import socket
 import threading
 
 from PySide6.QtCore import QObject, Signal
@@ -146,7 +145,7 @@ class ConnectivityService(QObject):
             device_disconnected: After the transport is closed.
         """
         if SessionChannels.DISCONNECT_FROM_PHONE.value in self._tau.get_peer_waiting_words():
-            read = utils.network.read_string_from_channel(self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value)
+            _ = utils.network.read_string_from_channel(self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value)
         else:
             self._notify_phone_of_disconnect()
 
@@ -163,16 +162,7 @@ class ConnectivityService(QObject):
 
     def _connect_to_device(self, hostname: str) -> None:
         # TODO: connect via Bluetooth using the previously stored device ID.
-
-        try:
-            self._stop()
-            ip = utils.network.get_ip_by_hostname(hostname)
-            self._tau.connect_to(ip)
-            self.device_connected.emit()
-        except TimeoutError as ex:
-            print(ex)
-        except socket.gaierror as ex:
-            print(ex)
+        pass
 
     def _listen(self) -> None:
         # Retries on timeout; surfaces unexpected exceptions via connection_error.

@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
 )
 
 from domain.enums.screen import Screen
+from dto.device_info import DeviceInfoDTO, DeviceNameDTO
 from resources.paths import Icons, Styles
 from resources.spacing import Spacing
 from app.app_state import app_state
@@ -25,24 +26,19 @@ class Topbar(QWidget):
 
     def __init__(
             self,
-            title: str,
-            subtitle: str,
             topbar_height: int = 72,
             parent: QWidget | None = None
     ) -> None:
         """Initialize the Topbar.
 
         Args:
-            title (str): Main page title displayed on the left.
-            subtitle (str): Secondary text shown below the title.
             topbar_height (int): Height of the topbar. Defaults to 72.
             parent (Optional[QWidget], optional): Optional parent widget.
                                                   Defaults to None.
         """
         super().__init__(parent)
 
-        self._title: str = title
-        self._subtitle: str = subtitle
+        self._title: str = "Dashboard"
         self._topbar_height: int = topbar_height
         self._device_viewmodel: DeviceViewModel = app_state.device_viewmodel
 
@@ -87,11 +83,11 @@ class Topbar(QWidget):
         title_label: QLabel = QLabel(self._title)
         title_label.setObjectName("titleLabel")
 
-        subtitle_label: QLabel = QLabel(self._subtitle)
-        subtitle_label.setObjectName("subtitleLabel")
+        self._subtitle_label: QLabel = QLabel("")
+        self._subtitle_label.setObjectName("subtitleLabel")
 
         layout.addWidget(title_label)
-        layout.addWidget(subtitle_label)
+        layout.addWidget(self._subtitle_label)
 
         return block
 
@@ -119,6 +115,7 @@ class Topbar(QWidget):
         """Wire the disconnect button, ViewModel signals, and theme changes to their slots."""
         self._disconnect_button.clicked.connect(self._disconnect_from_current_device)
         self._device_viewmodel.device_disconnected.connect(self._move_to_login)
+        self._device_viewmodel.device_infos_updated.connect(self._update_device_info)
         theme_manager.theme_changed.connect(self._setup_style)
 
     @Slot()
@@ -130,3 +127,8 @@ class Topbar(QWidget):
     def _move_to_login(self) -> None:
         # Navigate back to the login screen after the device disconnects.
         navigation_manager.go_to_screen(Screen.LOGIN)
+
+    @Slot(object)
+    def _update_device_info(self, infos: list[DeviceInfoDTO]):
+        name: DeviceNameDTO = infos[0]
+        self._subtitle_label.setText(f"{name.name}")
