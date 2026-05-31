@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout
 from app.app_state import app_state
 from app.theme_manager import theme_manager
 from dto.tool import ToolDTO
-from resources.colors import DashboardColors, LightDashboardColors
+from resources.colors import DashboardColors, LightColors, LightDashboardColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet, themed
@@ -73,7 +73,7 @@ class ToolsSectionHeader(QWidget):
         # Load and apply the themed stylesheet.
         qss: str = load_stylesheet(
             DashboardStyles.TOOLS_SECTION_HEADER,
-            themed([DashboardColors], [LightDashboardColors], theme_manager.is_dark),
+            themed([DashboardColors], [LightDashboardColors, LightColors], theme_manager.is_dark),
         )
         self.setStyleSheet(qss)
 
