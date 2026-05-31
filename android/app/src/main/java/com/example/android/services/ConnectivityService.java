@@ -83,14 +83,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         );
 
         // All other device telemetry data types are registered inline as Getters using generic Lambda functional interfaces
-        registerDeviceInfoHandler(DeviceInfoChannels.NAME.getValue(), this::getDeviceName);
-        registerDeviceInfoHandler(DeviceInfoChannels.OS.getValue(), this::getDeviceOs);
+        registerDeviceInfoHandler(DeviceInfoChannels.NAME_FROM_ANDROID.getValue(), this::getDeviceName);
+        registerDeviceInfoHandler(DeviceInfoChannels.OS_FROM_ANDROID.getValue(), this::getDeviceOs);
         registerDeviceInfoHandler(DeviceInfoChannels.ID.getValue(), this::getLocalDeviceIdValue);
-        registerDeviceInfoHandler(DeviceInfoChannels.IP.getValue(), this::getDeviceIp);
-        registerDeviceInfoHandler(DeviceInfoChannels.BATTERY_LEVEL.getValue(), this::getBatteryLevel);
-        registerDeviceInfoHandler(DeviceInfoChannels.BATTERY_CHARGING.getValue(), this::getBatteryCharging);
-        registerDeviceInfoHandler(DeviceInfoChannels.STORAGE_TOTAL.getValue(), this::getStorageTotal);
-        registerDeviceInfoHandler(DeviceInfoChannels.STORAGE_USED.getValue(), this::getStorageUsed);
+        registerDeviceInfoHandler(DeviceInfoChannels.IP_FROM_ANDROID.getValue(), this::getDeviceIp);
+        registerDeviceInfoHandler(DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.getValue(), this::getBatteryLevel);
+        registerDeviceInfoHandler(DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.getValue(), this::getBatteryCharging);
+        registerDeviceInfoHandler(DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.getValue(), this::getStorageTotal);
+        registerDeviceInfoHandler(DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.getValue(), this::getStorageUsed);
 
         Log.d(TAG, "Registered " + handlerRegistry.getHandlerCount() + " handlers");
     }
@@ -254,14 +254,15 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     private void sendInitialDeviceInfo() {
         Log.d(TAG, "Sending initial device info");
         try {
-            sendDeviceInfo(DeviceInfoChannels.NAME.getValue(), systemDataSource.getDeviceModel());
-            sendDeviceInfo(DeviceInfoChannels.OS.getValue(), "Android " + Build.VERSION.RELEASE);
+            sendDeviceInfo(DeviceInfoChannels.NAME_FROM_ANDROID.getValue(), systemDataSource.getDeviceModel());
+            sendDeviceInfo(DeviceInfoChannels.OS_FROM_ANDROID.getValue(), "Android " + Build.VERSION.RELEASE);
             sendDeviceInfo(DeviceInfoChannels.ID.getValue(), systemDataSource.getDeviceId());
-            sendDeviceInfo(DeviceInfoChannels.IP.getValue(), systemDataSource.getLocalIp());
-            sendDeviceInfo(DeviceInfoChannels.BATTERY_LEVEL.getValue(), String.valueOf(systemDataSource.getBattery()));
-            sendDeviceInfo(DeviceInfoChannels.BATTERY_CHARGING.getValue(), String.valueOf(systemDataSource.isDeviceCharging()));
-            sendDeviceInfo(DeviceInfoChannels.STORAGE_TOTAL.getValue(), String.valueOf(systemDataSource.getRawStorageStats().getTotal()));
-            sendDeviceInfo(DeviceInfoChannels.STORAGE_USED.getValue(), String.valueOf(systemDataSource.getRawStorageStats().getUsed()));
+            sendDeviceInfo(DeviceInfoChannels.IP_FROM_ANDROID.getValue(), systemDataSource.getLocalIp());
+            sendDeviceInfo(DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.getBattery()));
+            sendDeviceInfo(DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.isDeviceCharging()));
+            sendDeviceInfo(DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.getRawStorageStats().getTotal()));
+            sendDeviceInfo(DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.getRawStorageStats().getUsed()));
+
         } catch (Exception e) {
             Log.e(TAG, "Error sending initial device info: " + e.getMessage(), e);
         }
@@ -289,12 +290,35 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
     // ============ Generic Value Providers for Handlers (Telemetry Getters) ============
 
-    private String getDeviceName() { return systemDataSource.getDeviceModel(); }
-    private String getDeviceOs() { return "Android " + Build.VERSION.RELEASE; }
-    private String getLocalDeviceIdValue() { return systemDataSource.getDeviceId(); }
-    private String getDeviceIp() { return systemDataSource.getLocalIp(); }
-    private String getBatteryLevel() { return String.valueOf(systemDataSource.getBattery()); }
-    private String getBatteryCharging() { return String.valueOf(systemDataSource.isDeviceCharging()); }
-    private String getStorageTotal() { return String.valueOf(systemDataSource.getRawStorageStats().getTotal()); }
-    private String getStorageUsed() { return String.valueOf(systemDataSource.getRawStorageStats().getUsed()); }
+    private String getDeviceName() {
+        return systemDataSource.getDeviceModel();
+    }
+
+    private String getDeviceOs() {
+        return "Android " + Build.VERSION.RELEASE;
+    }
+
+    private String getLocalDeviceIdValue() {
+        return systemDataSource.getDeviceId();
+    }
+
+    private String getDeviceIp() {
+        return systemDataSource.getLocalIp();
+    }
+
+    private String getBatteryLevel() {
+        return String.valueOf(systemDataSource.getBattery());
+    }
+
+    private String getBatteryCharging() {
+        return String.valueOf(systemDataSource.isDeviceCharging());
+    }
+
+    private String getStorageTotal() {
+        return String.valueOf(systemDataSource.getRawStorageStats().getTotal());
+    }
+
+    private String getStorageUsed() {
+        return String.valueOf(systemDataSource.getRawStorageStats().getUsed());
+    }
 }

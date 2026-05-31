@@ -18,8 +18,8 @@ class DeviceEntity:
         last_connected: Calendar date of the most recent connection.
         battery_level: Battery percentage in the range 0–100.
         battery_charging: ``True`` if the device is currently charging.
-        storage_used: Used storage in bytes.
-        storage_total: Total storage capacity in bytes.
+        storage_used: Used storage in GB.
+        storage_total: Total storage capacity in GB.
         ip: IPv4 or IPv6 address of the device on the local network.
     """
 
@@ -30,6 +30,6 @@ class DeviceEntity:
     last_connected: date
     battery_level: int
     battery_charging: bool
-    storage_used: int
-    storage_total: int
+    storage_used: float
+    storage_total: float
     ip: str

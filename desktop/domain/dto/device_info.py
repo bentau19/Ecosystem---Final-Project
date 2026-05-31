@@ -54,10 +54,10 @@ class DeviceStorageDTO(DeviceInfoDTO):
     """DTO for the storage usage card.
 
     Attributes:
-        used:  Used storage in bytes.
-        total: Total storage capacity in bytes.
+        used:  Used storage in GB.
+        total: Total storage capacity in GB.
     """
 
-    used: int
-    total: int
+    used: float
+    total: float
 

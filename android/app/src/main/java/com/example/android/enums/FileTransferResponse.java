@@ -4,13 +4,17 @@
 package com.example.android.enums;
 
 /**
- * Accepted/rejected tokens exchanged over the REGULAR_FILE_RESPONSE channel. Both PC and Android must write and compare these exact strings — define them here once and generate both sides.
+ * Accepted/rejected tokens exchanged over the REGULAR_FILE_RESPONSE channels. Each token encodes the responder's identity so a cross-channel read is detectable rather than silently wrong. Both PC and Android must write and compare these exact strings — define them here once and generate both sides.
  */
 public enum FileTransferResponse {
-    /** Receiver accepted the incoming file — sender may open REGULAR_FILE_DATA and stream bytes. */
-    ACCEPTED("accept"),
-    /** Receiver rejected the incoming file — sender must abort without opening REGULAR_FILE_DATA. */
-    REJECTED("reject");
+    /** PC accepted Android's incoming file — Android may open REGULAR_FILE_DATA_ANDROID_TO_PC and stream bytes. */
+    ACCEPTED_FROM_PC("accept_pc"),
+    /** PC rejected Android's incoming file — Android must abort without opening REGULAR_FILE_DATA_ANDROID_TO_PC. */
+    REJECTED_FROM_PC("reject_pc"),
+    /** Android accepted PC's incoming file — PC may open REGULAR_FILE_DATA_PC_TO_ANDROID and stream bytes. */
+    ACCEPTED_FROM_ANDROID("accept_android"),
+    /** Android rejected PC's incoming file — PC must abort without opening REGULAR_FILE_DATA_PC_TO_ANDROID. */
+    REJECTED_FROM_ANDROID("reject_android");
 
     private final String value;
 

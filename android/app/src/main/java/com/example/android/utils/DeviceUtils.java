@@ -45,7 +45,7 @@ public class DeviceUtils {
      * @return Total storage size in bytes.
      */
     public static long getTotalStorage() {
-        File path = Environment.getDataDirectory();
+        File path = Environment.getExternalStorageDirectory();
         StatFs stat = new StatFs(path.getPath());
         return stat.getTotalBytes();
     }
@@ -55,7 +55,7 @@ public class DeviceUtils {
      * @return Available storage size in bytes.
      */
     public static long getAvailableStorage() {
-        File path = Environment.getDataDirectory();
+        File path = Environment.getExternalStorageDirectory();
         StatFs stat = new StatFs(path.getPath());
         return stat.getAvailableBytes();
     }

@@ -4,33 +4,49 @@
 package com.example.android.enums;
 
 /**
- * JSON key names for the DeviceInfo payload exchanged over the DEVICE_INFO channel. Both PC and Android must use the exact same key strings — define them here once and generate both sides.
+ * TauSync meeting-word identifiers for device info channel reads. Each field that can be pushed by either side is split by direction so both parties can push simultaneously without colliding on the same meeting-word. Both PC and Android must call tau.connect() with the exact same string — define them here once and generate both sides.
  */
 public enum DeviceInfoChannels {
-    /** Unique device identifier. */
+    /** Bidirectional ID handshake channel: Android writes its current ID (or empty string for new devices), PC reads it and writes back the assigned ID on the same stream. Not split by direction because both parties read AND write within the same tau.connect() session. */
     ID("id"),
-    /** Human-readable device name, e.g. "Pixel 8 Pro". */
-    NAME("name"),
-    /** OS version string, e.g. "Android 14". */
-    OS("os"),
-    /** User-assigned label, e.g. "Home". */
-    TAG("tag"),
-    /** Human-readable recency string, e.g. "now", "today", "3 days ago". */
-    LAST_SEEN("last_seen"),
-    /** Battery level as an integer percentage (0–100). */
-    BATTERY_LEVEL("battery_level"),
-    /** Whether the device is currently charging. */
-    BATTERY_CHARGING("battery_charging"),
-    /** Used storage in bytes. */
-    STORAGE_USED("storage_used"),
-    /** Total storage capacity in bytes. */
-    STORAGE_TOTAL("storage_total"),
-    /** Last known LAN IP address of the device, used to reconnect. */
-    IP("ip"),
+    /** Android pushes its human-readable device name to PC, e.g. "Pixel 8 Pro". */
+    NAME_FROM_ANDROID("name_android"),
+    /** PC pushes its human-readable device name to Android, e.g. "Lavi's Laptop". Reserved for future bidirectional device info exchange. */
+    NAME_FROM_PC("name_pc"),
+    /** Android pushes its OS version string to PC, e.g. "Android 14". */
+    OS_FROM_ANDROID("os_android"),
+    /** PC pushes its OS version string to Android, e.g. "Windows 11". Reserved for future bidirectional device info exchange. */
+    OS_FROM_PC("os_pc"),
+    /** Android pushes its user-assigned label to PC, e.g. "Home". */
+    TAG_FROM_ANDROID("tag_android"),
+    /** PC pushes its user-assigned label to Android. Reserved for future bidirectional device info exchange. */
+    TAG_FROM_PC("tag_pc"),
+    /** Android pushes a human-readable recency string to PC, e.g. "now", "today", "3 days ago". */
+    LAST_SEEN_FROM_ANDROID("last_seen_android"),
+    /** PC pushes a human-readable recency string to Android. Reserved for future bidirectional device info exchange. */
+    LAST_SEEN_FROM_PC("last_seen_pc"),
+    /** Android pushes its battery level as an integer percentage (0-100) to PC. */
+    BATTERY_LEVEL_FROM_ANDROID("battery_level_android"),
+    /** PC pushes its battery level to Android (relevant for laptops). Reserved for future bidirectional device info exchange. */
+    BATTERY_LEVEL_FROM_PC("battery_level_pc"),
+    /** Android pushes whether it is currently charging to PC. */
+    BATTERY_CHARGING_FROM_ANDROID("battery_charging_android"),
+    /** PC pushes whether it is currently charging to Android. Reserved for future bidirectional device info exchange. */
+    BATTERY_CHARGING_FROM_PC("battery_charging_pc"),
+    /** Android pushes its used storage in bytes to PC. */
+    STORAGE_USED_FROM_ANDROID("storage_used_android"),
+    /** PC pushes its used storage in bytes to Android. Reserved for future bidirectional device info exchange. */
+    STORAGE_USED_FROM_PC("storage_used_pc"),
+    /** Android pushes its total storage capacity in bytes to PC. */
+    STORAGE_TOTAL_FROM_ANDROID("storage_total_android"),
+    /** PC pushes its total storage capacity in bytes to Android. Reserved for future bidirectional device info exchange. */
+    STORAGE_TOTAL_FROM_PC("storage_total_pc"),
+    /** Android pushes its last known LAN IP address to PC, used to reconnect. */
+    IP_FROM_ANDROID("ip_android"),
+    /** PC pushes its last known LAN IP address to Android. Reserved for future bidirectional device info exchange. */
+    IP_FROM_PC("ip_pc"),
     /** The human-readable name of the Windows PC. */
-    PC_NAME("pc_name"),
-    /** The Windows version and build. */
-    PC_OS("pc_os");
+    PC_NAME("pc_name");
 
     private final String value;
 
