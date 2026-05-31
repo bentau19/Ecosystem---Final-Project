@@ -183,7 +183,6 @@ class ConnectivityService(QObject):
             except TimeoutError:
                 continue
             except Exception as exc:
-                print(exc)
                 self.connection_error.emit(str(exc))
 
     def _get_pending_threads(self) -> list[threading.Thread]:

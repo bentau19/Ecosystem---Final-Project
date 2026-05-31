@@ -772,7 +772,6 @@ class TauSync:
         try:
             self._manager.Disconnect()
         except Exception as e:
-            print(e)
             raise
 
     def new_manager(self) -> "TauSync":
