@@ -12,13 +12,12 @@ class ToolViewModel(QObject):
     DTOs and maintains the in-memory enabled-tool list.
 
     Signals:
-        tool_updated (Signal[object]): Emitted when a tool is updated.
-        tool_added (Signal[object]): Emitted with the new :class:`~domain.dto.tool.ToolDTO`
-            when a tool is added.
-        tool_deleted (Signal[str]): Emitted with the tool title when a tool is deleted.
-        tools_loaded (Signal[list]): Emitted with the current enabled-tool list.
-        tool_count_changed (Signal[int]): Emitted with the new count when the
-            number of enabled tools changes.
+        tools_loaded (Signal[list]): Emitted with the current ``list[ToolDTO]``
+            of enabled tools — fires both on async fetch completion and on an
+            explicit :meth:`load_enabled_tools` call.
+        tools_changed (Signal[object]): Emitted alongside ``tools_loaded``
+            whenever the enabled-tool list changes, for subscribers that do
+            not need to distinguish initial load from refresh.
     """
 
     tools_changed: Signal = Signal(object)
