@@ -8,7 +8,6 @@ import threading
 
 from PySide6.QtCore import QObject, Signal
 
-import utils.network
 from domain.enums.session_channels import SessionChannels
 from tausync_py import TauSync
 
@@ -115,7 +114,7 @@ class ConnectivityService(QObject):
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            self.disconnect_device()
+            self._disconnect_device()  # call private directly — already on a bg thread
             pending_threads: list[threading.Thread] = self._get_pending_threads()
             for t in pending_threads:
                 if t == threading.current_thread():
@@ -132,23 +131,27 @@ class ConnectivityService(QObject):
         t.start()
 
     def disconnect_device(self) -> None:
-        """Close the TauSync transport and emit ``device_disconnected``.
+        """Initiate device disconnection on a background thread.
 
-        Raw close only — does not send any notification to the phone.
-        This is the shared tear-down primitive used by both the PC-initiated
-        path (:meth:`_stop`) and the phone-initiated path
-        (:class:`~services.phone_request.PhoneRequestService`).  When the PC
-        is initiating the disconnect, call :meth:`_notify_phone_of_disconnect`
-        first so the phone can tear down gracefully before the transport closes.
+        Non-blocking — returns immediately.  All TauSync I/O is moved off the
+        calling thread so the UI is never stalled by a blocking CLR call.
+
+        This is the shared public entry-point used by the VM and by
+        :class:`~services.phone_request.PhoneRequestService`.  :meth:`_stop`
+        calls :meth:`_disconnect_device` directly instead (it already runs on
+        a background thread).
 
         Emits:
-            device_disconnected: After the transport is closed.
+            device_disconnected: Asynchronously, after the transport closes.
         """
-        if SessionChannels.DISCONNECT_FROM_PHONE.value in self._tau.get_peer_waiting_words():
-            _ = utils.network.read_string_from_channel(self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value)
-        else:
-            self._notify_phone_of_disconnect()
+        threading.Thread(target=self._stop, daemon=True).start()
 
+    def _disconnect_device(self) -> None:
+        # Guard — nothing to do if already disconnected.
+        if not self.connected:
+            return
+        # Notify the phone while the transport is still open, then close it.
+        self._notify_phone_of_disconnect()
         self._tau.disconnect()
         self.device_disconnected.emit()
 
@@ -162,6 +165,7 @@ class ConnectivityService(QObject):
 
     def _connect_to_device(self, hostname: str) -> None:
         # TODO: connect via Bluetooth using the previously stored device ID.
+        self.device_connected.emit()
         pass
 
     def _listen(self) -> None:
@@ -173,6 +177,7 @@ class ConnectivityService(QObject):
             except TimeoutError:
                 continue
             except Exception as exc:
+                print(exc)
                 self.connection_error.emit(str(exc))
 
     def _get_pending_threads(self) -> list[threading.Thread]:

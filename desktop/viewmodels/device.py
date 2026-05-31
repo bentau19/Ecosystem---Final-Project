@@ -128,7 +128,7 @@ class DeviceViewModel(QObject):
 
     def disconnect_device(self) -> None:
         """Disconnect the currently connected device via the connectivity service."""
-        self._connectivity_service.stop()
+        self._connectivity_service.disconnect_device()
 
     # ── Private helpers ────────────────────────────────────────────────────────
 

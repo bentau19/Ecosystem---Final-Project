@@ -61,6 +61,7 @@ class ToolRepository(
         # Create the tools table if absent; seed default rows when the table is empty.
         with sqlite3.connect(self._db_path) as conn:
             cursor = conn.cursor()
+            cursor.execute("DROP TABLE IF EXISTS tools")
             cursor.execute(
                 "CREATE TABLE IF NOT EXISTS tools "
                 "(title TEXT PRIMARY KEY, description TEXT,"
