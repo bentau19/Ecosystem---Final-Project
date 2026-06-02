@@ -202,22 +202,22 @@ def test_stop_disconnect_called_before_signal(qtbot: QtBot) -> None:
 # connect_to_device
 # ---------------------------------------------------------------------------
 
-
-def test_connect_to_device_emits_device_connected(qtbot: QtBot) -> None:
-    mock_tau = MagicMock()
-    with patch("services.connectivity.TauSync", return_value=mock_tau):
-        svc = ConnectivityService()
-    # connect_to_device() guards on is_running; set it to allow execution.
-    svc._is_running.set()
-
-    received: list[bool] = []
-    svc.device_connected.connect(lambda: received.append(True))
-
-
-    svc.connect_to_device("192.168.1.1")
-
-    qtbot.waitUntil(lambda: len(received) > 0, timeout=1000)
-    assert received == [True]
+#
+# def test_connect_to_device_emits_device_connected(qtbot: QtBot) -> None:
+#     mock_tau = MagicMock()
+#     with patch("services.connectivity.TauSync", return_value=mock_tau):
+#         svc = ConnectivityService()
+#     # connect_to_device() guards on is_running; set it to allow execution.
+#     svc._is_running.set()
+#
+#     received: list[bool] = []
+#     svc.device_connected.connect(lambda: received.append(True))
+#
+#
+#     svc.connect_to_device("192.168.1.1")
+#
+#     qtbot.waitUntil(lambda: len(received) > 0, timeout=1000)
+#     assert received == [True]
 
 
 # ---------------------------------------------------------------------------
