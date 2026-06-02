@@ -1,97 +1,308 @@
-# 📱 Android Ecosystem App - Project Architecture
+# Android App README
 
-This project follows **Clean Architecture** principles combined with the **MVVM (Model-View-ViewModel)** design pattern. The architecture is strictly layered to ensure a clear separation of concerns, high testability, and scalability.
+This folder contains the Android side of the Ecosystem / SyncDose project. The Android app connects to the desktop app through the local TauSync library, displays device and connection state, sends Android device information to the PC, and handles PC-initiated channel requests.
 
----
+The app follows a Clean Architecture style with MVVM for UI state, plus a dedicated communication layer built around `TransportManager` and channel handlers.
 
-## 🔄 Data Flow & Communication
+## Modules
 
-To ensure a unidirectional data flow and complete isolation of the business logic, the application follows this communication chain:
-
-**UI (Fragment)** → **ViewModel** → **Use Cases** → **Repository** → **DataSource** → **Android System**
-
-1.  **UI:** Triggers an action (e.g., "Refresh Stats" button click).
-2.  **ViewModel:** Receives the trigger and calls the appropriate Use Case.
-3.  **Use Case:** Contains the specific business logic for that action.
-4.  **Repository:** Coordinates data between the local system and the remote PC.
-5.  **DataSource:** Interacts with the Android Framework (Battery, IP, Storage).
-6.  **LiveData Flow:** The Repository updates the LiveData, which the UI observes for automatic updates.
-
----
-
-## 📂 Project Structure
-
-```plaintext
-app/src/main/java/com/example/android/
-│
-├── 📂 ui/                        # Presentation Layer (Views)
-│   ├── 📂 activities/            # Main Host Activity
-│   ├── 📂 fragments/             # Connect Screen, Actions Dashboard
-│   ├── 📂 adapters/              # RecyclerView adapters (ToolsAdapter)
-│   └── 📂 models/                # UI-specific models (ToolItem)
-│
-├── 📂 viewmodel/                 # Logic Layer (UI State & ViewModelFactory)
-│   ├── MainViewModel.java        # Coordinates between Use Cases and UI
-│   └── MainViewModelFactory.java # Dependency Injection (Manual DI)
-│
-├── 📂 domain/                    # Business Logic Layer (Pure Java)
-│   ├── 📂 entities/              # DeviceConnectionState, LocalDeviceInfo, RemoteDeviceInfo
-│   ├── 📂 enums/                 # ConnectionType (WIFI, BLUETOOTH)
-│   └── 📂 usecases/              # Single Action Logic (ParseQr, RefreshStats, ConnectToDevice)
-│
-├── 📂 data/                      # Data Access Layer 
-│   └── 📂 datasource/            # Raw System Access (SystemDataSource - Context dependent)
-├── 📂 repositories/          # Single Source of Truth (DeviceRepository)
-│
-├── 📂 serializers/               # Data Transformation Layer
-│   └── DeviceSerializer.java     # JSON Mapping & Serialization logic
-│
-├── 📂 network/                   # Communication Layer
-│   ├── ConnectionService.java    # Foreground Service for persistent socket connection
-│   ├── SocketManager.java        # TCP Socket handling
-│   └── PacketParser.java         # Protocol parsing and data framing
-│
-└── 📂 utils/                     # Shared Helpers
-    ├── DeviceUtils.java          # Hardware helpers (Storage, Battery)
-    └── NetworkUtils.java         # IP & Connectivity helpers
+```text
+android/
+├── app/                 # Main Android application
+├── gradle/              # Gradle wrapper files
+├── build.gradle.kts     # Root Android build configuration
+└── settings.gradle.kts  # Includes app and tausync-lib modules
 ```
 
----
+## Source Structure
 
-## 🧩 App Architecture
+```text
+app/src/main/java/com/example/android/
+├── data/
+│   └── datasource/
+├── domain/
+│   ├── entities/
+│   ├── enums/
+│   └── usecases/
+├── enums/
+├── network/
+│   ├── handlers/
+│   └── transport/
+├── repositories/
+├── serializers/
+├── services/
+├── testing/
+├── ui/
+│   ├── adapters/
+│   ├── fragments/
+│   ├── models/
+│   └── MainActivity.java
+├── utils/
+└── viewmodel/
+```
 
-### 1. Clean Architecture & Layer Separation
-The project is divided into Presentation, Domain, and Data layers. By moving the core logic into Use Cases, the ViewModel remains lightweight and focuses only on UI state management. The Domain layer has zero dependencies on the Android Framework, allowing for fast and reliable Unit Testing.
+## Architecture Overview
 
-### 2. Single Activity Architecture
-The application uses a single MainActivity as a container, switching between various Fragments. This approach provides a smoother user experience, optimized memory management, and simplified shared element transitions.
+The main data flow is:
 
-### 3. MVVM Pattern
-By separating the UI (Fragments) from the logic (ViewModels), the app ensures that the business logic survives configuration changes (like screen rotations). The UI "observes" data changes via LiveData, making the interface reactive and stable.
+```text
+UI Fragment -> MainViewModel -> Use Case -> Repository -> DataSource / Service
+```
 
-### 4. Foreground Service Strategy
-To maintain a stable ecosystem connection between the Phone and the PC, we utilize a Foreground Service. This ensures the Socket connection remains active even when the user is not actively interacting with the app.
+For communication requests from the PC, the flow is:
 
-### 5. Repository & Data Source Pattern
-We distinguish between the DataSource (raw system calls) and the Repository (business logic/data management). The DeviceRepository acts as the single source of truth, managing the LiveData that the UI observes..
+```text
+TauSyncTransportManager
+    -> ConnectivityService.onPeerRequestsAvailable(...)
+    -> ChannelHandlerRegistry
+    -> specific ChannelHandler
+```
 
-### 6. Manual Dependency Injection (Factory Pattern)
-To maintain a "Pure Logic" ViewModel, we utilize a MainViewModelFactory. This component handles the instantiation of DataSources and Repositories, injecting them into the ViewModel. This prevents memory leaks and decouples the ViewModel from the Android Context.
+## UI Layer
 
----
+Location:
 
-## 🧪 Testing Strategy
-The architecture is designed for 100% testability of business logic:
+```text
+ui/
+```
 
-* **Unit Tests (src/test):** Testing ViewModels, UseCases, and Repositories using Mockito to mock dependencies.
+Important files:
 
-* **JUnit: Used for validating** Serialization and Data integrity.
+- `MainActivity.java` - Main host activity.
+- `fragments/ConnectFragment.java` - Connection screen and QR flow.
+- `fragments/ActionsFragment.java` - Main connected dashboard/actions screen.
+- `adapters/ToolsAdapter.java` - Adapter for action/tool items.
+- `models/ToolItem.java` - UI model for dashboard tools.
 
-* **Architecture Isolation:** Use Cases allow testing of specific actions (like QR parsing) without running an Android Emulator.
+## ViewModel Layer
 
----
+Location:
 
-## ⚙️ Environment & Requirements
+```text
+viewmodel/
+```
+
+Important files:
+
+- `MainViewModel.java` - Coordinates UI state and user actions.
+- `MainViewModelFactory.java` - Manual dependency creation for the ViewModel.
+
+The ViewModel exposes state to the UI and delegates business actions to use cases or repositories.
+
+## Domain Layer
+
+Location:
+
+```text
+domain/
+```
+
+Subfolders:
+
+- `entities/` - Core app models such as `DeviceConnectionState`, `LocalDeviceInfo`, `RemoteDeviceInfo`, and `DeviceStorageStats`.
+- `enums/` - App-level enums such as `ConnectionStatus` and `ConnectionType`.
+- `usecases/` - Focused business actions.
+
+Current use cases:
+
+- `ParseQrDataUseCase.java`
+- `ConnectToDeviceUseCase.java`
+- `RefreshLocalStatsUseCase.java`
+
+## Data Layer
+
+Location:
+
+```text
+data/datasource/
+```
+
+Important file:
+
+- `SystemDataSource.java` - Reads Android system data such as device model, device ID, local IP, battery status, charging state, and storage stats.
+
+This is the layer that talks directly to Android framework APIs.
+
+## Repository Layer
+
+Location:
+
+```text
+repositories/
+```
+
+Important file:
+
+- `DeviceRepository.java` - Single source of truth for the current device, remote PC, and connection state.
+
+The repository owns the observable app state used by the UI and is also updated by background services when connection events arrive.
+
+## Services
+
+Location:
+
+```text
+services/
+```
+
+Important files:
+
+- `ConnectivityService.java` - Foreground service that owns the active PC connection.
+- `AppNotificationManager.java` - Manages the foreground service notification.
+
+`ConnectivityService` is responsible for:
+
+- Creating the `TauSyncTransportManager`.
+- Creating and configuring the `ChannelHandlerRegistry`.
+- Registering all channel handlers.
+- Connecting to the PC by IP.
+- Sending initial Android device info after connection.
+- Dispatching PC channel requests to the correct handler.
+- Cleaning up transport and repository state on disconnect.
+
+## Network Layer
+
+Location:
+
+```text
+network/
+├── transport/
+└── handlers/
+```
+
+### Transport
+
+Location:
+
+```text
+network/transport/
+```
+
+Important files:
+
+- `TransportManager.java` - Interface for connection, read/write, status, and peer request events.
+- `TauSyncTransportManager.java` - TauSync-based implementation of `TransportManager`.
+- `TransportStatus.java` - Internal transport status enum.
+
+`TauSyncTransportManager` handles connection lifecycle, channel reads/writes, polling for peer waiting words, and status callbacks to `ConnectivityService`.
+
+### Channel Handlers
+
+Location:
+
+```text
+network/handlers/
+```
+
+Important files:
+
+- `ChannelHandler.java` - Common interface for all channel handlers.
+- `ChannelHandlerRegistry.java` - Maps channel names to handlers.
+- `DeviceInfoChannelHandler.java` - Generic handler for Android device info channels.
+- `PCNameChannelHandler.java` - Reads the PC name and updates the repository.
+- `DisconnectChannelHandler.java` - Handles PC-initiated disconnects.
+- `FileMetadataChannelHandler.java` - Reads file metadata sent from the PC before a file transfer.
+
+New PC-initiated features should usually be implemented as a new `ChannelHandler` and registered in `ConnectivityService.registerChannelHandlers()`.
+
+## Generated Channel Enums
+
+Location:
+
+```text
+enums/
+```
+
+Important files:
+
+- `DeviceInfoChannels.java`
+- `SessionChannels.java`
+- `FileTransferChannels.java`
+- `FileTransferResponse.java`
+- `DeviceInfoField.java`
+- `Channel.java`
+
+These files define the shared channel names used by both Android and desktop. Many of them are generated from the shared definitions under `shared/enums/`.
+
+Avoid editing generated enum files manually. Change the shared source definitions and rerun code generation when possible.
+
+## Device Info Flow
+
+After a successful connection, Android sends initial device information to the desktop:
+
+- Device name
+- Android OS version
+- Device ID
+- Local IP address
+- Battery level
+- Charging state
+- Total storage
+- Used storage
+
+These values are read from `SystemDataSource` and sent through `ConnectivityService.sendInitialDeviceInfo()`.
+
+The desktop can also request values later through registered device-info channels handled by `DeviceInfoChannelHandler`.
+
+## Serializers
+
+Location:
+
+```text
+serializers/
+```
+
+Important file:
+
+- `DeviceSerializer.java` - Converts device objects to and from JSON.
+
+## Utils
+
+Location:
+
+```text
+utils/
+```
+
+Important files:
+
+- `DeviceUtils.java` - Device and hardware helper methods.
+- `NetworkUtils.java` - Network and IP helper methods.
+- `NetworkHandler.java` - Small wrapper around TauSync channel read/write operations.
+
+`NetworkHandler` is used by `TauSyncTransportManager`; UI classes should not call it directly.
+
+## Testing
+
+Unit tests:
+
+```text
+app/src/test/java/com/example/android/
+├── repositories/
+├── serializers/
+└── viewmodel/
+```
+
+Instrumentation tests:
+
+```text
+app/src/androidTest/java/com/example/android/
+```
+
+Current tests include:
+
+- `DeviceRepositoryTest.java`
+- `DeviceSerializerTest.java`
+- `MainViewModelTest.java`
+
+Manual TauSync testing activities are under:
+
+```text
+testing/
+```
+
+These are useful for local protocol checks but are not part of the normal app flow.
+
+## Requirements
 
 * **Android Studio:** Panda 1 | 2025.3.1 Patch 1 or newer
 * **JDK:** Java 21
@@ -99,10 +310,17 @@ The architecture is designed for 100% testability of business logic:
 * **Min SDK:** 24 (Android 7.0)
 * **Target SDK:** 36
 
----
+## Running The App
 
-## 🚀 Getting Started
-**1. Clone the repository:** git clone https://github.com/bentau19/Ecosystem---Final-Project.git
+Open this folder in Android Studio:
+
+```text
+android/
+```
+
+Then:
+
+**1. Clone the repository:** git clone < github project URL >
 
 **2. Open in Android Studio:** Select the android folder.
 
@@ -111,3 +329,15 @@ The architecture is designed for 100% testability of business logic:
 **4. Run Tests:** Right-click the java/com.example.android (test) folder and select "Run 'All Tests'" to verify the logic.
 
 **5. Build & Run:** Deploy to a physical device or emulator (API 24+).
+
+
+## Adding A New PC-Initiated Channel
+
+Recommended process:
+
+1. Add the channel to the shared enum definitions if it must be shared with desktop.
+2. Regenerate Android and desktop enums.
+3. Create a new class that implements `ChannelHandler`.
+4. Register it in `ConnectivityService.registerChannelHandlers()`.
+5. Keep all TauSync read/write logic inside the handler or transport layer.
+6. Update tests if the handler contains meaningful logic.
