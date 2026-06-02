@@ -223,6 +223,26 @@ class DeviceInfoService(QObject):
                 ip=f_ip.result(),
             )
             self.save(entity)
+            
+            # Send PC name to the connected Android device on a background thread
+            self._spawn(self._send_pc_name)
+            
             self.device_info_ready.emit(entity)
         except Exception as exc:
             self.read_error.emit(str(exc))
+
+    def _send_pc_name(self) -> None:
+        # Send PC name to the connected Android device.
+        # Runs on a background thread so it doesn't block the main device info read.
+        tau = self._connectivity.tau
+        if not tau.is_connected:
+            print("[Desktop] Transport not connected, skipping PC name transmission")
+            return
+        
+        try:
+            pc_name = utils.network.get_pc_name()
+            print(f"[Desktop] Sending PC name to Android: {pc_name}")
+            utils.network.write_string_to_channel(tau, DeviceInfoChannels.PC_NAME.value, pc_name)
+            print(f"[Desktop] PC name sent successfully")
+        except Exception as e:
+            print(f"[Desktop] Warning: Failed to send PC name to Android: {e}")

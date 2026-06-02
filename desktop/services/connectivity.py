@@ -144,21 +144,35 @@ class ConnectivityService(QObject):
         Emits:
             device_disconnected: After the transport is closed.
         """
-        if SessionChannels.DISCONNECT_FROM_PHONE.value in self._tau.get_peer_waiting_words():
-            _ = utils.network.read_string_from_channel(self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value)
+        print(f"[Desktop] disconnect_device() called, checking for phone-initiated disconnect")
+        waiting_words = self._tau.get_peer_waiting_words()
+        print(f"[Desktop] Waiting words from peer: {waiting_words}")
+        
+        if SessionChannels.DISCONNECT_FROM_PHONE.value in waiting_words:
+            print(f"[Desktop] ✓ Phone-initiated disconnect detected on channel '{SessionChannels.DISCONNECT_FROM_PHONE.value}'")
+            try:
+                signal = utils.network.read_string_from_channel(self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value)
+                print(f"[Desktop] ✓ Phone disconnect signal received and processed: '{signal}'")
+            except Exception as e:
+                print(f"[Desktop] ⚠ Failed to read phone disconnect signal: {e}")
         else:
+            print(f"[Desktop] PC-initiated disconnect (no phone signal on channel), notifying phone")
             self._notify_phone_of_disconnect()
 
+        print(f"[Desktop] Closing TauSync transport")
         self._tau.disconnect()
         self.device_disconnected.emit()
+        print(f"[Desktop] Device disconnected, emitted device_disconnected signal")
 
     def _notify_phone_of_disconnect(self) -> None:
         # Failures are swallowed so a missing/gone phone never blocks our own teardown.
         try:
+            print(f"[Desktop] Sending disconnect notification to phone")
             with self._tau.connect(SessionChannels.DISCONNECT_FROM_PC.value) as stream:
                 stream.write_string("disconnect")
-        except Exception:
-            pass
+            print(f"[Desktop] Disconnect notification sent to phone")
+        except Exception as e:
+            print(f"[Desktop] Warning: Failed to notify phone of disconnect: {e}")
 
     def _connect_to_device(self, hostname: str) -> None:
         # TODO: connect via Bluetooth using the previously stored device ID.

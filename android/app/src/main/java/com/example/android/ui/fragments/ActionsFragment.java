@@ -54,15 +54,19 @@ public class ActionsFragment extends Fragment {
         viewModel.getConnectionState().observe(getViewLifecycleOwner(), state -> {
             if (state == null) return;
 
+            android.util.Log.d("ActionsFragment", "ConnectionState changed");
+
             // --- Update Remote PC Connection State ---
             if (state.isConnected()) {
                 RemoteDeviceInfo pc = state.getRemotePC();
+                android.util.Log.d("ActionsFragment", "Connected! PC Name: " + pc.getPcName() + ", IP: " + pc.getPcIp());
                 deviceNameText.setText(pc.getPcName());
                 statusText.setText("Connected via " + pc.getConnectionType() + " (" + pc.getPcIp()+")");
                 statusDot.setBackgroundResource(R.drawable.green_dot);
                 updateUIState(view, true);
             } else {
                 // Handle disconnection: reset UI and navigate back to connection screen
+                android.util.Log.d("ActionsFragment", "Disconnected");
                 deviceNameText.setText("No Device");
                 statusText.setText("Disconnected");
                 statusDot.setBackgroundResource(R.drawable.red_dot);

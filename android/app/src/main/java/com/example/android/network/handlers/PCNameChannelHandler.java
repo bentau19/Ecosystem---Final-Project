@@ -1,6 +1,8 @@
 package com.example.android.network.handlers;
 
 import android.util.Log;
+
+import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.enums.DeviceInfoChannels;
 import com.example.android.network.transport.TransportManager;
 import com.example.android.repositories.DeviceRepository;
@@ -33,18 +35,29 @@ public class PCNameChannelHandler implements ChannelHandler {
     public void onPeerRequest() {
         try {
             String pcName = transportManager.readFromChannel(DeviceInfoChannels.PC_NAME.getValue());
-            if (!pcName.isEmpty()) {
+            Log.d(TAG, "Raw PC name from channel: '" + pcName + "'");
+            
+            if (pcName != null && !pcName.isEmpty()) {
                 Log.d(TAG, "PC name received: " + pcName);
 
                 // Update the repository with the PC name
                 if (repository.getCurrentConnectionState() != null &&
                     repository.getCurrentConnectionState().getRemotePC() != null) {
-                    repository.getCurrentConnectionState().getRemotePC().setPcName(pcName);
+                    RemoteDeviceInfo pc = repository.getCurrentConnectionState().getRemotePC();
+                    Log.d(TAG, "Old PC name: " + pc.getPcName());
+                    pc.setPcName(pcName);
+                    Log.d(TAG, "New PC name set to: " + pc.getPcName());
                     repository.notifyStatusChanged();  // Notify observers of the change
+                    Log.d(TAG, "Repository notification sent");
+                } else {
+                    Log.w(TAG, "RemotePC object is null, cannot update PC name");
                 }
+            } else {
+                Log.w(TAG, "PC name is empty or null");
             }
         } catch (Exception e) {
             Log.e(TAG, "Error handling PC name request: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
