@@ -14,6 +14,7 @@ import com.example.android.data.datasource.SystemDataSource;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.domain.enums.ConnectionType;
+import com.example.android.enums.Channel;
 import com.example.android.enums.DeviceInfoChannels;
 import com.example.android.enums.SessionChannels;
 import com.example.android.network.handlers.ChannelHandlerRegistry;
@@ -190,11 +191,11 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             // Hard disconnect resets state models so the application re-opens directly on the connect screen
             deviceRepository.disconnect();
         }
-        
+
         // Remove the foreground notification so it doesn't stay in the status bar
         Log.d(TAG, "Removing foreground notification");
         stopForeground(Service.STOP_FOREGROUND_REMOVE);
-        
+
         // Stop the service so it doesn't keep running in the background
         Log.d(TAG, "Stopping ConnectivityService");
         stopSelf();
@@ -315,7 +316,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             try {
                 // שליחת אות הניתוק
                 if (transportManager != null && transportManager.isConnected()) {
-                    transportManager.writeToChannel("session_control", "disconnect");
+                    transportManager.writeToChannel(SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect");
                     Log.d(TAG, "Disconnect signal sent to PC");
                 }
                 // המתנה קצרה לוודא שהחבילה יצאה

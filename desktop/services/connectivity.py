@@ -121,6 +121,7 @@ class ConnectivityService(QObject):
                 if t == threading.current_thread():
                     continue
                 t.join()
+            print("b")
 
     def _spawn(self, target, *args):
         # All thread creation must go through here so teardown can join every worker.
@@ -144,31 +145,31 @@ class ConnectivityService(QObject):
         Emits:
             device_disconnected: After the transport is closed.
         """
-        print(f"[Desktop] disconnect_device() called, checking for phone-initiated disconnect")
+
+        if not self._tau.is_connected:
+            return
+
         waiting_words = self._tau.get_peer_waiting_words()
-        print(f"[Desktop] Waiting words from peer: {waiting_words}")
-        
+
         if SessionChannels.DISCONNECT_FROM_PHONE.value in waiting_words:
-            print(f"[Desktop] ✓ Phone-initiated disconnect detected on channel '{SessionChannels.DISCONNECT_FROM_PHONE.value}'")
             try:
                 signal = utils.network.read_string_from_channel(self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value)
-                print(f"[Desktop] ✓ Phone disconnect signal received and processed: '{signal}'")
             except Exception as e:
                 print(f"[Desktop] ⚠ Failed to read phone disconnect signal: {e}")
         else:
-            print(f"[Desktop] PC-initiated disconnect (no phone signal on channel), notifying phone")
             self._notify_phone_of_disconnect()
 
-        print(f"[Desktop] Closing TauSync transport")
         self._tau.disconnect()
         self.device_disconnected.emit()
-        print(f"[Desktop] Device disconnected, emitted device_disconnected signal")
 
     def _notify_phone_of_disconnect(self) -> None:
         # Failures are swallowed so a missing/gone phone never blocks our own teardown.
+        # timeout_seconds is mandatory: without it tau.connect() blocks forever waiting
+        # for the phone to open the meeting-word channel, which prevents device_disconnected
+        # from ever being emitted and leaves the UI stuck on the dashboard.
         try:
             print(f"[Desktop] Sending disconnect notification to phone")
-            with self._tau.connect(SessionChannels.DISCONNECT_FROM_PC.value) as stream:
+            with self._tau.connect(SessionChannels.DISCONNECT_FROM_PC.value, timeout_seconds=10) as stream:
                 stream.write_string("disconnect")
             print(f"[Desktop] Disconnect notification sent to phone")
         except Exception as e:

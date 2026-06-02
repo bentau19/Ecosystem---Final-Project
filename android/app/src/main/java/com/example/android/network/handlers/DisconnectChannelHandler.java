@@ -37,6 +37,8 @@ public class DisconnectChannelHandler implements ChannelHandler {
     public void onPeerRequest() {
         try {
             Log.d(TAG, "[Disconnect] Attempting to read disconnect signal from PC");
+            Log.d(TAG, "[Disconnect-val] SessionChannels.DISCONNECT_FROM_PC.getValue()");
+
             String disconnectSignal = transportManager.readFromChannel(SessionChannels.DISCONNECT_FROM_PC.getValue());
             Log.d(TAG, "[Disconnect] Signal received from PC: '" + disconnectSignal + "'");
 
