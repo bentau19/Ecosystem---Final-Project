@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, Signal
 
 from domain.enums.session_channels import SessionChannels
 from tausync_py import TauSync
+from utils import network
 
 
 class ConnectivityService(QObject):
@@ -132,39 +133,32 @@ class ConnectivityService(QObject):
         t.start()
 
     def disconnect_device(self) -> None:
-        """Initiate device disconnection on a background thread.
+        """Close the TauSync transport and emit ``device_disconnected``.
 
-        Non-blocking — returns immediately.  All TauSync I/O is moved off the
-        calling thread so the UI is never stalled by a blocking CLR call.
-
-        This is the shared public entry-point used by the VM and by
-        :class:`~services.phone_request.PhoneRequestService`.  :meth:`_stop`
-        calls :meth:`_disconnect_device` directly instead (it already runs on
-        a background thread).
+        Raw close only — does not send any notification to the phone.
+        This is the shared tear-down primitive used by both the PC-initiated
+        path (:meth:`_stop`) and the phone-initiated path
+        (:class:`~services.phone_request.PhoneRequestService`).  When the PC
+        is initiating the disconnect, call :meth:`_notify_phone_of_disconnect`
+        first so the phone can tear down gracefully before the transport closes.
 
         Emits:
-            device_disconnected: Asynchronously, after the transport closes.
+            device_disconnected: After the transport is closed.
         """
 
-        if not self._tau.is_connected:
+        if not self.connected:
             return
 
         waiting_words = self._tau.get_peer_waiting_words()
 
         if SessionChannels.DISCONNECT_FROM_PHONE.value in waiting_words:
             try:
-                signal = utils.network.read_string_from_channel(self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value)
+                _ = network.read_string_from_channel(self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value)
             except Exception as e:
                 print(f"[Desktop] ⚠ Failed to read phone disconnect signal: {e}")
         else:
             self._notify_phone_of_disconnect()
-
-    def _disconnect_device(self) -> None:
-        # Guard — nothing to do if already disconnected.
-        if not self.connected:
-            return
-        # Notify the phone while the transport is still open, then close it.
-        self._notify_phone_of_disconnect()
+            
         self._tau.disconnect()
         self.device_disconnected.emit()
 
@@ -174,10 +168,8 @@ class ConnectivityService(QObject):
         # for the phone to open the meeting-word channel, which prevents device_disconnected
         # from ever being emitted and leaves the UI stuck on the dashboard.
         try:
-            print(f"[Desktop] Sending disconnect notification to phone")
             with self._tau.connect(SessionChannels.DISCONNECT_FROM_PC.value, timeout_seconds=10) as stream:
                 stream.write_string("disconnect")
-            print(f"[Desktop] Disconnect notification sent to phone")
         except Exception as e:
             print(f"[Desktop] Warning: Failed to notify phone of disconnect: {e}")
 
