@@ -775,7 +775,6 @@ class TauSync:
                 TauSync._global_role = _ROLE_NONE
                 TauSync._global_target = None
         except Exception as e:
-            print(e)
             raise
 
     def new_manager(self) -> "TauSync":
