@@ -126,6 +126,7 @@ class Topbar(QWidget):
     @Slot()
     def _move_to_login(self) -> None:
         # Navigate back to the login screen after the device disconnects.
+        print("A")
         navigation_manager.go_to_screen(Screen.LOGIN)
 
     @Slot(object)

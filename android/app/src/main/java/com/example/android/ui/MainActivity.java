@@ -131,17 +131,19 @@ public class MainActivity extends AppCompatActivity {
     /**
      * Orchestrates the disconnection sequence.
      */
+    // בתוך MainActivity.java - שנה את מתודת disconnect לזו:
     public void disconnect() {
-        Log.d("TauSyncFlow", "Disconnect clicked, clearing state first...");
-        // Stop service when disconnecting
-        stopService(new Intent(this, ConnectivityService.class));
+        Log.d("TauSyncFlow", "Requesting clean disconnect from service...");
 
-        // Switch back to the connection setup screen
-        navigateToConnect();
+        // שליחת פקודה לסרוויס שישלח הודעה למחשב ויסגור את עצמו
+        Intent intent = new Intent(this, ConnectivityService.class);
+        intent.setAction("com.example.android.ACTION_SEND_DISCONNECT");
+        startService(intent);
 
-        // Update the state
+        // עדכון ה-UI וה-Repository
         viewModel.disconnect();
-        Toast.makeText(this, "Disconnected", Toast.LENGTH_SHORT).show();
+        navigateToConnect();
+        Toast.makeText(this, "Disconnecting...", Toast.LENGTH_SHORT).show();
     }
 
     // --- Fragment Navigation ---

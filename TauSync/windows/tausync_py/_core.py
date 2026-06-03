@@ -771,6 +771,9 @@ class TauSync:
 
         try:
             self._manager.Disconnect()
+            with TauSync._global_role_lock:
+                TauSync._global_role = _ROLE_NONE
+                TauSync._global_target = None
         except Exception as e:
             raise
 

@@ -14,10 +14,13 @@ import com.example.android.data.datasource.SystemDataSource;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.domain.enums.ConnectionType;
+import com.example.android.enums.Channel;
 import com.example.android.enums.DeviceInfoChannels;
+import com.example.android.enums.SessionChannels;
 import com.example.android.network.handlers.ChannelHandlerRegistry;
 import com.example.android.network.handlers.DeviceInfoChannelHandler;
 import com.example.android.network.handlers.PCNameChannelHandler;
+import com.example.android.network.handlers.DisconnectChannelHandler;
 import com.example.android.network.transport.TransportManager;
 import com.example.android.network.transport.TransportStatus;
 import com.example.android.network.transport.TauSyncTransportManager;
@@ -82,6 +85,12 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                 new PCNameChannelHandler(deviceRepository, transportManager)
         );
 
+        // DISCONNECT_FROM_PC uses a specialized class to handle PC-initiated disconnects
+        handlerRegistry.registerHandler(
+                SessionChannels.DISCONNECT_FROM_PC.getValue(),
+                new DisconnectChannelHandler(deviceRepository, transportManager, this::cleanup)
+        );
+
         // All other device telemetry data types are registered inline as Getters using generic Lambda functional interfaces
         registerDeviceInfoHandler(DeviceInfoChannels.NAME_FROM_ANDROID.getValue(), this::getDeviceName);
         registerDeviceInfoHandler(DeviceInfoChannels.OS_FROM_ANDROID.getValue(), this::getDeviceOs);
@@ -109,6 +118,13 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.d(TAG, "onStartCommand: Service starting");
 
+        // Check if this is a disconnect request action
+        if (intent != null && "com.example.android.ACTION_SEND_DISCONNECT".equals(intent.getAction())) {
+            Log.d(TAG, "Received disconnect action, sending disconnect notification to PC");
+            sendDisconnectToPC();
+            return START_NOT_STICKY;
+        }
+
         // Enforce immediate foreground promotion to fulfill Android's strict background execution policies
         Notification notification = notificationManager.buildNotification("Connecting to PC...");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -132,6 +148,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                 targetIp,
                 ConnectionType.WIFI
         );
+
+        // Update the repository with the remote device info (initial state before handshake)
+        deviceRepository.connect(remoteDevice.getPcName(), remoteDevice.getPcIp(), remoteDevice.getConnectionType());
 
         deviceRepository.updateConnectionStatus(ConnectionStatus.CONNECTING);
         transportManager.connect(remoteDevice, this);
@@ -172,6 +191,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             // Hard disconnect resets state models so the application re-opens directly on the connect screen
             deviceRepository.disconnect();
         }
+
+        // Remove the foreground notification so it doesn't stay in the status bar
+        Log.d(TAG, "Removing foreground notification");
+        stopForeground(Service.STOP_FOREGROUND_REMOVE);
+
+        // Stop the service so it doesn't keep running in the background
+        Log.d(TAG, "Stopping ConnectivityService");
+        stopSelf();
     }
 
     // ============ TransportManager.TransportListener Implementation ============
@@ -278,6 +305,29 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         } catch (Exception e) {
             Log.e(TAG, "Error writing [" + channel + "]: " + e.getMessage());
         }
+    }
+
+    /**
+     * Sends a disconnect notification to the PC when the user initiates a disconnect on the phone.
+     * Uses the DISCONNECT_FROM_PHONE channel to signal the PC to clean up.
+     */
+    private void sendDisconnectToPC() {
+        new Thread(() -> {
+            try {
+                // שליחת אות הניתוק
+                if (transportManager != null && transportManager.isConnected()) {
+                    transportManager.writeToChannel(SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect");
+                    Log.d(TAG, "Disconnect signal sent to PC");
+                }
+                // המתנה קצרה לוודא שהחבילה יצאה
+                Thread.sleep(200);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to send disconnect signal: " + e.getMessage());
+            } finally {
+                // סגירה סופית של השירות מתוך עצמו
+                stopSelf();
+            }
+        }).start();
     }
 
     @Nullable
