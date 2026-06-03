@@ -16,6 +16,7 @@ import com.example.android.repositories.DeviceRepository;
 
 /**
  * AppNotificationManager - Responsible for managing connection status notifications.
+ * It observes the connection status from the DeviceRepository and updates the system notification accordingly.
  */
 public class AppNotificationManager {
 
@@ -27,6 +28,10 @@ public class AppNotificationManager {
     private final NotificationManager notificationManager;
     private Observer<ConnectionStatus> connectionStatusObserver;
 
+    /**
+     * Initializes the manager and creates the necessary notification channel.
+     * @param context Application context.
+     */
     public AppNotificationManager(Context context) {
         this.context = context.getApplicationContext();
         this.notificationManager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -35,6 +40,7 @@ public class AppNotificationManager {
 
     /**
      * Starts listening to connection status changes from the Repository.
+     * Updates the foreground notification text based on the current state.
      */
     public void startListeningToConnectionChanges() {
         Log.d(TAG, "Starting to listen for connection status changes");
@@ -75,6 +81,10 @@ public class AppNotificationManager {
         }
     }
 
+    /**
+     * Stops listening to connection status changes. 
+     * Essential for preventing memory leaks when the service is destroyed.
+     */
     public void stopListeningToConnectionChanges() {
         if (connectionStatusObserver != null) {
             try {
@@ -90,6 +100,8 @@ public class AppNotificationManager {
     /**
      * Builds a notification object with the given content.
      * Public so ConnectivityService can use it for startForeground().
+     * @param contentText The text to display in the notification.
+     * @return The built Notification object.
      */
     public Notification buildNotification(String contentText) {
         return new NotificationCompat.Builder(context, CHANNEL_ID)
@@ -102,7 +114,8 @@ public class AppNotificationManager {
     }
 
     /**
-     * Updates the notification.
+     * Updates the active notification with new text.
+     * @param contentText The new text to display.
      */
     private void updateNotification(String contentText) {
         if (notificationManager != null) {
@@ -110,12 +123,18 @@ public class AppNotificationManager {
         }
     }
 
+    /**
+     * Removes the notification from the system tray.
+     */
     private void dismissNotification() {
         if (notificationManager != null) {
             notificationManager.cancel(NOTIFICATION_ID);
         }
     }
 
+    /**
+     * Creates the notification channel required for Android O and above.
+     */
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(

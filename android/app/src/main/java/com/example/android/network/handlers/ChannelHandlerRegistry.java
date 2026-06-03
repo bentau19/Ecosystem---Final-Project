@@ -1,7 +1,9 @@
 package com.example.android.network.handlers;
 
 import android.util.Log;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -19,11 +21,19 @@ public class ChannelHandlerRegistry {
 
     /**
      * Registers a handler for a specific channel.
-     * If a handler for this channel already exists, it will be replaced.
+     * If a handler for this channel already exists, it will be shut down and replaced.
      */
     public void registerHandler(String channel, ChannelHandler handler) {
         if (handler != null) {
-            handlers.put(channel, handler);
+            // Check if we already have a handler for this channel to prevent leaks
+            ChannelHandler oldHandler = handlers.put(channel, handler);
+            if (oldHandler != null) {
+                try {
+                    oldHandler.onShutdown();
+                } catch (Exception e) {
+                    Log.e(TAG, "Error shutting down old handler for " + channel + ": " + e.getMessage());
+                }
+            }
             Log.d(TAG, "Handler registered for channel: " + channel);
         }
     }
@@ -73,22 +83,22 @@ public class ChannelHandlerRegistry {
      * Called when the service is shutting down.
      */
     public void shutdownAll() {
-        // 1. יוצרים עותק נפרד של המפתחות כדי לא לרוץ ישירות על המפה הפעילה
-        java.util.List<String> channelKeys = new java.util.ArrayList<>(handlers.keySet());
+        // 1. Create a copy of the keys to avoid ConcurrentModificationException
+        List<String> channelKeys = new ArrayList<>(handlers.keySet());
 
-        // 2. רצים על העותק הבטוח
+        // 2. Iterate over the safe copy and shut down each handler
         for (String channel : channelKeys) {
             ChannelHandler handler = handlers.get(channel);
             if (handler != null) {
                 try {
                     handler.onShutdown();
                 } catch (Exception e) {
-                    android.util.Log.e("Registry", "Error shutting down handler for " + channel, e);
+                    Log.e(TAG, "Error shutting down handler during global shutdown for " + channel, e);
                 }
             }
         }
 
-        // 3. מנקים את המפה בבת אחת בסוף, בבטחה
+        // 3. Clear the map at once
         handlers.clear();
     }
 
@@ -99,4 +109,3 @@ public class ChannelHandlerRegistry {
         return handlers.size();
     }
 }
-

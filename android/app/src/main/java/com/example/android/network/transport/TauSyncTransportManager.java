@@ -26,12 +26,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * ✓ Handles graceful shutdown and resource cleanup
  * ✓ Decouples ConnectivityService from TauSync implementation details
  *
- * Key Features:
- * - Exponential backoff retry strategy (1s → 2s → 4s → ... up to 30s)
- * - Max 10 retry attempts before failure
- * - Thread-safe status management
- * - Main thread callback handling via Handler
- * - Clean separation between connection and polling threads
  */
 public class TauSyncTransportManager implements TransportManager {
 
@@ -40,7 +34,7 @@ public class TauSyncTransportManager implements TransportManager {
     // Retry configuration
     private static final int INITIAL_RETRY_DELAY_MS = 1000;      // 1 second
     private static final int MAX_RETRY_DELAY_MS = 30000;         // 30 seconds
-    private static final int MAX_RETRY_ATTEMPTS = 1;
+    private static final int MAX_RETRY_ATTEMPTS = 2;
     private static final int POLLING_INTERVAL_MS = 2000;         // 2 seconds
 
     // State management

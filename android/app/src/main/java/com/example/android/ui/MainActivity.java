@@ -42,11 +42,12 @@ public class MainActivity extends AppCompatActivity {
         setupStatusBar();
         setContentView(R.layout.activity_main);
 
-        // 1. Initialize the shared ViewModel using the Factory
+        // 1. Initialize the shared ViewModel using the Factory.
+        // Application is passed to the Factory to prepare the Repository.
         MainViewModelFactory factory = new MainViewModelFactory(this.getApplication());
         viewModel = new ViewModelProvider(this, factory).get(MainViewModel.class);
 
-        // 2. Smart navigation logic: Check current connection state from the repository
+        // 2. Smart navigation logic: Check current connection state from the repository.
         if (savedInstanceState == null) {
             if (viewModel.getConnectionStatus().getValue() == ConnectionStatus.CONNECTED) {
                 replaceFragment(new ActionsFragment());
@@ -54,7 +55,8 @@ public class MainActivity extends AppCompatActivity {
                 replaceFragment(new ConnectFragment());
             }
         }
-        // 3. Listen to real TCP connection status → drive navigation
+
+        // 3. Listen to real-time TCP connection status and handle navigation.
         viewModel.getConnectionStatus().observe(this, status -> {
             if (status == null) return;
             switch (status) {
@@ -78,18 +80,15 @@ public class MainActivity extends AppCompatActivity {
      * @param qrData The string content extracted from the QR code.
      */
     public void processScannedData(String qrData) {
-        // ViewModel handles the data parsing and updates the Repository
+        // ViewModel handles the data parsing and updates the Repository.
         boolean success = viewModel.handleQr(qrData);
 
         if (success) {
-            // Check notification permission (Android 13+) before starting service
+            // Check notification permission (Android 13+) before starting service.
             checkNotificationPermission();
 
-            // Start the service
+            // Start the service.
             startConnectivityService();
-
-//            navigateToActions();
-//            Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
         } else {
             Toast.makeText(this, "Invalid QR Code. Please try again.", Toast.LENGTH_LONG).show();
         }
@@ -116,7 +115,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Request POST_NOTIFICATIONS permission for Android 13+
+     * Request POST_NOTIFICATIONS permission for Android 13+.
      */
     private void checkNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -130,17 +129,17 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Orchestrates the disconnection sequence.
+     * Sends a command to the service to notify the PC and stop itself.
      */
-    // בתוך MainActivity.java - שנה את מתודת disconnect לזו:
     public void disconnect() {
         Log.d("TauSyncFlow", "Requesting clean disconnect from service...");
 
-        // שליחת פקודה לסרוויס שישלח הודעה למחשב ויסגור את עצמו
+        // Send command to service to notify the PC and shut down.
         Intent intent = new Intent(this, ConnectivityService.class);
         intent.setAction("com.example.android.ACTION_SEND_DISCONNECT");
         startService(intent);
 
-        // עדכון ה-UI וה-Repository
+        // Update the UI and Repository state.
         viewModel.disconnect();
         navigateToConnect();
         Toast.makeText(this, "Disconnecting...", Toast.LENGTH_SHORT).show();
@@ -148,18 +147,28 @@ public class MainActivity extends AppCompatActivity {
 
     // --- Fragment Navigation ---
 
+    /**
+     * Navigates to the Actions dashboard if not already there.
+     */
     public void navigateToActions() {
         if (!(getSupportFragmentManager().findFragmentById(R.id.fragment_container) instanceof ActionsFragment)) {
             replaceFragment(new ActionsFragment());
         }
     }
 
+    /**
+     * Navigates to the Connection setup screen if not already there.
+     */
     public void navigateToConnect() {
         if (!(getSupportFragmentManager().findFragmentById(R.id.fragment_container) instanceof ConnectFragment)) {
             replaceFragment(new ConnectFragment());
         }
     }
 
+    /**
+     * Helper method to replace the current fragment with a new one.
+     * @param fragment The fragment to display.
+     */
     private void replaceFragment(Fragment fragment) {
         getSupportFragmentManager().beginTransaction()
                 .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out)
@@ -169,6 +178,9 @@ public class MainActivity extends AppCompatActivity {
 
     // --- UI Configurations ---
 
+    /**
+     * Sets the status bar color to match the application theme.
+     */
     private void setupStatusBar() {
         Window window = getWindow();
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
@@ -177,6 +189,9 @@ public class MainActivity extends AppCompatActivity {
 
     // --- QR Scanner (Zxing Integration) ---
 
+    /**
+     * Launches the QR code scanner.
+     */
     public void handleConnection() {
         new IntentIntegrator(this)
                 .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)

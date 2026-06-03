@@ -1,5 +1,6 @@
 package com.example.android.serializers;
 
+import android.util.Log;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.google.gson.Gson;
 
@@ -13,13 +14,15 @@ public class DeviceSerializer {
     /**
      * Converts a JSON string received from the PC into a RemoteDeviceInfo object.
      * @param json The raw JSON string from the network.
-     * @return A RemoteDeviceInfo object, or null if parsing fails.
+     * @return A RemoteDeviceInfo object, or null if parsing fails or input is empty.
      */
     public RemoteDeviceInfo deserializeRemoteInfo(String json) {
+        if (json == null || json.trim().isEmpty()) {
+            return null;
+        }
         try {
             return gson.fromJson(json, RemoteDeviceInfo.class);
         } catch (Exception e) {
-            e.printStackTrace();
             return null;
         }
     }
@@ -30,6 +33,10 @@ public class DeviceSerializer {
      * @return A JSON formatted string.
      */
     public String serializeLocalInfo(Object stats) {
-        return gson.toJson(stats);
+        try {
+            return gson.toJson(stats);
+        } catch (Exception e) {
+            return "{}"; // Return empty JSON object on error
+        }
     }
 }
