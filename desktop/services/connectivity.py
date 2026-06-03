@@ -115,7 +115,7 @@ class ConnectivityService(QObject):
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            self._disconnect_device()  # call private directly — already on a bg thread
+            self.disconnect_device()  # call private directly — already on a bg thread
             pending_threads: list[threading.Thread] = self._get_pending_threads()
             for t in pending_threads:
                 if t == threading.current_thread():
@@ -158,7 +158,7 @@ class ConnectivityService(QObject):
                 print(f"[Desktop] ⚠ Failed to read phone disconnect signal: {e}")
         else:
             self._notify_phone_of_disconnect()
-            
+
         self._tau.disconnect()
         self.device_disconnected.emit()
 
