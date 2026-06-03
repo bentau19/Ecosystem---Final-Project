@@ -216,18 +216,15 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             return;
         }
 
-        // עדכון הסטטוס ברפוזיטורי רק עבור מצבים קריטיים
         if (status == TransportStatus.CONNECTED) {
             deviceRepository.updateConnectionStatus(ConnectionStatus.CONNECTED);
-            // מריצים את השליחה רק כשיש חיבור ראשוני תקין ב-100%
+            // send initial device info
             new Thread(this::sendInitialDeviceInfo, "InitialDeviceSenderThread").start();
         } else if (status == TransportStatus.CONNECTING || status == TransportStatus.RECONNECTING) {
             deviceRepository.updateConnectionStatus(connectionStatus);
         } else if (status == TransportStatus.FAILED) {
             deviceRepository.updateConnectionStatus(ConnectionStatus.FAILED);
         }
-
-        // מצבי IDLE ו-DISCONNECTING לא מעדכנים את ה-UI אוטומטית כדי למנוע קפיצות מסך
     }
 
     @Override
@@ -314,17 +311,16 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     private void sendDisconnectToPC() {
         new Thread(() -> {
             try {
-                // שליחת אות הניתוק
+                // send disconnect signal to PC
                 if (transportManager != null && transportManager.isConnected()) {
                     transportManager.writeToChannel(SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect");
                     Log.d(TAG, "Disconnect signal sent to PC");
                 }
-                // המתנה קצרה לוודא שהחבילה יצאה
                 Thread.sleep(200);
             } catch (Exception e) {
                 Log.e(TAG, "Failed to send disconnect signal: " + e.getMessage());
             } finally {
-                // סגירה סופית של השירות מתוך עצמו
+                // final cleanup and stop service
                 stopSelf();
             }
         }).start();

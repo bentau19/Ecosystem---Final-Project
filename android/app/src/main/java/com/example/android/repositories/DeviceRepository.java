@@ -11,16 +11,17 @@ import com.example.android.domain.enums.ConnectionType;
 import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.utils.DeviceUtils;
 import android.util.Log;
+
+/**
+ * Repository class that manages the device's connection state and hardware statistics.
+ * Acts as the single source of truth for the UI regarding device status.
+ *
+ * Tracks:
+ * - DeviceConnectionState: Local device info + Remote PC info
+ * - ConnectionStatus: DISCONNECTED, CONNECTING, CONNECTED, RECONNECTING, FAILED
+ */
 public class DeviceRepository {
 
-    /**
-     * Repository class that manages the device's connection state and hardware statistics.
-     * Acts as the single source of truth for the UI regarding device status.
-     *
-     * Tracks:
-     * - DeviceConnectionState: Local device info + Remote PC info
-     * - ConnectionStatus: DISCONNECTED, CONNECTING, CONNECTED, RECONNECTING, FAILED
-     */
     private static DeviceRepository instance;
     private static final String TAG = "DeviceRepository";
 
@@ -30,14 +31,20 @@ public class DeviceRepository {
     // LiveData holds the connection status lifecycle (CONNECTING, CONNECTED, RECONNECTING, FAILED, etc.)
     private final MutableLiveData<ConnectionStatus> connectionStatus = new MutableLiveData<>(ConnectionStatus.DISCONNECTED);
 
+    /**
+     * @return The current connection state snapshot.
+     */
     public DeviceConnectionState getCurrentConnectionState() {
         return connectionState.getValue();
     }
 
+    /**
+     * Manually triggers a LiveData update to notify all observers (UI) about internal state changes.
+     * postValue is used to ensure thread safety when updating from background threads.
+     */
     public void notifyStatusChanged() {
         DeviceConnectionState current = connectionState.getValue();
         if (current != null) {
-            // postValue דואג לעדכן את כל ה-Observers (ה-UI) מה-Thread של הרקע
             connectionState.postValue(current);
         }
     }
@@ -53,6 +60,9 @@ public class DeviceRepository {
         connectionState.setValue(new DeviceConnectionState(initialLocal));
     }
 
+    /**
+     * Singleton accessor with initialization data.
+     */
     public static synchronized DeviceRepository getInstance(String deviceId, String model) {
         if (instance == null) {
             instance = new DeviceRepository(deviceId, model);
@@ -60,6 +70,10 @@ public class DeviceRepository {
         return instance;
     }
 
+    /**
+     * Singleton accessor for existing instance.
+     * @throws IllegalStateException if repository hasn't been initialized yet.
+     */
     public static DeviceRepository getInstance() {
         if (instance == null) {
             throw new IllegalStateException("Repository must be initialized with data first!");
@@ -67,7 +81,9 @@ public class DeviceRepository {
         return instance;
     }
 
-    // Expose the state to the ViewModel
+    /**
+     * @return LiveData containing the unified connection state.
+     */
     public LiveData<DeviceConnectionState> getConnectionState() {
         return connectionState;
     }
@@ -100,7 +116,10 @@ public class DeviceRepository {
     }
 
     /**
-     * Connect to computer (after scanning)
+     * Establish session data for a remote computer.
+     * @param pcName The name of the remote PC.
+     * @param ip The target IP address.
+     * @param type The connection protocol used.
      */
     public void connect(String pcName, String ip, ConnectionType type) {
         DeviceConnectionState current = connectionState.getValue();
@@ -115,7 +134,7 @@ public class DeviceRepository {
     }
 
     /**
-     * Disconnect from computer
+     * Terminates the current remote session and resets status.
      */
     public void disconnect() {
         DeviceConnectionState current = connectionState.getValue();
@@ -136,11 +155,13 @@ public class DeviceRepository {
         DeviceConnectionState current = connectionState.getValue();
         if (current != null && current.getLocalDevice() != null) {
             current.getLocalDevice().setBatteryLevel(newBatteryLevel);
-
             connectionState.postValue(current);
         }
     }
 
+    /**
+     * Batch update for local statistics.
+     */
     public void refreshLocalStats(String ip, int battery) {
         updateLocalIp(ip);
         updateLocalBattery(battery);
@@ -155,8 +176,7 @@ public class DeviceRepository {
         DeviceConnectionState current = connectionState.getValue();
         if (current != null && current.getLocalDevice() != null) {
             current.getLocalDevice().setIpAddress(newIp);
-
-            // Notify all observers (like ConnectFragment) about the change
+            // Notify all observers about the change
             connectionState.postValue(current);
         }
     }

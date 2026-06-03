@@ -16,7 +16,10 @@ public class NetworkHandler {
     private static final String TAG = "NetworkHandler";
 
     /**
-     * מקביל ל-write_to_channel ב-Python.
+     * Corresponds to write_to_channel in Python.
+     * @param tau TauSync instance.
+     * @param channel Channel name.
+     * @param data Data to write.
      */
     public static void writeToChannel(TauSync tau, String channel, String data) {
         if (tau == null || !tau.isConnected()) {
@@ -26,7 +29,8 @@ public class NetworkHandler {
 
         try (TauSyncStream stream = tau.connect(channel)) {
             if (stream != null) {
-                // ה-SDK מטפל בכתיבת המחרוזת. אם אין flush, הסגירה של ה-try (ה-close) תשלח את הנתונים.
+                // The SDK handles string writing. If no flush is called, 
+                // closing the stream in the try-with-resources block will send the data.
                 stream.writeString(data);
             }
         } catch (Exception e) {
@@ -35,14 +39,17 @@ public class NetworkHandler {
     }
 
     /**
-     * מקביל ל-read_from_channel ב-Python.
+     * Corresponds to read_from_channel in Python.
+     * @param tau TauSync instance.
+     * @param channel Channel name.
+     * @return Data read from the channel.
      */
     public static String readFromChannel(TauSync tau, String channel) {
         if (tau == null || !tau.isConnected()) return "";
 
         try (TauSyncStream stream = tau.connect(channel)) {
             if (stream != null) {
-                // המרה מ-byte[] ל-String תוך שימוש ב-UTF-8 כדי להתאים לפייתון.
+                // Convert byte[] to String using UTF-8 to match Python's encoding.
                 byte[] data = stream.readAll();
                 return new String(data, StandardCharsets.UTF_8);
             }
