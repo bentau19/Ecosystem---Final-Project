@@ -1,23 +1,31 @@
 package com.example.android.ui;
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.R;
+import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.ui.fragments.ActionsFragment;
 import com.example.android.ui.fragments.ConnectFragment;
 import com.example.android.viewmodel.MainViewModel;
-import com.example.android.viewmodel.MainViewModelFactory; // הייבוא החדש
+import com.example.android.viewmodel.MainViewModelFactory;
 import com.google.zxing.integration.android.IntentIntegrator;
 import com.google.zxing.integration.android.IntentResult;
+
+import com.example.android.services.ConnectivityService;
 
 /**
  * Main Activity serves as the primary host for fragments and manages the QR scanning process.
@@ -35,19 +43,34 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         // 1. Initialize the shared ViewModel using the Factory
-        // כאן אנחנו מעבירים את ה-Application ל-Factory כדי שהוא יכין את ה-Repository
         MainViewModelFactory factory = new MainViewModelFactory(this.getApplication());
         viewModel = new ViewModelProvider(this, factory).get(MainViewModel.class);
 
         // 2. Smart navigation logic: Check current connection state from the repository
         if (savedInstanceState == null) {
-            if (viewModel.getConnectionState().getValue() != null &&
-                    viewModel.getConnectionState().getValue().isConnected()) {
+            if (viewModel.getConnectionStatus().getValue() == ConnectionStatus.CONNECTED) {
                 replaceFragment(new ActionsFragment());
             } else {
                 replaceFragment(new ConnectFragment());
             }
         }
+        // 3. Listen to real TCP connection status → drive navigation
+        viewModel.getConnectionStatus().observe(this, status -> {
+            if (status == null) return;
+            switch (status) {
+                case CONNECTING:
+                    Toast.makeText(this, "Connecting...", Toast.LENGTH_SHORT).show();
+                    break;
+                case CONNECTED:
+                    navigateToActions();
+                    Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
+                    break;
+                case FAILED:
+                    navigateToConnect();
+                    Toast.makeText(this, "Connection failed. Try again.", Toast.LENGTH_LONG).show();
+                    break;
+            }
+        });
     }
 
     /**
@@ -59,26 +82,68 @@ public class MainActivity extends AppCompatActivity {
         boolean success = viewModel.handleQr(qrData);
 
         if (success) {
-            // Success: Navigate to the actions dashboard with transition animations
-            navigateToActions();
-            Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
+            // Check notification permission (Android 13+) before starting service
+            checkNotificationPermission();
+
+            // Start the service
+            startConnectivityService();
+
+//            navigateToActions();
+//            Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
         } else {
             Toast.makeText(this, "Invalid QR Code. Please try again.", Toast.LENGTH_LONG).show();
         }
     }
 
     /**
-     * Orchestrates the disconnection sequence.
-     * Updates the repository and reverts the UI to the connection screen.
+     * Starts the Foreground Service to maintain the PC connection.
      */
+    private void startConnectivityService() {
+        String ip = "";
+        if (viewModel.getConnectionState().getValue() != null &&
+                viewModel.getConnectionState().getValue().getRemotePC() != null) {
+            ip = viewModel.getConnectionState().getValue().getRemotePC().getPcIp();
+        }
+
+        Intent serviceIntent = new Intent(this, ConnectivityService.class);
+        serviceIntent.putExtra("TARGET_IP", ip);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(this, serviceIntent);
+        } else {
+            startService(serviceIntent);
+        }
+    }
+
+    /**
+     * Request POST_NOTIFICATIONS permission for Android 13+
+     */
+    private void checkNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
+            }
+        }
+    }
+
+    /**
+     * Orchestrates the disconnection sequence.
+     */
+    // בתוך MainActivity.java - שנה את מתודת disconnect לזו:
     public void disconnect() {
-        // Switch back to the connection setup screen
-        navigateToConnect();
+        Log.d("TauSyncFlow", "Requesting clean disconnect from service...");
 
-        // Update the state (this will trigger observers across the app)
+        // שליחת פקודה לסרוויס שישלח הודעה למחשב ויסגור את עצמו
+        Intent intent = new Intent(this, ConnectivityService.class);
+        intent.setAction("com.example.android.ACTION_SEND_DISCONNECT");
+        startService(intent);
+
+        // עדכון ה-UI וה-Repository
         viewModel.disconnect();
-
-        Toast.makeText(this, "Disconnected", Toast.LENGTH_SHORT).show();
+        navigateToConnect();
+        Toast.makeText(this, "Disconnecting...", Toast.LENGTH_SHORT).show();
     }
 
     // --- Fragment Navigation ---

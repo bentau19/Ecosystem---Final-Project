@@ -1,8 +1,4 @@
-import random
-import uuid
-
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
-from datetime import datetime
 
 from domain.dto.device_info import (
     DeviceInfoDTO,
@@ -78,27 +74,11 @@ class DeviceViewModel(QObject):
         self._connectivity_service.start()
         self._device_info_service.start()
 
-        # Mock device, until connectivity in phone side will be established
-        self._device_info_service.save(
-            DeviceEntity(
-                id="1",
-                name=str(uuid.uuid4()),
-                os=str(uuid.uuid4()),
-                tag="hey",
-                battery_level=random.randint(0, 100),
-                battery_charging=random.choice([True, False]),
-                storage_used=random.randint(0, 1000),
-                last_connected=datetime.strptime("2024-01-01", "%Y-%m-%d").date(),
-                ip="127.0.0.1",
-                storage_total=random.randint(1000, 10000),
-            )
-        )
-
         self._refresh_timer: QTimer = QTimer(self)
         self._refresh_timer.timeout.connect(self._request_device_info_refresh)
         self._refresh_timer.start(self._TEN_MINUTES)
 
-        self._current_device_connected_id: str = "1"  # TODO: get this from the connectivity service when phone side works
+        self._current_device_connected_id: str = ""
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -162,6 +142,7 @@ class DeviceViewModel(QObject):
     def _on_device_info_ready(self, entity: DeviceEntity) -> None:
         # Track the connected device ID so load_device_info() fetches the right entity.
         self._current_device_connected_id = entity.id
+        print(entity)
         self.device_infos_updated.emit(self._to_device_info_dtos(entity))
 
     @Slot(object)

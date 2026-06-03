@@ -39,7 +39,7 @@
                 android:id="@+id/headerContainer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="48dp"
+                android:layout_marginTop="96dp"
                 android:gravity="center"
                 android:orientation="vertical"
                 app:layout_constraintTop_toTopOf="parent">
@@ -92,43 +92,18 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <LinearLayout
-                android:id="@+id/quickInfoLayout"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginHorizontal="8dp"
-                android:layout_marginTop="32dp"
-                android:orientation="horizontal"
-                app:layout_constraintTop_toBottomOf="@id/headerContainer">
-
-                <include
-                    android:id="@+id/batteryCard"
-                    layout="@layout/item_info_card"
-                    android:layout_width="0dp"
-                    android:layout_height="120dp"
-                    android:layout_weight="1"
-                    android:layout_margin="8dp" />
-                <include
-                android:id="@+id/storageCard"
-                layout="@layout/item_info_card"
-                android:layout_width="0dp"
-                android:layout_height="120dp"
-                android:layout_weight="1"
-                android:layout_margin="8dp" />
-            </LinearLayout>
-
             <TextView
                 android:id="@+id/toolsLabel"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="24dp"
-                android:layout_marginTop="24dp"
+                android:layout_marginTop="32dp"
                 android:text="Available Tools"
                 android:textColor="@color/text_muted"
                 android:textSize="13sp"
                 android:textStyle="bold"
                 app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/quickInfoLayout" />
+                app:layout_constraintTop_toBottomOf="@id/headerContainer" />
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/toolsRecyclerView"
@@ -151,41 +126,28 @@
                 app:layout_constraintStart_toStartOf="parent"
                 app:layout_constraintTop_toBottomOf="@id/toolsRecyclerView" />
 
-            <FrameLayout
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSettings"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="64dp"
                 android:layout_marginHorizontal="24dp"
-                android:layout_marginTop="8dp"
-                app:layout_constraintTop_toBottomOf="@id/systemLabel">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnSettings"
-                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                    android:layout_width="match_parent"
-                    android:layout_height="64dp"
-                    app:backgroundTint="#1A1A2E"
-                    app:strokeColor="#30475E"
-                    app:strokeWidth="1dp"
-                    app:cornerRadius="16dp"
-                    android:text="App Settings"
-                    android:textColor="@color/white"
-                    android:textSize="15sp"
-                    android:textAllCaps="false"
-                    android:textAlignment="viewStart"
-                    app:icon="@drawable/ic_settings"
-                    app:iconTint="@color/white"
-                    app:iconPadding="14dp"
-                    app:iconGravity="textStart" />
-
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:layout_gravity="end|center_vertical"
-                    android:layout_marginEnd="16dp"
-                    android:alpha="0.4"
-                    android:src="@drawable/ic_chevron_right"
-                    app:tint="@color/white" />
-            </FrameLayout>
+                android:layout_marginTop="12dp"
+                app:backgroundTint="#1A1A2E"
+                app:strokeColor="#30475E"
+                app:strokeWidth="1dp"
+                app:cornerRadius="16dp"
+                android:text="App Settings"
+                android:textColor="@color/white"
+                android:textSize="15sp"
+                android:textAllCaps="false"
+                android:textAlignment="viewStart"
+                app:icon="@drawable/ic_settings"
+                app:iconTint="@color/white"
+                app:iconPadding="14dp"
+                app:iconGravity="textStart"
+                android:paddingStart="20dp"
+                app:layout_constraintTop_toBottomOf="@id/systemLabel" />
 
         </androidx.constraintlayout.widget.ConstraintLayout>
     </androidx.core.widget.NestedScrollView>
