@@ -84,8 +84,11 @@ viewmodel/
 
 Important files:
 
-- `MainViewModel.java` - Coordinates UI state and user actions.
-- `MainViewModelFactory.java` - Manual dependency creation for the ViewModel.
+- `MainViewModel.java` - Coordinates connection state and user actions (QR scan, connect, disconnect, refresh stats).
+- `MainViewModelFactory.java` - Manual dependency creation for `MainViewModel`.
+- `FileTransferViewModel.java` - Coordinates incoming file transfer state (PC → Android). Exposes `getPendingRequest()` and `getTransferStatus()` LiveData, and handles user Accept / Reject decisions.
+
+Each ViewModel is scoped to `MainActivity` and observed by the relevant Fragment or the Activity itself. ViewModels are split by feature to keep each one focused.
 
 The ViewModel exposes state to the UI and delegates business actions to use cases or repositories.
 
@@ -108,6 +111,16 @@ Current use cases:
 - `ParseQrDataUseCase.java`
 - `ConnectToDeviceUseCase.java`
 - `RefreshLocalStatsUseCase.java`
+- `RespondToFileTransferUseCase.java` - Sends `ACCEPTED_FROM_ANDROID` or `REJECTED_FROM_ANDROID` to the PC over the response channel. Called by `ConnectivityService` on a background thread after the user decides.
+- `ReceiveFileUseCase.java` - Reads raw file bytes from the `file_data_pc` TauSync channel and saves the file to the public Downloads folder using the MediaStore API (Android 10+, no storage permission required).
+
+Current domain entities:
+
+- `DeviceConnectionState.java`
+- `LocalDeviceInfo.java`
+- `RemoteDeviceInfo.java`
+- `DeviceStorageStats.java`
+- `FileTransferRequest.java` - Represents a single incoming file transfer request (file name + size in bytes). Includes `getFormattedSize()` for human-readable display.
 
 ## Data Layer
 
@@ -131,9 +144,12 @@ Location:
 repositories/
 ```
 
-Important file:
+Important files:
 
-- `DeviceRepository.java` - Single source of truth for the current device, remote PC, and connection state.
+- `DeviceRepository.java` - Single source of truth for connection state, local device info, and remote PC info.
+- `FileTransferRepository.java` - Single source of truth for the incoming file transfer lifecycle. Owns `LiveData<FileTransferRequest>` (the pending request) and `LiveData<FileTransferStatus>` (the current status). Also holds a `FileTransferActionListener` callback registered by `ConnectivityService` to bridge user decisions (Accept / Reject from the UI) to actual network writes without the ViewModel ever touching the transport layer.
+
+Each repository is a Singleton focused on a single domain. Future features (clipboard, contacts) should each get their own repository rather than extending the existing ones.
 
 The repository owns the observable app state used by the UI and is also updated by background services when connection events arrive.
 
@@ -148,7 +164,8 @@ services/
 Important files:
 
 - `ConnectivityService.java` - Foreground service that owns the active PC connection.
-- `AppNotificationManager.java` - Manages the foreground service notification.
+- `AppNotificationManager.java` - Manages both the persistent foreground service notification and the file transfer heads-up notification (with Accept / Reject action buttons).
+- `FileTransferActionReceiver.java` - `BroadcastReceiver` that handles Accept / Reject actions from the file transfer notification when the app is in the background. Calls directly into `FileTransferRepository` since `BroadcastReceiver` has no lifecycle and cannot hold a ViewModel reference.
 
 `ConnectivityService` is responsible for:
 
@@ -158,7 +175,9 @@ Important files:
 - Connecting to the PC by IP.
 - Sending initial Android device info after connection.
 - Dispatching PC channel requests to the correct handler.
-- Cleaning up transport and repository state on disconnect.
+- Instantiating `RespondToFileTransferUseCase` and `ReceiveFileUseCase` and registering itself as the `FileTransferRepository.FileTransferActionListener`.
+- Running the accept / reject network operations on a dedicated background thread (`FileTransferAcceptThread` / `FileTransferRejectThread`).
+- Cleaning up both `DeviceRepository` and `FileTransferRepository` state on disconnect.
 
 ## Network Layer
 
@@ -226,6 +245,118 @@ These files define the shared channel names used by both Android and desktop. Ma
 
 Avoid editing generated enum files manually. Change the shared source definitions and rerun code generation when possible.
 
+## File Transfer Flow (PC → Android)
+
+### Architecture
+
+File transfer follows the same MVVM layers as connection management, with each layer having a single responsibility:
+
+```text
+Network Layer       FileMetadataChannelHandler
+                        ↓  onTransferRequested()
+Repository Layer    FileTransferRepository  (LiveData source of truth)
+                        ↓  LiveData update
+ViewModel Layer     FileTransferViewModel   (exposes state to UI)
+                        ↓  observe
+UI Layer            MainActivity            (Dialog / Notification)
+```
+
+The user's Accept / Reject decision travels back down through a callback:
+
+```text
+UI Layer            User taps Accept / Reject
+                        ↓  acceptTransfer() / rejectTransfer()
+ViewModel Layer     FileTransferViewModel
+                        ↓  repository.onTransferAccepted/Rejected()
+Repository Layer    FileTransferRepository  fires ActionListener callback
+                        ↓
+Service Layer       ConnectivityService.onUserAccepted(fileName)
+                        ↓  background thread
+Use Cases           RespondToFileTransferUseCase.accept()   → writes ACCEPT to PC
+                    ReceiveFileUseCase.execute(fileName)    → reads bytes, saves to Downloads
+```
+
+The key design decision: `FileTransferViewModel` never touches `TransportManager` directly. `ConnectivityService` owns the transport and bridges user decisions to network operations via the `FileTransferActionListener` callback registered on `FileTransferRepository`.
+
+### Step-by-step Flow
+
+**1. PC sends file metadata**
+
+The desktop opens the `file_meta_pc` TauSync channel and writes a JSON payload:
+
+```json
+{"file_name": "photo.jpg", "file_size": 4194304}
+```
+
+**2. Android detects and reads metadata**
+
+The polling loop in `TauSyncTransportManager` calls `getPeerWaitingWords()` every 2 seconds. When `file_meta_pc` appears, `ChannelHandlerRegistry` routes it to `FileMetadataChannelHandler.onPeerRequest()`, which reads and parses the JSON. The parsed `FileTransferRequest` is pushed into `FileTransferRepository` → status becomes `PENDING_APPROVAL`.
+
+**3. UI shows approval prompt**
+
+`FileTransferViewModel` observes `FileTransferRepository.getPendingRequest()`. `MainActivity` observes the ViewModel:
+
+- **App in foreground** → `AlertDialog` with file name, formatted size, and Accept / Reject buttons.
+- **App in background** → heads-up notification (`FileTransferChannel`, high importance) with Accept and Reject action buttons handled by `FileTransferActionReceiver`.
+
+**4. User accepts**
+
+`FileTransferViewModel.acceptTransfer()` → `FileTransferRepository.onTransferAccepted()` → fires `FileTransferActionListener.onUserAccepted(fileName)` → `ConnectivityService` spawns `FileTransferAcceptThread`:
+
+1. `RespondToFileTransferUseCase.accept()` writes `accept_android` to the `file_response_android` channel.
+2. `ReceiveFileUseCase.execute(fileName)` reads all bytes from the `file_data_pc` channel via `TransportManager.readBytesFromChannel()`.
+3. Bytes are saved to the public Downloads folder using `MediaStore.Downloads` (API 29+). No `WRITE_EXTERNAL_STORAGE` permission required.
+4. `FileTransferRepository.onTransferCompleted()` → status becomes `COMPLETED` → MainActivity shows "File saved to Downloads ✓" Toast.
+
+**4b. User rejects**
+
+`FileTransferViewModel.rejectTransfer()` → `FileTransferRepository.onTransferRejected()` → fires `FileTransferActionListener.onUserRejected()` → `ConnectivityService` spawns `FileTransferRejectThread` → writes `reject_android` to `file_response_android`. The PC aborts without opening `file_data_pc`.
+
+**5. Reset**
+
+After any terminal status (COMPLETED / REJECTED / FAILED), `MainActivity` calls `fileTransferViewModel.reset()` which resets `FileTransferRepository` to `IDLE`, ready for the next transfer.
+
+### TauSync Channels Used
+
+| Channel enum | Wire value | Direction | Purpose |
+|---|---|---|---|
+| `REGULAR_FILE_METADATA_PC_TO_ANDROID` | `file_meta_pc` | PC → Android | JSON metadata (name + size) |
+| `REGULAR_FILE_RESPONSE_FROM_ANDROID` | `file_response_android` | Android → PC | `accept_android` or `reject_android` |
+| `REGULAR_FILE_DATA_PC_TO_ANDROID` | `file_data_pc` | PC → Android | Raw file bytes |
+
+### FileTransferStatus lifecycle
+
+```text
+IDLE → PENDING_APPROVAL → RECEIVING → COMPLETED
+                        ↘ REJECTED
+             (any state) → FAILED
+```
+
+### New files added for this feature
+
+```text
+domain/entities/FileTransferRequest.java
+domain/enums/FileTransferStatus.java
+domain/usecases/RespondToFileTransferUseCase.java
+domain/usecases/ReceiveFileUseCase.java
+repositories/FileTransferRepository.java
+viewmodel/FileTransferViewModel.java
+network/handlers/FileMetadataChannelHandler.java
+services/FileTransferActionReceiver.java
+```
+
+### Extending to Android → PC (future)
+
+The same repositories and ViewModels can be extended. New additions needed:
+
+- `SendFileUseCase.java` - reads file from storage, writes metadata to `file_meta_android`, waits for PC response on `file_response_pc`, writes bytes to `file_data_android`.
+- A file picker helper for the UI.
+- Additional `FileTransferStatus` values (e.g. `SENDING`, `SEND_COMPLETED`).
+
+No structural changes to existing files are needed.
+
+---
+
 ## Device Info Flow
 
 After a successful connection, Android sends initial device information to the desktop:
@@ -270,6 +401,10 @@ Important files:
 - `NetworkHandler.java` - Small wrapper around TauSync channel read/write operations.
 
 `NetworkHandler` is used by `TauSyncTransportManager`; UI classes should not call it directly.
+
+`NetworkHandler` exposes two read methods:
+- `readFromChannel()` - returns `String` (UTF-8), used for text/JSON payloads.
+- `readBytesFromChannel()` - returns raw `byte[]`, used for binary file data.
 
 ## Testing
 
