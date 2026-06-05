@@ -112,7 +112,7 @@ Current use cases:
 - `ConnectToDeviceUseCase.java`
 - `RefreshLocalStatsUseCase.java`
 - `RespondToFileTransferUseCase.java` - Sends `ACCEPTED_FROM_ANDROID` or `REJECTED_FROM_ANDROID` to the PC over the response channel. Called by `ConnectivityService` on a background thread after the user decides.
-- `ReceiveFileUseCase.java` - Reads raw file bytes from the `file_data_pc` TauSync channel and saves the file to the public Downloads folder using the MediaStore API (Android 10+, no storage permission required).
+- `ReceiveFileUseCase.java` - Streams file bytes from the `file_data_pc` TauSync channel directly into a MediaStore `OutputStream` in 64 KB chunks. The full file is never held in RAM, so arbitrarily large files are supported. Saves to the public Downloads folder using the MediaStore API (Android 10+, no storage permission required).
 
 Current domain entities:
 
@@ -221,6 +221,7 @@ Important files:
 - `PCNameChannelHandler.java` - Reads the PC name and updates the repository.
 - `DisconnectChannelHandler.java` - Handles PC-initiated disconnects.
 - `FileMetadataChannelHandler.java` - Reads file metadata sent from the PC before a file transfer.
+- `FileDataChannelHandler.java` - Triggered by the polling loop when the PC opens `file_data_pc`. Calls `ReceiveFileUseCase` to stream the file bytes. Eliminates the simultaneous-connect race condition by letting the Desktop be the sole initiator of that channel.
 
 New PC-initiated features should usually be implemented as a new `ChannelHandler` and registered in `ConnectivityService.registerChannelHandlers()`.
 
@@ -304,9 +305,13 @@ The polling loop in `TauSyncTransportManager` calls `getPeerWaitingWords()` ever
 `FileTransferViewModel.acceptTransfer()` → `FileTransferRepository.onTransferAccepted()` → fires `FileTransferActionListener.onUserAccepted(fileName)` → `ConnectivityService` spawns `FileTransferAcceptThread`:
 
 1. `RespondToFileTransferUseCase.accept()` writes `accept_android` to the `file_response_android` channel.
-2. `ReceiveFileUseCase.execute(fileName)` reads all bytes from the `file_data_pc` channel via `TransportManager.readBytesFromChannel()`.
-3. Bytes are saved to the public Downloads folder using `MediaStore.Downloads` (API 29+). No `WRITE_EXTERNAL_STORAGE` permission required.
-4. `FileTransferRepository.onTransferCompleted()` → status becomes `COMPLETED` → MainActivity shows "File saved to Downloads ✓" Toast.
+2. Android stops and waits. The Desktop receives ACCEPT, then opens `file_data_pc` alone.
+3. The polling loop (every 2 s) detects `file_data_pc` in `getPeerWaitingWords()` → routes to `FileDataChannelHandler.onPeerRequest()`.
+4. `ReceiveFileUseCase.execute(fileName)` streams bytes in 64 KB chunks from the TauSync `InputStream` directly into a MediaStore `OutputStream`. The full file is never held in RAM — safe for any file size.
+5. File is saved to the public Downloads folder using `MediaStore.Downloads` (API 29+). No `WRITE_EXTERNAL_STORAGE` permission required.
+6. `FileTransferRepository.onTransferCompleted()` → status becomes `COMPLETED` → MainActivity shows "File saved to Downloads ✓" Toast.
+
+This polling-based approach eliminates the simultaneous-connect race condition that occurred when both sides called `connect("file_data_pc")` at the same time.
 
 **4b. User rejects**
 
@@ -342,6 +347,7 @@ domain/usecases/ReceiveFileUseCase.java
 repositories/FileTransferRepository.java
 viewmodel/FileTransferViewModel.java
 network/handlers/FileMetadataChannelHandler.java
+network/handlers/FileDataChannelHandler.java
 services/FileTransferActionReceiver.java
 ```
 
@@ -404,7 +410,9 @@ Important files:
 
 `NetworkHandler` exposes two read methods:
 - `readFromChannel()` - returns `String` (UTF-8), used for text/JSON payloads.
-- `readBytesFromChannel()` - returns raw `byte[]`, used for binary file data.
+- `readBytesFromChannel()` - returns raw `byte[]`, used for small binary data.
+
+For file transfers, `TauSyncTransportManager.streamChannelToOutputStream()` is used instead — it pipes a TauSync `InputStream` into a MediaStore `OutputStream` in 64 KB chunks without buffering the full file in RAM.
 
 ## Testing
 
@@ -428,6 +436,8 @@ Current tests include:
 - `DeviceRepositoryTest.java`
 - `DeviceSerializerTest.java`
 - `MainViewModelTest.java`
+- `FileTransferRepositoryTest.java` - Verifies all state-machine transitions (IDLE → PENDING_APPROVAL → RECEIVING → COMPLETED / REJECTED / FAILED → IDLE) and that `FileTransferActionListener` / `IncomingRequestListener` callbacks fire at the correct moments.
+- `FileTransferViewModelTest.java` - Verifies that `acceptTransfer()`, `rejectTransfer()`, and `reset()` produce the expected LiveData state changes, and that `getPendingRequest()` / `getTransferStatus()` correctly reflect repository state.
 
 Manual TauSync testing activities are under:
 
@@ -442,7 +452,7 @@ These are useful for local protocol checks but are not part of the normal app fl
 * **Android Studio:** Panda 1 | 2025.3.1 Patch 1 or newer
 * **JDK:** Java 21
 * **Gradle:** 8.13
-* **Min SDK:** 24 (Android 7.0)
+* **Min SDK:** 29 (Android 10.0)
 * **Target SDK:** 36
 
 ## Running The App
