@@ -5,7 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.util.Log;
 
-import com.example.android.repositories.FileTransferRepository;
+import com.example.android.repositories.ReceiveFileRepository;
 
 /**
  * Handles Accept / Reject actions from the file transfer heads-up notification.
@@ -32,7 +32,7 @@ public class FileTransferActionReceiver extends BroadcastReceiver {
         String action = intent.getAction();
         Log.d(TAG, "Received action: " + action);
 
-        FileTransferRepository repository = FileTransferRepository.getInstance();
+        ReceiveFileRepository repository = ReceiveFileRepository.getInstance();
 
         switch (action) {
             case ACTION_ACCEPT:

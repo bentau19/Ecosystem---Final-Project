@@ -8,15 +8,15 @@ package com.example.android.domain.entities;
  *
  * Lifecycle:
  *   PC sends metadata → FileMetadataChannelHandler parses JSON
- *   → constructs this object → pushes it into DeviceRepository
+ *   → constructs this object → pushes it into ReceiveFileRepository
  *   → LiveData notifies ViewModel → UI shows approval dialog.
  */
-public class FileTransferRequest {
+public class ReceiveFileRequest {
 
     private final String fileName;
     private final long fileSizeBytes;
 
-    public FileTransferRequest(String fileName, long fileSizeBytes) {
+    public ReceiveFileRequest(String fileName, long fileSizeBytes) {
         this.fileName = fileName;
         this.fileSizeBytes = fileSizeBytes;
     }

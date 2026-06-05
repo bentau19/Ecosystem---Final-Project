@@ -28,7 +28,7 @@ import com.example.android.network.handlers.FileDataChannelHandler;
 import com.example.android.network.handlers.FileMetadataChannelHandler;
 import com.example.android.network.handlers.PCNameChannelHandler;
 import com.example.android.network.handlers.DisconnectChannelHandler;
-import com.example.android.repositories.FileTransferRepository;
+import com.example.android.repositories.ReceiveFileRepository;
 import com.example.android.network.transport.TransportManager;
 import com.example.android.network.transport.TransportStatus;
 import com.example.android.network.transport.TauSyncTransportManager;
@@ -84,7 +84,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // Initialize file transfer UseCases before registering handlers —
         // FileDataChannelHandler takes a direct reference to receiveFileUseCase.
         respondToFileTransferUseCase = new RespondToFileTransferUseCase(transportManager);
-        receiveFileUseCase = new ReceiveFileUseCase(transportManager, FileTransferRepository.getInstance(), this);
+        receiveFileUseCase = new ReceiveFileUseCase(transportManager, ReceiveFileRepository.getInstance(), this);
 
         registerChannelHandlers();
         registerFileTransferActionListener();
@@ -114,14 +114,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // FILE_METADATA_PC_TO_ANDROID handles incoming file transfer requests from the PC
         handlerRegistry.registerHandler(
                 FileTransferChannels.REGULAR_FILE_METADATA_PC_TO_ANDROID.getValue(),
-                new FileMetadataChannelHandler(transportManager, FileTransferRepository.getInstance())
+                new FileMetadataChannelHandler(transportManager, ReceiveFileRepository.getInstance())
         );
 
         // FILE_DATA_PC_TO_ANDROID receives the actual file bytes — triggered by the polling loop.
         // Desktop opens this channel only after receiving ACCEPT, so there is no simultaneous-connect
         handlerRegistry.registerHandler(
                 FileTransferChannels.REGULAR_FILE_DATA_PC_TO_ANDROID.getValue(),
-                new FileDataChannelHandler(receiveFileUseCase, FileTransferRepository.getInstance())
+                new FileDataChannelHandler(receiveFileUseCase, ReceiveFileRepository.getInstance())
         );
 
         // All other device telemetry data types are registered inline as Getters using generic Lambda functional interfaces
@@ -410,7 +410,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
      * is paused/stopped (app in background).
      */
     private void registerIncomingRequestListener() {
-        FileTransferRepository.getInstance().setIncomingRequestListener(request -> {
+        ReceiveFileRepository.getInstance().setIncomingRequestListener(request -> {
             Log.d(TAG, "Incoming request arrived: " + request.getFileName());
 
             // Show a notification only when the app is in the background.
@@ -438,8 +438,8 @@ public class ConnectivityService extends Service implements TransportManager.Tra
      * The listener runs on a dedicated background thread to avoid blocking the main thread.
      */
     private void registerFileTransferActionListener() {
-        FileTransferRepository.getInstance().setActionListener(
-                new FileTransferRepository.FileTransferActionListener() {
+        ReceiveFileRepository.getInstance().setActionListener(
+                new ReceiveFileRepository.ReceiveFileActionListener() {
 
                     @Override
                     public void onUserAccepted(String fileName) {
@@ -453,7 +453,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                                 respondToFileTransferUseCase.accept();
                             } catch (Exception e) {
                                 Log.e(TAG, "Error sending accept to PC: " + e.getMessage());
-                                FileTransferRepository.getInstance().onTransferFailed();
+                                ReceiveFileRepository.getInstance().onTransferFailed();
                             } finally {
                                 // Dismiss the approval notification — it has served its purpose.
                                 notificationManager.dismissFileTransferNotification();

@@ -12,7 +12,7 @@ import android.util.Log;
 import com.example.android.R;
 import com.example.android.enums.FileTransferChannels;
 import com.example.android.network.transport.TransportManager;
-import com.example.android.repositories.FileTransferRepository;
+import com.example.android.repositories.ReceiveFileRepository;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -35,11 +35,11 @@ public class ReceiveFileUseCase {
     private static final String TAG = "ReceiveFileUseCase";
 
     private final TransportManager transportManager;
-    private final FileTransferRepository repository;
+    private final ReceiveFileRepository repository;
     private final Context context;
 
     public ReceiveFileUseCase(TransportManager transportManager,
-                              FileTransferRepository repository,
+                              ReceiveFileRepository repository,
                               Context context) {
         this.transportManager = transportManager;
         this.repository = repository;

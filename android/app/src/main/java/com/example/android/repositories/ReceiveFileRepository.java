@@ -3,8 +3,8 @@ package com.example.android.repositories;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
-import com.example.android.domain.entities.FileTransferRequest;
-import com.example.android.domain.enums.FileTransferStatus;
+import com.example.android.domain.entities.ReceiveFileRequest;
+import com.example.android.domain.enums.ReceiveFileStatus;
 
 import android.util.Log;
 
@@ -19,22 +19,22 @@ import android.util.Log;
  *                           ↘ REJECTED
  *                  (any state) → FAILED
  *
- * ConnectivityService registers a FileTransferActionListener to receive Accept/Reject
+ * ConnectivityService registers a ReceiveFileActionListener to receive Accept/Reject
  * callbacks — this keeps the ViewModel free of any transport knowledge.
  */
-public class FileTransferRepository {
+public class ReceiveFileRepository {
 
-    private static FileTransferRepository instance;
-    private static final String TAG = "FileTransferRepository";
+    private static ReceiveFileRepository instance;
+    private static final String TAG = "ReceiveFileRepository";
 
     // The incoming file request (null when no transfer is active)
-    private final MutableLiveData<FileTransferRequest> pendingRequest = new MutableLiveData<>(null);
+    private final MutableLiveData<ReceiveFileRequest> pendingRequest = new MutableLiveData<>(null);
 
     // The current lifecycle status of the transfer
-    private final MutableLiveData<FileTransferStatus> transferStatus = new MutableLiveData<>(FileTransferStatus.IDLE);
+    private final MutableLiveData<ReceiveFileStatus> transferStatus = new MutableLiveData<>(ReceiveFileStatus.IDLE);
 
     // Registered by ConnectivityService — bridges user decisions to network operations
-    private FileTransferActionListener actionListener;
+    private ReceiveFileActionListener actionListener;
 
     // Registered by ConnectivityService — fires immediately when a transfer request arrives
     // (bypasses LiveData lifecycle so the notification shows even when the app is in the background)
@@ -44,7 +44,7 @@ public class FileTransferRepository {
      * Callback interface implemented by ConnectivityService.
      * Keeps the ViewModel and Repository free of TransportManager knowledge.
      */
-    public interface FileTransferActionListener {
+    public interface ReceiveFileActionListener {
         /** User tapped Accept — send ACCEPT to channel and start receiving bytes. */
         void onUserAccepted(String fileName);
         /** User tapped Reject — send REJECT to channel. */
@@ -57,14 +57,14 @@ public class FileTransferRepository {
      * Implemented by ConnectivityService to show a heads-up notification.
      */
     public interface IncomingRequestListener {
-        void onRequestArrived(FileTransferRequest request);
+        void onRequestArrived(ReceiveFileRequest request);
     }
 
-    private FileTransferRepository() {}
+    private ReceiveFileRepository() {}
 
-    public static synchronized FileTransferRepository getInstance() {
+    public static synchronized ReceiveFileRepository getInstance() {
         if (instance == null) {
-            instance = new FileTransferRepository();
+            instance = new ReceiveFileRepository();
         }
         return instance;
     }
@@ -73,7 +73,7 @@ public class FileTransferRepository {
      * Registered by ConnectivityService once the transport is ready.
      * Called when the user makes an Accept/Reject decision.
      */
-    public void setActionListener(FileTransferActionListener listener) {
+    public void setActionListener(ReceiveFileActionListener listener) {
         this.actionListener = listener;
     }
 
@@ -87,11 +87,11 @@ public class FileTransferRepository {
 
     // ============ Observers (for ViewModel) ============
 
-    public LiveData<FileTransferRequest> getPendingRequest() {
+    public LiveData<ReceiveFileRequest> getPendingRequest() {
         return pendingRequest;
     }
 
-    public LiveData<FileTransferStatus> getTransferStatus() {
+    public LiveData<ReceiveFileStatus> getTransferStatus() {
         return transferStatus;
     }
 
@@ -101,11 +101,11 @@ public class FileTransferRepository {
      * Called by FileMetadataChannelHandler when the PC pushes file metadata.
      * IDLE → PENDING_APPROVAL
      */
-    public void onTransferRequested(FileTransferRequest request) {
+    public void onTransferRequested(ReceiveFileRequest request) {
         Log.d(TAG, "Incoming transfer: " + request.getFileName() + " (" + request.getFormattedSize() + ")");
         // Post status BEFORE the request so that when MainActivity's pendingRequest observer
         // fires and reads transferStatus.getValue(), the status is already PENDING_APPROVAL.
-        transferStatus.postValue(FileTransferStatus.PENDING_APPROVAL);
+        transferStatus.postValue(ReceiveFileStatus.PENDING_APPROVAL);
         pendingRequest.postValue(request);
 
         // Notify ConnectivityService immediately — this fires even when the Activity is in the
@@ -122,8 +122,8 @@ public class FileTransferRepository {
      */
     public void onTransferAccepted() {
         Log.d(TAG, "Transfer accepted by user");
-        transferStatus.postValue(FileTransferStatus.RECEIVING);
-        FileTransferRequest request = pendingRequest.getValue();
+        transferStatus.postValue(ReceiveFileStatus.RECEIVING);
+        ReceiveFileRequest request = pendingRequest.getValue();
         if (actionListener != null && request != null) {
             actionListener.onUserAccepted(request.getFileName());
         } else {
@@ -139,7 +139,7 @@ public class FileTransferRepository {
     public void onTransferRejected() {
         Log.d(TAG, "Transfer rejected by user");
         pendingRequest.postValue(null);
-        transferStatus.postValue(FileTransferStatus.REJECTED);
+        transferStatus.postValue(ReceiveFileStatus.REJECTED);
         if (actionListener != null) {
             actionListener.onUserRejected();
         } else {
@@ -154,7 +154,7 @@ public class FileTransferRepository {
     public void onTransferCompleted() {
         Log.d(TAG, "Transfer completed");
         pendingRequest.postValue(null);
-        transferStatus.postValue(FileTransferStatus.COMPLETED);
+        transferStatus.postValue(ReceiveFileStatus.COMPLETED);
     }
 
     /**
@@ -164,7 +164,7 @@ public class FileTransferRepository {
     public void onTransferFailed() {
         Log.e(TAG, "Transfer failed");
         pendingRequest.postValue(null);
-        transferStatus.postValue(FileTransferStatus.FAILED);
+        transferStatus.postValue(ReceiveFileStatus.FAILED);
     }
 
     /**
@@ -173,6 +173,6 @@ public class FileTransferRepository {
      */
     public void reset() {
         pendingRequest.postValue(null);
-        transferStatus.postValue(FileTransferStatus.IDLE);
+        transferStatus.postValue(ReceiveFileStatus.IDLE);
     }
 }

@@ -2,10 +2,10 @@ package com.example.android.network.handlers;
 
 import android.util.Log;
 
-import com.example.android.domain.entities.FileTransferRequest;
+import com.example.android.domain.entities.ReceiveFileRequest;
 import com.example.android.domain.usecases.ReceiveFileUseCase;
 import com.example.android.enums.FileTransferChannels;
-import com.example.android.repositories.FileTransferRepository;
+import com.example.android.repositories.ReceiveFileRepository;
 
 /**
  * Handles the incoming file data channel (file_data_pc) from the PC.
@@ -30,10 +30,10 @@ public class FileDataChannelHandler implements ChannelHandler {
     private static final String TAG = "FileDataHandler";
 
     private final ReceiveFileUseCase receiveFileUseCase;
-    private final FileTransferRepository repository;
+    private final ReceiveFileRepository repository;
 
     public FileDataChannelHandler(ReceiveFileUseCase receiveFileUseCase,
-                                  FileTransferRepository repository) {
+                                  ReceiveFileRepository repository) {
         this.receiveFileUseCase = receiveFileUseCase;
         this.repository = repository;
     }
@@ -51,7 +51,7 @@ public class FileDataChannelHandler implements ChannelHandler {
     public void onPeerRequest() {
         Log.d("TauSyncFlow", "[FileTransfer] FileDataChannelHandler.onPeerRequest() called");
 
-        FileTransferRequest request = repository.getPendingRequest().getValue();
+        ReceiveFileRequest request = repository.getPendingRequest().getValue();
         if (request == null) {
             Log.w(TAG, "No pending file transfer request — ignoring file_data_pc signal");
             return;

@@ -2,10 +2,10 @@ package com.example.android.network.handlers;
 
 import android.util.Log;
 
-import com.example.android.domain.entities.FileTransferRequest;
+import com.example.android.domain.entities.ReceiveFileRequest;
 import com.example.android.enums.FileTransferChannels;
 import com.example.android.network.transport.TransportManager;
-import com.example.android.repositories.FileTransferRepository;
+import com.example.android.repositories.ReceiveFileRepository;
 
 import org.json.JSONObject;
 
@@ -15,7 +15,7 @@ import org.json.JSONObject;
  * Responsibilities:
  * 1. Read the JSON metadata from the file_meta_pc channel
  * 2. Parse filename and size from the wire format: {"file_name": "...", "file_size": ...}
- * 3. Push the parsed request into FileTransferRepository → LiveData → ViewModel → UI
+ * 3. Push the parsed request into ReceiveFileRepository → LiveData → ViewModel → UI
  *
  * What this handler does NOT do:
  * - Does not decide to accept or reject (that's the user's job via the UI)
@@ -33,10 +33,10 @@ public class FileMetadataChannelHandler implements ChannelHandler {
     private static final String KEY_FILE_SIZE = "file_size";
 
     private final TransportManager transportManager;
-    private final FileTransferRepository repository;
+    private final ReceiveFileRepository repository;
 
     public FileMetadataChannelHandler(TransportManager transportManager,
-                                      FileTransferRepository repository) {
+                                      ReceiveFileRepository repository) {
         this.transportManager = transportManager;
         this.repository = repository;
     }
@@ -69,7 +69,7 @@ public class FileMetadataChannelHandler implements ChannelHandler {
                 return;
             }
 
-            FileTransferRequest request = new FileTransferRequest(fileName, fileSize);
+            ReceiveFileRequest request = new ReceiveFileRequest(fileName, fileSize);
             Log.d(TAG, "Parsed request: " + fileName + " (" + request.getFormattedSize() + ")");
 
             // Hand off to the Repository — LiveData will notify ViewModel → UI

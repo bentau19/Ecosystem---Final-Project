@@ -5,7 +5,7 @@ import android.util.Log;
 import com.example.android.enums.FileTransferChannels;
 import com.example.android.enums.FileTransferResponse;
 import com.example.android.network.transport.TransportManager;
-import com.example.android.repositories.FileTransferRepository;
+import com.example.android.repositories.ReceiveFileRepository;
 
 /**
  * Sends the user's Accept or Reject decision back to the PC via the response channel.

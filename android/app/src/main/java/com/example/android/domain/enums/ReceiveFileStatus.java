@@ -10,7 +10,7 @@ package com.example.android.domain.enums;
  *   RECEIVING → COMPLETED         (all bytes received and saved)
  *   RECEIVING → FAILED            (network error or I/O error)
  */
-public enum FileTransferStatus {
+public enum ReceiveFileStatus {
 
     /** No active transfer. Default / reset state. */
     IDLE,

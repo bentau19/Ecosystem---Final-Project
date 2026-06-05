@@ -3,9 +3,9 @@ package com.example.android.viewmodel;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.ViewModel;
 
-import com.example.android.domain.entities.FileTransferRequest;
-import com.example.android.domain.enums.FileTransferStatus;
-import com.example.android.repositories.FileTransferRepository;
+import com.example.android.domain.entities.ReceiveFileRequest;
+import com.example.android.domain.enums.ReceiveFileStatus;
+import com.example.android.repositories.ReceiveFileRepository;
 
 /**
  * ViewModel responsible for the incoming file transfer feature (PC → Android).
@@ -24,7 +24,7 @@ import com.example.android.repositories.FileTransferRepository;
  */
 public class FileTransferViewModel extends ViewModel {
 
-    private final FileTransferRepository repository = FileTransferRepository.getInstance();
+    private final ReceiveFileRepository repository = ReceiveFileRepository.getInstance();
 
     // ============ Observers (UI → ViewModel → Repository) ============
 
@@ -32,7 +32,7 @@ public class FileTransferViewModel extends ViewModel {
      * @return LiveData with the current incoming file transfer request.
      * Null = no active request. UI observes this to show the approval dialog.
      */
-    public LiveData<FileTransferRequest> getPendingRequest() {
+    public LiveData<ReceiveFileRequest> getPendingRequest() {
         return repository.getPendingRequest();
     }
 
@@ -40,7 +40,7 @@ public class FileTransferViewModel extends ViewModel {
      * @return LiveData with the current transfer lifecycle status.
      * UI observes this to show progress, completion, or error feedback.
      */
-    public LiveData<FileTransferStatus> getTransferStatus() {
+    public LiveData<ReceiveFileStatus> getTransferStatus() {
         return repository.getTransferStatus();
     }
 

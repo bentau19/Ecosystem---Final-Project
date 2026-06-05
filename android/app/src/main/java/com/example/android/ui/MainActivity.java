@@ -18,9 +18,9 @@ import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.R;
-import com.example.android.domain.entities.FileTransferRequest;
+import com.example.android.domain.entities.ReceiveFileRequest;
 import com.example.android.domain.enums.ConnectionStatus;
-import com.example.android.domain.enums.FileTransferStatus;
+import com.example.android.domain.enums.ReceiveFileStatus;
 import com.example.android.services.AppNotificationManager;
 import com.example.android.ui.fragments.ActionsFragment;
 import com.example.android.ui.fragments.ConnectFragment;
@@ -265,7 +265,7 @@ public class MainActivity extends AppCompatActivity {
      * Shows an AlertDialog asking the user to Accept or Reject the incoming file.
      * Used when the app is in the foreground.
      */
-    private void showFileTransferDialog(FileTransferRequest request) {
+    private void showFileTransferDialog(ReceiveFileRequest request) {
         new AlertDialog.Builder(this)
                 .setTitle("Incoming File from PC")
                 .setMessage(request.getFileName() + "\n" + request.getFormattedSize())
