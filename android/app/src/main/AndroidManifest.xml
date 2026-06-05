@@ -28,6 +28,15 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <receiver
+            android:name=".services.FileTransferActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.android.FILE_TRANSFER_ACCEPT" />
+                <action android:name="com.example.android.FILE_TRANSFER_REJECT" />
+            </intent-filter>
+        </receiver>
+
         <activity
             android:name=".testing.TestTauSyncActivity"
             android:exported="true"

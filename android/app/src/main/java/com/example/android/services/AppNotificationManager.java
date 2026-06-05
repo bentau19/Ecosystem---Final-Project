@@ -3,7 +3,9 @@ package com.example.android.services;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Context;
+import android.content.Intent;
 import android.os.Build;
 import android.util.Log;
 
@@ -21,7 +23,9 @@ import com.example.android.repositories.DeviceRepository;
 public class AppNotificationManager {
 
     public static final String CHANNEL_ID = "ConnectivityServiceChannel";
+    public static final String FILE_TRANSFER_CHANNEL_ID = "FileTransferChannel";
     public static final int NOTIFICATION_ID = 1;
+    public static final int FILE_TRANSFER_NOTIFICATION_ID = 2;
     private static final String TAG = "AppNotificationMgr";
 
     private final Context context;
@@ -133,18 +137,79 @@ public class AppNotificationManager {
     }
 
     /**
-     * Creates the notification channel required for Android O and above.
+     * Shows a heads-up notification asking the user to Accept or Reject
+     * an incoming file transfer from the PC.
+     * Used when the app is in the background.
+     *
+     * @param fileName The name of the incoming file.
+     * @param formattedSize Human-readable file size (e.g. "3.2 MB").
+     */
+    public void showFileTransferApprovalNotification(String fileName, String formattedSize) {
+        // Accept PendingIntent
+        Intent acceptIntent = new Intent(context, FileTransferActionReceiver.class);
+        acceptIntent.setAction(FileTransferActionReceiver.ACTION_ACCEPT);
+        PendingIntent acceptPending = PendingIntent.getBroadcast(
+                context, 0, acceptIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        // Reject PendingIntent
+        Intent rejectIntent = new Intent(context, FileTransferActionReceiver.class);
+        rejectIntent.setAction(FileTransferActionReceiver.ACTION_REJECT);
+        PendingIntent rejectPending = PendingIntent.getBroadcast(
+                context, 1, rejectIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        Notification notification = new NotificationCompat.Builder(context, FILE_TRANSFER_CHANNEL_ID)
+                .setContentTitle("Incoming File from PC")
+                .setContentText(fileName + " · " + formattedSize)
+                .setSmallIcon(R.drawable.ic_sync)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .addAction(0, "Accept", acceptPending)
+                .addAction(0, "Reject", rejectPending)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(FILE_TRANSFER_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Dismisses the file transfer approval notification.
+     * Called after the user responds (either via dialog or notification).
+     */
+    public void dismissFileTransferNotification() {
+        if (notificationManager != null) {
+            notificationManager.cancel(FILE_TRANSFER_NOTIFICATION_ID);
+        }
+    }
+
+    /**
+     * Creates the notification channels required for Android O and above.
      */
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
+            // Connectivity channel (low importance — persistent status bar)
+            NotificationChannel connectivityChannel = new NotificationChannel(
                     CHANNEL_ID,
                     "Connectivity Service Channel",
                     NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("Shows the status of PC connection");
+            connectivityChannel.setDescription("Shows the status of PC connection");
+
+            // File transfer channel (high importance — heads-up notification)
+            NotificationChannel fileTransferChannel = new NotificationChannel(
+                    FILE_TRANSFER_CHANNEL_ID,
+                    "File Transfer",
+                    NotificationManager.IMPORTANCE_HIGH
+            );
+            fileTransferChannel.setDescription("Incoming file transfer requests from PC");
+
             if (notificationManager != null) {
-                notificationManager.createNotificationChannel(channel);
+                notificationManager.createNotificationChannel(connectivityChannel);
+                notificationManager.createNotificationChannel(fileTransferChannel);
             }
         }
     }

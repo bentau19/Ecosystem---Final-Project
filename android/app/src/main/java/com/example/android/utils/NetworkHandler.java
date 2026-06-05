@@ -58,4 +58,25 @@ public class NetworkHandler {
         }
         return "";
     }
+
+    /**
+     * Reads raw bytes from a channel.
+     * Used for binary data (file contents) where String conversion would corrupt the data.
+     *
+     * @param tau TauSync instance.
+     * @param channel Channel name.
+     * @return Raw byte array from the channel, or empty array on failure.
+     */
+    public static byte[] readBytesFromChannel(TauSync tau, String channel) {
+        if (tau == null || !tau.isConnected()) return new byte[0];
+
+        try (TauSyncStream stream = tau.connect(channel)) {
+            if (stream != null) {
+                return stream.readAll();
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error reading bytes from channel " + channel + ": " + e.getMessage());
+        }
+        return new byte[0];
+    }
 }

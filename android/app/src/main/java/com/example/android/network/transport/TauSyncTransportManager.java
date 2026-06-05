@@ -265,6 +265,16 @@ public class TauSyncTransportManager implements TransportManager {
     }
 
     @Override
+    public byte[] readBytesFromChannel(String channel) throws Exception {
+        if (tauSync != null && status == TransportStatus.CONNECTED) {
+            byte[] data = NetworkHandler.readBytesFromChannel(tauSync, channel);
+            Log.v(TAG, "Read " + data.length + " bytes from channel [" + channel + "]");
+            return data;
+        }
+        throw new IllegalStateException("Cannot read bytes from channel [" + channel + "]: Not connected");
+    }
+
+    @Override
     public void disconnect() {
         Log.d(TAG, "Disconnect requested");
         mainHandler.removeCallbacks(this::attemptConnection);

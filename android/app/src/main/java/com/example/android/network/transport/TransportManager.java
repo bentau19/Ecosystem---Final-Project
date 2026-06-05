@@ -78,6 +78,16 @@ public interface TransportManager {
     String readFromChannel(String channel) throws Exception;
 
     /**
+     * Reads raw bytes from a channel.
+     * Used for binary data (file contents) where String conversion would corrupt the data.
+     *
+     * @param channel Channel name
+     * @return Raw byte array, or empty array if not connected / on error
+     * @throws Exception if read fails
+     */
+    byte[] readBytesFromChannel(String channel) throws Exception;
+
+    /**
      * Checks if the transport is currently connected.
      */
     boolean isConnected();

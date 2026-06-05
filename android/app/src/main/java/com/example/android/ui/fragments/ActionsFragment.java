@@ -14,7 +14,9 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.example.android.R;
+import com.example.android.domain.entities.FileTransferRequest;
 import com.example.android.domain.entities.RemoteDeviceInfo;
+import com.example.android.repositories.FileTransferRepository;
 import com.example.android.ui.MainActivity;
 import com.example.android.ui.adapters.ToolsAdapter;
 import com.example.android.ui.models.ToolItem;
@@ -84,6 +86,14 @@ public class ActionsFragment extends Fragment {
                 ((MainActivity) getActivity()).disconnect();
             }
         });
+
+        // ⚠️ TODO: REMOVE BEFORE RELEASE — simulates incoming file transfer from PC
+        view.findViewById(R.id.btnTestFileTransfer).setOnClickListener(v -> {
+            FileTransferRepository.getInstance().onTransferRequested(
+                new FileTransferRequest("test_photo.jpg", 4 * 1024 * 1024) // 4MB
+            );
+        });
+        // ⚠️ TODO: REMOVE BEFORE RELEASE — END
 
         return view;
     }

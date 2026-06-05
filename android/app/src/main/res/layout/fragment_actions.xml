@@ -7,6 +7,23 @@
     android:layout_height="match_parent"
     android:background="@color/background_main">
 
+    <!-- ⚠️ TODO: REMOVE BEFORE RELEASE — TEST BUTTON ONLY -->
+    <androidx.appcompat.widget.AppCompatButton
+        android:id="@+id/btnTestFileTransfer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:background="#FF6600"
+        android:paddingHorizontal="24dp"
+        android:text="[TEST] Simulate Incoming File"
+        android:textAllCaps="false"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        app:layout_constraintBottom_toTopOf="@id/btnDisconnect"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+    <!-- ⚠️ TODO: REMOVE BEFORE RELEASE — END -->
+
     <androidx.appcompat.widget.AppCompatButton
         android:id="@+id/btnDisconnect"
         android:layout_width="wrap_content"
