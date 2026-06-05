@@ -87,14 +87,6 @@ public class ActionsFragment extends Fragment {
             }
         });
 
-        // ⚠️ TODO: REMOVE BEFORE RELEASE — simulates incoming file transfer from PC
-        view.findViewById(R.id.btnTestFileTransfer).setOnClickListener(v -> {
-            FileTransferRepository.getInstance().onTransferRequested(
-                new FileTransferRequest("test_photo.jpg", 4 * 1024 * 1024) // 4MB
-            );
-        });
-        // ⚠️ TODO: REMOVE BEFORE RELEASE — END
-
         return view;
     }
 
