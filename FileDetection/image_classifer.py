@@ -9,6 +9,7 @@ Trainable head   : two Conv2d layers → AdaptiveAvgPool2d → Linear classifier
 Only the two custom CNN layers and the linear head are updated during
 training; the backbone weights stay static throughout.
 """
+import random
 import sys
 from pathlib import Path
 
@@ -147,6 +148,47 @@ def train_model(
             f"Epoch [{epoch + 1}/{epochs}]  loss: {avg_loss:.4f}  val_loss: {avg_val_loss:.4f}  val_acc: {val_acc:.1f}%")
 
 
+def test(image_model: ImageClassifier):
+    print("-------------------------Test Start---------------------")
+
+    correct = 0
+    total = 0
+    fn = 0
+
+    filter_folder = Path(__file__).parent / "dataset" / "test" / "filter"
+    keep_folder = Path(__file__).parent / "dataset" / "test" / "keep"
+
+    exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    samples: list[tuple[Path, int]] = (
+            [(p, 1) for p in keep_folder.rglob("*") if p.suffix.lower() in exts] +
+            [(p, 0) for p in filter_folder.rglob("*") if p.suffix.lower() in exts]
+    )
+    random.shuffle(samples)
+
+    image_model.eval()
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225])
+    ])
+    with torch.no_grad():
+        for x, y in samples:
+            img = Image.open(x).convert('RGB')
+            img_tensor = transform(img)
+            output = softmax(image_model(img_tensor.unsqueeze(0)), dim=1)  # add batch dim
+            predicted = 0 if output[0][0] > 0.95 else 1
+            if predicted == 0 and y == 1:
+                fn += 1
+            if predicted == y:
+                correct += 1
+            total += 1
+
+    print(f"Test Accuracy: {correct / total * 100}%")
+    print(f"Test False Negatives: {fn} / {total}")
+    print("-------------------------Test Finished---------------------")
+
+
 def main(argc: int, argv: list[str]):
     image_model = ImageClassifier()
 
@@ -173,22 +215,13 @@ def main(argc: int, argv: list[str]):
 
     train_model(image_model, train_loader, val_loader)
 
-    image_model.eval()
+    test(image_model)
 
-    img = Image.open(Path(__file__).parent / "26720.jpg")
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225])
-    ])
-    img_tensor = transform(img)
+    save_path: Path = Path(__file__).parent / "model.pth"
 
-    with torch.no_grad():
-        output = softmax(image_model(img_tensor.unsqueeze(0)), dim=1)  # add batch dim
-        predicted = output.argmax(dim=1)
-        print(output)
-        print(predicted)
+    torch.save(image_model.state_dict(), str(save_path))
+    image_model = ImageClassifier()
+    image_model.load_state_dict(torch.load(str(save_path)))
 
 
 if __name__ == "__main__":
