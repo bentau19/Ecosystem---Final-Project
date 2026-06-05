@@ -88,6 +88,17 @@ public interface TransportManager {
     byte[] readBytesFromChannel(String channel) throws Exception;
 
     /**
+     * Streams bytes from a channel directly into the provided OutputStream.
+     * Reads in 64 KB chunks until the peer closes the channel (EOF/FIN).
+     * No full-file buffering in RAM — safe for arbitrarily large files.
+     *
+     * @param channel      Channel name (e.g. "file_data_pc")
+     * @param outputStream Destination stream (e.g. opened via MediaStore)
+     * @throws Exception if the channel read or the write to outputStream fails
+     */
+    void streamChannelToOutputStream(String channel, java.io.OutputStream outputStream) throws Exception;
+
+    /**
      * Checks if the transport is currently connected.
      */
     boolean isConnected();

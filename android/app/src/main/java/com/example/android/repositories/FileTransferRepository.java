@@ -36,6 +36,10 @@ public class FileTransferRepository {
     // Registered by ConnectivityService — bridges user decisions to network operations
     private FileTransferActionListener actionListener;
 
+    // Registered by ConnectivityService — fires immediately when a transfer request arrives
+    // (bypasses LiveData lifecycle so the notification shows even when the app is in the background)
+    private IncomingRequestListener incomingRequestListener;
+
     /**
      * Callback interface implemented by ConnectivityService.
      * Keeps the ViewModel and Repository free of TransportManager knowledge.
@@ -45,6 +49,15 @@ public class FileTransferRepository {
         void onUserAccepted(String fileName);
         /** User tapped Reject — send REJECT to channel. */
         void onUserRejected();
+    }
+
+    /**
+     * Callback interface for being notified the moment a transfer request arrives,
+     * regardless of whether the Activity is in the foreground.
+     * Implemented by ConnectivityService to show a heads-up notification.
+     */
+    public interface IncomingRequestListener {
+        void onRequestArrived(FileTransferRequest request);
     }
 
     private FileTransferRepository() {}
@@ -62,6 +75,14 @@ public class FileTransferRepository {
      */
     public void setActionListener(FileTransferActionListener listener) {
         this.actionListener = listener;
+    }
+
+    /**
+     * Registered by ConnectivityService so it can show a notification immediately
+     * when a transfer request arrives, even when the Activity is in the background.
+     */
+    public void setIncomingRequestListener(IncomingRequestListener listener) {
+        this.incomingRequestListener = listener;
     }
 
     // ============ Observers (for ViewModel) ============
@@ -82,8 +103,16 @@ public class FileTransferRepository {
      */
     public void onTransferRequested(FileTransferRequest request) {
         Log.d(TAG, "Incoming transfer: " + request.getFileName() + " (" + request.getFormattedSize() + ")");
-        pendingRequest.postValue(request);
+        // Post status BEFORE the request so that when MainActivity's pendingRequest observer
+        // fires and reads transferStatus.getValue(), the status is already PENDING_APPROVAL.
         transferStatus.postValue(FileTransferStatus.PENDING_APPROVAL);
+        pendingRequest.postValue(request);
+
+        // Notify ConnectivityService immediately — this fires even when the Activity is in the
+        // background (LiveData observers are paused for stopped Activities).
+        if (incomingRequestListener != null) {
+            incomingRequestListener.onRequestArrived(request);
+        }
     }
 
     /**

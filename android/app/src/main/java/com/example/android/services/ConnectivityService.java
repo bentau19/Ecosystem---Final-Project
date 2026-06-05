@@ -9,6 +9,8 @@ import android.os.IBinder;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.ProcessLifecycleOwner;
 
 import com.example.android.data.datasource.SystemDataSource;
 import com.example.android.domain.entities.RemoteDeviceInfo;
@@ -22,6 +24,7 @@ import com.example.android.network.handlers.ChannelHandlerRegistry;
 import com.example.android.network.handlers.DeviceInfoChannelHandler;
 import com.example.android.domain.usecases.ReceiveFileUseCase;
 import com.example.android.domain.usecases.RespondToFileTransferUseCase;
+import com.example.android.network.handlers.FileDataChannelHandler;
 import com.example.android.network.handlers.FileMetadataChannelHandler;
 import com.example.android.network.handlers.PCNameChannelHandler;
 import com.example.android.network.handlers.DisconnectChannelHandler;
@@ -77,12 +80,15 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
         transportManager = new TauSyncTransportManager();
         handlerRegistry = new ChannelHandlerRegistry();
-        registerChannelHandlers();
 
-        // Initialize file transfer UseCases and wire the action listener
+        // Initialize file transfer UseCases before registering handlers —
+        // FileDataChannelHandler takes a direct reference to receiveFileUseCase.
         respondToFileTransferUseCase = new RespondToFileTransferUseCase(transportManager);
         receiveFileUseCase = new ReceiveFileUseCase(transportManager, FileTransferRepository.getInstance(), this);
+
+        registerChannelHandlers();
         registerFileTransferActionListener();
+        registerIncomingRequestListener();
 
         Log.d(TAG, "Service initialization complete");
     }
@@ -109,6 +115,13 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         handlerRegistry.registerHandler(
                 FileTransferChannels.REGULAR_FILE_METADATA_PC_TO_ANDROID.getValue(),
                 new FileMetadataChannelHandler(transportManager, FileTransferRepository.getInstance())
+        );
+
+        // FILE_DATA_PC_TO_ANDROID receives the actual file bytes — triggered by the polling loop.
+        // Desktop opens this channel only after receiving ACCEPT, so there is no simultaneous-connect
+        handlerRegistry.registerHandler(
+                FileTransferChannels.REGULAR_FILE_DATA_PC_TO_ANDROID.getValue(),
+                new FileDataChannelHandler(receiveFileUseCase, FileTransferRepository.getInstance())
         );
 
         // All other device telemetry data types are registered inline as Getters using generic Lambda functional interfaces
@@ -391,6 +404,33 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     // ============ File Transfer Action Listener ============
 
     /**
+     * Registers ConnectivityService as the IncomingRequestListener on the Repository.
+     * This fires immediately when a transfer request arrives — bypassing LiveData's
+     * lifecycle-awareness so the heads-up notification is shown even when the Activity
+     * is paused/stopped (app in background).
+     */
+    private void registerIncomingRequestListener() {
+        FileTransferRepository.getInstance().setIncomingRequestListener(request -> {
+            Log.d(TAG, "Incoming request arrived: " + request.getFileName());
+
+            // Show a notification only when the app is in the background.
+            // When the app is in the foreground, MainActivity's LiveData observer
+            // handles the request by showing an in-app AlertDialog instead.
+            boolean appInForeground = ProcessLifecycleOwner.get()
+                    .getLifecycle()
+                    .getCurrentState()
+                    .isAtLeast(Lifecycle.State.STARTED);
+
+            if (!appInForeground) {
+                notificationManager.showFileTransferApprovalNotification(
+                        request.getFileName(),
+                        request.getFormattedSize()
+                );
+            }
+        });
+    }
+
+    /**
      * Registers ConnectivityService as the FileTransferActionListener on the Repository.
      * This is the bridge between the user's Accept/Reject decision (ViewModel/UI layer)
      * and the actual network operations (Transport layer).
@@ -405,13 +445,18 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                     public void onUserAccepted(String fileName) {
                         new Thread(() -> {
                             try {
-                                // 1. Tell the PC we accept
+                                // Tell the PC we accept.
+                                // We do NOT call receiveFileUseCase.execute() here anymore.
+                                // Desktop will open file_data_pc after receiving ACCEPT,
+                                // and the polling loop will trigger FileDataChannelHandler,
+                                // which calls receiveFileUseCase — eliminating the race condition.
                                 respondToFileTransferUseCase.accept();
-                                // 2. Read the file bytes and save to Downloads
-                                receiveFileUseCase.execute(fileName);
                             } catch (Exception e) {
-                                Log.e(TAG, "Error during file transfer accept flow: " + e.getMessage());
+                                Log.e(TAG, "Error sending accept to PC: " + e.getMessage());
                                 FileTransferRepository.getInstance().onTransferFailed();
+                            } finally {
+                                // Dismiss the approval notification — it has served its purpose.
+                                notificationManager.dismissFileTransferNotification();
                             }
                         }, "FileTransferAcceptThread").start();
                     }
@@ -423,6 +468,8 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                                 respondToFileTransferUseCase.reject();
                             } catch (Exception e) {
                                 Log.e(TAG, "Error sending reject to PC: " + e.getMessage());
+                            } finally {
+                                notificationManager.dismissFileTransferNotification();
                             }
                         }, "FileTransferRejectThread").start();
                     }

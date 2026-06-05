@@ -274,6 +274,34 @@ public class TauSyncTransportManager implements TransportManager {
         throw new IllegalStateException("Cannot read bytes from channel [" + channel + "]: Not connected");
     }
 
+    private static final int FILE_CHUNK_SIZE = 65536; // 64 KB — matches TauSync's default chunk size
+
+    /**
+     * Streams bytes from a TauSync channel directly into the provided OutputStream.
+     * Reads in 64 KB chunks until the peer sends FIN (EOF), so the entire file is
+     * never held in RAM — safe for arbitrarily large files.
+     */
+    @Override
+    public void streamChannelToOutputStream(String channel, java.io.OutputStream outputStream) throws Exception {
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException("Cannot stream from channel [" + channel + "]: Not connected");
+        }
+
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream = tauSync.connect(channel)) {
+            java.io.InputStream in = stream.getInputStream();
+            byte[] buf = new byte[FILE_CHUNK_SIZE];
+            int n;
+            long totalBytes = 0;
+            int chunkCount = 0;
+            while ((n = in.read(buf, 0, buf.length)) > 0) {
+                outputStream.write(buf, 0, n);
+                totalBytes += n;
+                chunkCount++;
+            }
+            Log.d(TAG, "Streamed " + totalBytes + " bytes in " + chunkCount + " chunks from [" + channel + "]");
+        }
+    }
+
     @Override
     public void disconnect() {
         Log.d(TAG, "Disconnect requested");

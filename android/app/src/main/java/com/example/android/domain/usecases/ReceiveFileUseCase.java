@@ -9,6 +9,7 @@ import android.os.Environment;
 import android.provider.MediaStore;
 import android.util.Log;
 
+import com.example.android.R;
 import com.example.android.enums.FileTransferChannels;
 import com.example.android.network.transport.TransportManager;
 import com.example.android.repositories.FileTransferRepository;
@@ -46,75 +47,69 @@ public class ReceiveFileUseCase {
     }
 
     /**
-     * Reads all file bytes from the data channel and saves the file to Downloads.
+     * Streams file bytes from the data channel directly into the Downloads folder.
      * Must be called from a background thread — blocks until all bytes are received.
+     *
+     * Uses a 64 KB pipe buffer: bytes flow TauSync → OutputStream without ever
+     * holding the full file in RAM, so arbitrarily large files are supported.
      *
      * @param fileName The file name received in the metadata (e.g. "image.png")
      */
     public void execute(String fileName) {
         Log.d(TAG, "Starting file receive: " + fileName);
+        Log.d("TauSyncFlow", "[FileTransfer] ReceiveFileUseCase.execute() started for: " + fileName);
+
+        ContentResolver resolver = context.getContentResolver();
+        Uri uri = null;
 
         try {
-            // 1. Read all bytes from the data channel
-            byte[] fileBytes = transportManager.readBytesFromChannel(
-                    FileTransferChannels.REGULAR_FILE_DATA_PC_TO_ANDROID.getValue()
-            );
-
-            if (fileBytes == null || fileBytes.length == 0) {
-                Log.e(TAG, "Received empty file data");
-                repository.onTransferFailed();
-                return;
+            // 1. Create the MediaStore entry up front so we can stream straight into it.
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
+            values.put(MediaStore.Downloads.MIME_TYPE, guessMimeType(fileName));
+            values.put(MediaStore.Downloads.IS_PENDING, 1);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS+ "/" + context.getString(R.string.app_name));
             }
 
-            Log.d(TAG, "Received " + fileBytes.length + " bytes for: " + fileName);
+            uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) {
+                throw new IOException("MediaStore failed to create entry for: " + fileName);
+            }
 
-            // 2. Save to Downloads using MediaStore API (works on Android 10+, no permissions needed)
-            saveToDownloads(fileName, fileBytes);
+            // 2. Open the MediaStore OutputStream and pipe TauSync bytes directly into it.
+            //    transportManager.streamChannelToOutputStream reads in 64 KB chunks until
+            //    the desktop closes the channel (FIN) — no full-file buffering in RAM.
+            try (OutputStream out = resolver.openOutputStream(uri)) {
+                if (out == null) {
+                    throw new IOException("Failed to open MediaStore output stream for: " + fileName);
+                }
+                transportManager.streamChannelToOutputStream(
+                        FileTransferChannels.REGULAR_FILE_DATA_PC_TO_ANDROID.getValue(),
+                        out
+                );
+            }
+
+            // 3. Publish the file — makes it visible to other apps (Files, Gallery, etc.)
+            values.clear();
+            values.put(MediaStore.Downloads.IS_PENDING, 0);
+            resolver.update(uri, values, null, null);
 
             repository.onTransferCompleted();
-            Log.d(TAG, "File saved successfully: " + fileName);
+            Log.d(TAG, "File saved to Downloads: " + fileName);
+            Log.d("TauSyncFlow", "[FileTransfer] ReceiveFileUseCase COMPLETED: " + fileName);
 
         } catch (Exception e) {
             Log.e(TAG, "Error receiving file: " + e.getMessage());
+            Log.e("TauSyncFlow", "[FileTransfer] ReceiveFileUseCase FAILED: " + e.getMessage());
+
+            // Clean up the incomplete MediaStore entry so it doesn't appear as a corrupt file.
+            if (uri != null) {
+                try { resolver.delete(uri, null, null); } catch (Exception ignored) {}
+            }
+
             repository.onTransferFailed();
         }
-    }
-
-    /**
-     * Saves raw bytes to the public Downloads folder using MediaStore.
-     * Compatible with Android 10+ (API 29+) — no WRITE_EXTERNAL_STORAGE permission needed.
-     */
-    private void saveToDownloads(String fileName, byte[] bytes) throws IOException {
-        ContentValues values = new ContentValues();
-        values.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
-        values.put(MediaStore.Downloads.MIME_TYPE, guessMimeType(fileName));
-        values.put(MediaStore.Downloads.IS_PENDING, 1);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
-        }
-
-        ContentResolver resolver = context.getContentResolver();
-        Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-
-        if (uri == null) {
-            throw new IOException("MediaStore failed to create URI for: " + fileName);
-        }
-
-        try (OutputStream out = resolver.openOutputStream(uri)) {
-            if (out == null) {
-                throw new IOException("Failed to open output stream for: " + fileName);
-            }
-            out.write(bytes);
-            out.flush();
-        }
-
-        // Mark file as complete — makes it visible to other apps
-        values.clear();
-        values.put(MediaStore.Downloads.IS_PENDING, 0);
-        resolver.update(uri, values, null, null);
-
-        Log.d(TAG, "Saved to Downloads: " + fileName + " (" + bytes.length + " bytes)");
     }
 
     /**
