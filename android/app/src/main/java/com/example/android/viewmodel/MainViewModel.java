@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel;
 import com.example.android.domain.entities.DeviceConnectionState;
 import com.example.android.domain.entities.DeviceStorageStats;
 import com.example.android.domain.entities.RemoteDeviceInfo;
+import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
 import com.example.android.domain.usecases.ParseQrDataUseCase;
@@ -40,6 +41,9 @@ public class MainViewModel extends ViewModel {
      */
     public LiveData<DeviceConnectionState> getConnectionState() {
         return repository.getConnectionState();
+    }
+    public LiveData<ConnectionStatus> getConnectionStatus() {
+        return repository.getConnectionStatus();
     }
 
     /**
@@ -78,37 +82,4 @@ public class MainViewModel extends ViewModel {
     public DeviceStorageStats getStorageStats() {
         return repository.getLocalDeviceStorage();
     }
-
-    /**
-     * NOTE:
-     * Currently, battery monitoring is handled within the ViewModel for UI demonstration purposes.
-     * In the next phase, this logic will be migrated to a Foreground Service (ConnectionService).
-     * This migration will ensure continuous monitoring and data synchronization with the PC
-     * even when the app is in the background or the screen is off.
-     */
-//    public void startBatteryMonitoring(Context context) {
-//        if (batteryReceiver != null) return;
-//
-//        batteryReceiver = new android.content.BroadcastReceiver() {
-//            @Override
-//            public void onReceive(Context context, android.content.Intent intent) {
-//                int level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
-//                int scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
-//                int batteryPct = (int) ((level / (float) scale) * 100);
-//
-//                // update the local battery level in the repository
-//                repository.updateLocalBattery(batteryPct);
-//            }
-//        };
-//
-//        context.registerReceiver(batteryReceiver,
-//                new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
-//    }
-//
-//    public void stopBatteryMonitoring(Context context) {
-//        if (batteryReceiver != null) {
-//            context.unregisterReceiver(batteryReceiver);
-//            batteryReceiver = null;
-//        }
-//    }
 }

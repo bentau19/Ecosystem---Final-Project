@@ -52,6 +52,7 @@ desktop.ini
 .claude
 .run
 graphify-out
+*.idea/
 .graphify_ast.json
 .graphify_detect.json
 .graphify_python

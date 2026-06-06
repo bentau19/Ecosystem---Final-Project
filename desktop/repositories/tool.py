@@ -8,18 +8,14 @@ from repositories.repository import IRepository
 from serializers.tool import ToolSerializer
 from utils.meta import ABCQObjectMeta
 
-# Mock data
+# Seed data — inserted once when the tools table is empty on first launch.
 _SEED_TOOLS: list[tuple[str, str, str, bool]] = [
-    ("Tool 1", "Description 1", ":/icons/android.svg", True),
-    ("Tool 2", "Description 2", ":/icons/android.svg", True),
-    ("Tool 3", "Description 3", ":/icons/android.svg", True),
-    ("Tool 4", "Description 4", ":/icons/android.svg", True),
-    ("Tool 5", "Description 5", ":/icons/android.svg", False),
-    ("Tool 6", "Description 6", ":/icons/android.svg", True),
-    ("Tool 7", "Description 7", ":/icons/android.svg", False),
-    ("Tool 8", "Description 8", ":/icons/android.svg", True),
-    ("Tool 9", "Description 9", ":/icons/android.svg", False),
-    ("Tool 10", "Description 10", ":/icons/android.svg", True),
+    (
+        "Send File to Phone",
+        "Send any file from your PC directly to your phone.",
+        ":/icons/smartphone.svg",
+        True,
+    ),
 ]
 
 
@@ -45,8 +41,8 @@ class ToolRepository(
     entity_deleted: Signal = Signal(str)
 
     def __init__(
-        self,
-        parent: QObject | None = None,
+            self,
+            parent: QObject | None = None,
     ) -> None:
         """Initialize the repository and ensure the backing table exists.
 
@@ -55,27 +51,28 @@ class ToolRepository(
         """
         super().__init__(parent)
         self._serializer = ToolSerializer()
-        self._db_path =  Path(os.environ.get("APPDATA")) / "SyncDose" / "app.db"
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db_path.touch(exist_ok=True)
+        # self._db_path = Path(os.environ.get("APPDATA")) / "SyncDose" / "app.db"
+        # self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        # self._db_path.touch(exist_ok=True)
+        self._db_path = Path(__file__).parent.parent / "data" / "app.db"
         self._configure_db()
 
     def _configure_db(self) -> None:
         # Create the tools table if absent; seed default rows when the table is empty.
         with sqlite3.connect(self._db_path) as conn:
             cursor = conn.cursor()
+            cursor.execute("DROP TABLE IF EXISTS tools")
             cursor.execute(
                 "CREATE TABLE IF NOT EXISTS tools "
                 "(title TEXT PRIMARY KEY, description TEXT,"
                 " icon_path TEXT, is_enabled BOOLEAN)"
             )
             cursor.execute("SELECT COUNT(*) FROM tools")
-            if cursor.fetchone()[0] == 0:
-                cursor.executemany(
-                    "INSERT INTO tools (title, description, icon_path, is_enabled) "
-                    "VALUES (?, ?, ?, ?)",
-                    _SEED_TOOLS,
-                )
+            cursor.executemany(
+                "INSERT OR REPLACE INTO tools (title, description, icon_path, is_enabled) "
+                "VALUES (?, ?, ?, ?)",
+                _SEED_TOOLS,
+            )
             conn.commit()
 
     def id_exists(self, title: str) -> bool:

@@ -3,7 +3,8 @@ from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout
 
 from app.app_state import app_state
 from app.theme_manager import theme_manager
-from resources.colors import DashboardColors, LightDashboardColors
+from dto.tool import ToolDTO
+from resources.colors import DashboardColors, LightColors, LightDashboardColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet, themed
@@ -72,16 +73,16 @@ class ToolsSectionHeader(QWidget):
         # Load and apply the themed stylesheet.
         qss: str = load_stylesheet(
             DashboardStyles.TOOLS_SECTION_HEADER,
-            themed([DashboardColors], [LightDashboardColors], theme_manager.is_dark),
+            themed([DashboardColors], [LightDashboardColors, LightColors], theme_manager.is_dark),
         )
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
         # Wire tool_count_changed and theme_changed to their slots.
-        self._tools_view_model.tool_count_changed.connect(self._update_tag)
+        self._tools_view_model.tools_changed.connect(self._update_tag)
         theme_manager.theme_changed.connect(self._setup_style)
 
     @Slot(int)
-    def _update_tag(self, count: int) -> None:
+    def _update_tag(self, tools: list[ToolDTO]) -> None:
         # Update the count badge text whenever the enabled-tool count changes.
-        self._tag.setText(f"{count} tools available")
+        self._tag.setText(f"{len(tools)} tools available")

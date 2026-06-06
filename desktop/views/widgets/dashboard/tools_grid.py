@@ -1,6 +1,6 @@
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QColor, QIcon
-from PySide6.QtWidgets import QLabel, QWidget
+from PySide6.QtWidgets import QFileDialog, QLabel, QWidget
 
 from domain.dto.tool import ToolDTO
 from views.layouts.flow_layout import FlowLayout
@@ -11,6 +11,9 @@ from resources.paths import DashboardStyles
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet, themed
 from views.widgets.dashboard.tool_card import ToolCard
+
+# Title of the file-send tool — used to dispatch the click handler.
+_SEND_FILE_TOOL_TITLE: str = "Send File to Phone"
 
 
 class ToolsGrid(QWidget):
@@ -38,6 +41,7 @@ class ToolsGrid(QWidget):
         self._active_tools: list[ToolCard] = []
 
         self._tool_view_model = app_state.tool_viewmodel
+        self._file_transfer_viewmodel = app_state.file_transfer_viewmodel
         self._main_layout: FlowLayout
 
         self._setup_ui()
@@ -74,7 +78,7 @@ class ToolsGrid(QWidget):
 
     def _connect_signals(self) -> None:
         # Wire tools_loaded and theme_changed; add/update/delete signals are stubbed until needed.
-        # TODO: setup signals on changed tool,added deleted if needed
+        # TODO: setup signals on changed tool, added, deleted if needed
         # self._tool_view_model.tool_updated.connect(self._on_tool_updated)
         # self._tool_view_model.tool_added.connect(self._on_tool_added)
         # self._tool_view_model.tool_deleted.connect(self._on_tool_deleted)
@@ -83,8 +87,13 @@ class ToolsGrid(QWidget):
 
     @Slot(list)
     def _load_tools(self, tools: list[ToolDTO]) -> None:
+        # Clear any previously rendered cards before repopulating (handles async re-fires).
+        while self._main_layout.count():
+            item = self._main_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
         # Create a ToolCard for each enabled tool DTO and add it to the flow layout.
-        print(tools)
         for tool in tools:
             description_label: QLabel = self._create_description_widget(tool.description)
             tool_card: ToolCard = ToolCard(
@@ -92,4 +101,21 @@ class ToolsGrid(QWidget):
             )
             tool_card.setMinimumWidth(self._card_width)
             tool_card.setFixedHeight(self._card_height)
+
+            # Dispatch click to the appropriate handler by tool title.
+            if tool.title == _SEND_FILE_TOOL_TITLE:
+                tool_card.clicked.connect(self._on_send_file_clicked)
+
             self._main_layout.addWidget(tool_card)
+
+    @Slot()
+    def _on_send_file_clicked(self) -> None:
+        """Open a native file picker and send the chosen file to the connected phone."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select a file to send",
+            "",              # start in the OS last-used directory
+            "All Files (*)",
+        )
+        if path:
+            self._file_transfer_viewmodel.send_file(path)

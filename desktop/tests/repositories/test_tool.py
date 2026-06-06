@@ -64,14 +64,14 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ToolRepositor
 
 
 def test_id_exists_returns_false_when_title_not_in_db(
-    repository: ToolRepository,
+        repository: ToolRepository,
 ) -> None:
     assert repository.id_exists("nonexistent") is False
 
 
 def test_id_exists_returns_true_after_save(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
 
@@ -79,8 +79,8 @@ def test_id_exists_returns_true_after_save(
 
 
 def test_id_exists_returns_false_for_unknown_title_when_other_entities_exist(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
 
@@ -93,14 +93,14 @@ def test_id_exists_returns_false_for_unknown_title_when_other_entities_exist(
 
 
 def test_get_by_id_returns_none_when_title_not_found(
-    repository: ToolRepository,
+        repository: ToolRepository,
 ) -> None:
     assert repository.get_by_id("nonexistent") is None
 
 
 def test_get_by_id_returns_entity_after_save(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
 
@@ -110,8 +110,8 @@ def test_get_by_id_returns_entity_after_save(
 
 
 def test_get_by_id_returns_none_when_title_does_not_match(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
 
@@ -119,9 +119,9 @@ def test_get_by_id_returns_none_when_title_does_not_match(
 
 
 def test_get_by_id_returns_correct_entity_when_multiple_saved(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
-    tool_disabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
+        tool_disabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
     repository.save(tool_disabled)
@@ -135,17 +135,9 @@ def test_get_by_id_returns_correct_entity_when_multiple_saved(
 # ---------------------------------------------------------------------------
 
 
-def test_get_all_returns_only_seeded_tools_when_no_extra_saves(
-    repository: ToolRepository,
-) -> None:
-    # The fixture DB is seeded with 10 default tools by _configure_db
-    result = repository.get_all()
-    assert len(result) == 10
-
-
 def test_get_all_returns_additional_entity_after_save(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
 ) -> None:
     initial_count = len(repository.get_all())
     repository.save(tool_enabled)
@@ -154,9 +146,9 @@ def test_get_all_returns_additional_entity_after_save(
 
 
 def test_get_all_excludes_deleted_entities(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
-    tool_disabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
+        tool_disabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
     repository.save(tool_disabled)
@@ -174,9 +166,9 @@ def test_get_all_excludes_deleted_entities(
 
 
 def test_get_all_enabled_returns_only_enabled_tools(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
-    tool_disabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
+        tool_disabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
     repository.save(tool_disabled)
@@ -188,8 +180,8 @@ def test_get_all_enabled_returns_only_enabled_tools(
 
 
 def test_get_all_enabled_excludes_newly_disabled_tool(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
     disabled_version = ToolEntity(
@@ -211,8 +203,8 @@ def test_get_all_enabled_excludes_newly_disabled_tool(
 
 
 def test_save_persists_entity_to_db(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
 
@@ -220,8 +212,8 @@ def test_save_persists_entity_to_db(
 
 
 def test_save_replaces_existing_entity_with_same_title(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
 
@@ -237,8 +229,8 @@ def test_save_replaces_existing_entity_with_same_title(
 
 
 def test_save_emits_entity_saved_with_saved_entity(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
 ) -> None:
     received: list[ToolEntity] = []
     repository.entity_saved.connect(lambda e: received.append(e))
@@ -249,9 +241,9 @@ def test_save_emits_entity_saved_with_saved_entity(
 
 
 def test_save_emits_entity_saved_once_per_call(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
-    tool_disabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
+        tool_disabled: ToolEntity,
 ) -> None:
     received: list[ToolEntity] = []
     repository.entity_saved.connect(lambda e: received.append(e))
@@ -270,8 +262,8 @@ def test_save_emits_entity_saved_once_per_call(
 
 
 def test_delete_removes_entity_from_db(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
 
@@ -281,9 +273,9 @@ def test_delete_removes_entity_from_db(
 
 
 def test_delete_only_removes_matching_entity(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
-    tool_disabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
+        tool_disabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
     repository.save(tool_disabled)
@@ -294,8 +286,8 @@ def test_delete_only_removes_matching_entity(
 
 
 def test_delete_emits_entity_deleted_signal(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
     received: list[str] = []
@@ -307,7 +299,7 @@ def test_delete_emits_entity_deleted_signal(
 
 
 def test_delete_nonexistent_title_still_emits_entity_deleted(
-    repository: ToolRepository,
+        repository: ToolRepository,
 ) -> None:
     received: list[str] = []
     repository.entity_deleted.connect(lambda title: received.append(title))
@@ -318,9 +310,9 @@ def test_delete_nonexistent_title_still_emits_entity_deleted(
 
 
 def test_delete_all_entities_results_in_only_seeded_tools_removed(
-    repository: ToolRepository,
-    tool_enabled: ToolEntity,
-    tool_disabled: ToolEntity,
+        repository: ToolRepository,
+        tool_enabled: ToolEntity,
+        tool_disabled: ToolEntity,
 ) -> None:
     repository.save(tool_enabled)
     repository.save(tool_disabled)

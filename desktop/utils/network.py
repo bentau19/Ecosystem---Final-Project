@@ -56,7 +56,6 @@ def read_string_from_channel(tau: TauSync, channel: str) -> str:
     Returns:
         The full payload decoded as a UTF-8 string.
     """
-    print(channel)
     with tau.connect(str(channel)) as stream:
         return stream.read_all().decode("utf-8")
 

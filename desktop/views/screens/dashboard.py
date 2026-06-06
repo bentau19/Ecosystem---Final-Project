@@ -33,7 +33,7 @@ class DashboardScreen(QWidget):
         # Instantiate the content area, sidebar, and topbar.
         self._dashboard_content = DashboardContent()
         self._sidebar = Sidebar(logo_widget_height=100)
-        self._topbar = Topbar("Dashboard", "Samsung Galaxy S23 — Last synced just now", 100)
+        self._topbar = Topbar(100)
 
     def _setup_layout(self) -> None:
         # Right side: topbar + divider + content

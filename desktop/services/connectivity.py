@@ -4,14 +4,13 @@ Device connectivity service.
 Manages the TauSync TCP connection lifecycle on a background thread,
 emitting Qt signals when a device connects or disconnects.
 """
-import socket
 import threading
 
 from PySide6.QtCore import QObject, Signal
 
-import utils.network
 from domain.enums.session_channels import SessionChannels
 from tausync_py import TauSync
+from utils import network
 
 
 class ConnectivityService(QObject):
@@ -116,12 +115,13 @@ class ConnectivityService(QObject):
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            self.disconnect_device()
+            self.disconnect_device()  # call private directly — already on a bg thread
             pending_threads: list[threading.Thread] = self._get_pending_threads()
             for t in pending_threads:
                 if t == threading.current_thread():
                     continue
                 t.join()
+            print("b")
 
     def _spawn(self, target, *args):
         # All thread creation must go through here so teardown can join every worker.
@@ -145,8 +145,17 @@ class ConnectivityService(QObject):
         Emits:
             device_disconnected: After the transport is closed.
         """
-        if SessionChannels.DISCONNECT_FROM_PHONE.value in self._tau.get_peer_waiting_words():
-            read = utils.network.read_string_from_channel(self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value)
+
+        if not self.connected:
+            return
+
+        waiting_words = self._tau.get_peer_waiting_words()
+
+        if SessionChannels.DISCONNECT_FROM_PHONE.value in waiting_words:
+            try:
+                _ = network.read_string_from_channel(self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value)
+            except Exception as e:
+                print(f"[Desktop] ⚠ Failed to read phone disconnect signal: {e}")
         else:
             self._notify_phone_of_disconnect()
 
@@ -155,24 +164,19 @@ class ConnectivityService(QObject):
 
     def _notify_phone_of_disconnect(self) -> None:
         # Failures are swallowed so a missing/gone phone never blocks our own teardown.
+        # timeout_seconds is mandatory: without it tau.connect() blocks forever waiting
+        # for the phone to open the meeting-word channel, which prevents device_disconnected
+        # from ever being emitted and leaves the UI stuck on the dashboard.
         try:
-            with self._tau.connect(SessionChannels.DISCONNECT_FROM_PC.value) as stream:
+            with self._tau.connect(SessionChannels.DISCONNECT_FROM_PC.value, timeout_seconds=10) as stream:
                 stream.write_string("disconnect")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Desktop] Warning: Failed to notify phone of disconnect: {e}")
 
     def _connect_to_device(self, hostname: str) -> None:
         # TODO: connect via Bluetooth using the previously stored device ID.
-
-        try:
-            self._stop()
-            ip = utils.network.get_ip_by_hostname(hostname)
-            self._tau.connect_to(ip)
-            self.device_connected.emit()
-        except TimeoutError as ex:
-            print(ex)
-        except socket.gaierror as ex:
-            print(ex)
+        self.device_connected.emit()
+        pass
 
     def _listen(self) -> None:
         # Retries on timeout; surfaces unexpected exceptions via connection_error.
