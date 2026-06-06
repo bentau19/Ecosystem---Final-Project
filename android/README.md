@@ -87,6 +87,7 @@ Important files:
 - `MainViewModel.java` - Coordinates connection state and user actions (QR scan, connect, disconnect, refresh stats).
 - `MainViewModelFactory.java` - Manual dependency creation for `MainViewModel`.
 - `FileTransferViewModel.java` - Coordinates incoming file transfer state (PC → Android). Exposes `getPendingRequest()` and `getTransferStatus()` LiveData, and handles user Accept / Reject decisions.
+- `SendFileViewModel.java` - Coordinates outgoing file transfer state (Android → PC). Exposes `getSendStatus()` and `getCurrentFileName()` LiveData. Delegates all logic to `SendFileRepository`.
 
 Each ViewModel is scoped to `MainActivity` and observed by the relevant Fragment or the Activity itself. ViewModels are split by feature to keep each one focused.
 
@@ -351,15 +352,71 @@ network/handlers/FileDataChannelHandler.java
 services/FileTransferActionReceiver.java
 ```
 
-### Extending to Android → PC (future)
+---
 
-The same repositories and ViewModels can be extended. New additions needed:
+## File Transfer Flow (Android → PC)
 
-- `SendFileUseCase.java` - reads file from storage, writes metadata to `file_meta_android`, waits for PC response on `file_response_pc`, writes bytes to `file_data_android`.
-- A file picker helper for the UI.
-- Additional `FileTransferStatus` values (e.g. `SENDING`, `SEND_COMPLETED`).
+The user shares any file to SyncDose via Android's share sheet. `MainActivity` receives the `ACTION_SEND` Intent, resolves the display name via `ContentResolver`, and delegates to `SendFileViewModel`.
 
-No structural changes to existing files are needed.
+### Architecture
+
+```text
+UI Layer        MainActivity  (share Intent / progress dialog)
+                    ↓  sendFile(uri, fileName)
+ViewModel       SendFileViewModel
+                    ↓  repository.requestSend(uri, fileName)
+Repository      SendFileRepository  (LiveData source of truth)
+                    ↓  ActionListener.onSendRequested(uri)
+Service         ConnectivityService
+                    ↓  background thread
+Use Case        SendFileUseCase.execute(uri, fileName)
+```
+
+### Step-by-step Flow
+
+**1. User shares a file**
+
+`MainActivity.handleShareIntent()` validates the Intent, checks `ConnectionStatus == CONNECTED`, resolves the file display name, and calls `sendFileViewModel.sendFile(uri, fileName)`.
+
+**2. Metadata sent to PC**
+
+`SendFileUseCase` serializes `{name, size}` as JSON and writes it to the `file_meta_android` TauSync channel. Status → `WAITING_FOR_RESPONSE`. A non-cancellable progress dialog appears on Android.
+
+**3. PC responds**
+
+The PC's polling loop detects `file_meta_android`, shows a toast to the user, and writes `accept_pc` or `reject_pc` to the `file_response_pc` channel. `SendFileUseCase` reads the response with a 123-second timeout.
+
+- **Accepted** → status → `SENDING`, dialog message updates; use case streams file bytes to `file_data_android`.
+- **Rejected** → status → `REJECTED`, dialog dismissed, rejection Toast shown.
+
+**4. Transfer complete**
+
+On success, status → `COMPLETED`. `MainActivity` dismisses the dialog, shows "File sent successfully ✓", and calls `sendFileViewModel.reset()`.
+
+### TauSync Channels Used
+
+| Channel enum | Wire value | Direction | Purpose |
+|---|---|---|---|
+| `REGULAR_FILE_METADATA_ANDROID_TO_PC` | `file_meta_android` | Android → PC | JSON metadata (name + size) |
+| `REGULAR_FILE_RESPONSE_FROM_PC` | `file_response_pc` | PC → Android | `accept_pc` or `reject_pc` |
+| `REGULAR_FILE_DATA_ANDROID_TO_PC` | `file_data_android` | Android → PC | Raw file bytes |
+
+### SendFileStatus lifecycle
+
+```text
+IDLE → WAITING_FOR_RESPONSE → SENDING → COMPLETED
+                            ↘ REJECTED
+              (any state)   → FAILED
+```
+
+### New files added for this feature
+
+```text
+domain/enums/SendFileStatus.java
+domain/usecases/SendFileUseCase.java
+repositories/SendFileRepository.java
+viewmodel/SendFileViewModel.java
+```
 
 ---
 
@@ -438,6 +495,8 @@ Current tests include:
 - `MainViewModelTest.java`
 - `FileTransferRepositoryTest.java` - Verifies all state-machine transitions (IDLE → PENDING_APPROVAL → RECEIVING → COMPLETED / REJECTED / FAILED → IDLE) and that `FileTransferActionListener` / `IncomingRequestListener` callbacks fire at the correct moments.
 - `FileTransferViewModelTest.java` - Verifies that `acceptTransfer()`, `rejectTransfer()`, and `reset()` produce the expected LiveData state changes, and that `getPendingRequest()` / `getTransferStatus()` correctly reflect repository state.
+- `SendFileRepositoryTest.java` - Verifies all state-machine transitions for the Android→PC send flow (IDLE → WAITING_FOR_RESPONSE → SENDING → COMPLETED / REJECTED / FAILED → IDLE) and that `SendFileActionListener` fires at the correct moments.
+- `SendFileViewModelTest.java` - Verifies that `sendFile()` and `reset()` produce the expected LiveData state changes via the repository singleton.
 
 Manual TauSync testing activities are under:
 
