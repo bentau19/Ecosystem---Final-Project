@@ -48,4 +48,8 @@
         <file alias="file-received.qss">styles/toasts/file-received.qss</file>
     </qresource>
 
+    <qresource prefix="/styles/loading">
+        <file alias="overlay.qss">styles/loading/overlay.qss</file>
+    </qresource>
+
 </RCC>

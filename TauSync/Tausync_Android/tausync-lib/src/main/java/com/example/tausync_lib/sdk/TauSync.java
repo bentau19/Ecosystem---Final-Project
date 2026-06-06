@@ -1,9 +1,12 @@
 package com.example.tausync_lib.sdk;
 
+import android.util.Log;
+
 import com.example.tausync_lib.implementations.management.ConnectionContext;
 import com.example.tausync_lib.implementations.management.ConnectionManager;
 import com.example.tausync_lib.implementations.management.TauSyncStream;
 
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -212,7 +215,10 @@ public final class TauSync {
         if (disposed) return;
         disposed = true;
         if (manager != null) {
-            try { manager.close(); } catch (Exception ignored) {}
+            try {
+                manager.close();
+            } catch (Exception ignored) {
+            }
         }
     }
 

@@ -432,3 +432,15 @@ class LightTopbarColors(ColorsEnum):
     BTN_HOVER_0 = "#991B1B"
     BTN_HOVER_1 = "#B91C1C"
     BTN_PRESSED = "#7F1D1D"
+
+
+class LoadingOverlayColors(ColorsEnum):
+    """Component-scoped color tokens for the loading overlay (dark mode)."""
+
+    TEXT = Palette.SLATE_500  # Muted secondary text below the spinner
+
+
+class LightLoadingOverlayColors(ColorsEnum):
+    """Component-scoped color tokens for the loading overlay (light mode)."""
+
+    TEXT = LightPalette.SLATE_500  # Muted secondary text below the spinner

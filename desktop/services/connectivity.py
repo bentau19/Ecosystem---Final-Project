@@ -161,6 +161,7 @@ class ConnectivityService(QObject):
 
         self._tau.disconnect()
         self.device_disconnected.emit()
+        self._listen()
 
     def _notify_phone_of_disconnect(self) -> None:
         # Failures are swallowed so a missing/gone phone never blocks our own teardown.
@@ -181,6 +182,7 @@ class ConnectivityService(QObject):
     def _listen(self) -> None:
         # Retries on timeout; surfaces unexpected exceptions via connection_error.
         while self._is_running.is_set() and not self.connected:
+            print("a")
             try:
                 self._tau.listen(timeout_seconds=10)
                 self.device_connected.emit()

@@ -1,0 +1,165 @@
+[
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\Ecosystem.sln",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\TauSync\\TauSync.sln",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\TauSync\\Tausync_Windows\\TauSync.Lib\\TauSync.Lib.csproj",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\TauSync\\Tausync_Windows\\make_dll.sh",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\TauSync\\windows\\tausync_py\\dll\\TauSync.Lib.deps.json",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\android\\gradlew",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\make_exe.sh",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\serializers\\schemas\\file_metadata.json",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\shared\\enums\\device_info_channels.json",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\shared\\enums\\file_transfer_response.json",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\shared\\enums\\files_enums.json",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\shared\\enums\\session_channels.json",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\shared\\jsons\\file_metadata.json",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\.github\\actions\\tau_sync\\action.yml",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\.github\\workflows\\desktop.yml",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\.github\\workflows\\tau_sync.yml",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\requirments.txt",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\README.md",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\TauSync\\Shared_Definitions\\TauSync_Protocol_Spec.md",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\TauSync\\Tausync_Android\\tausync-lib\\README.md",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\TauSync\\Tausync_Android\\tausync-lib\\README_TESTS.md",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\TauSync\\Tausync_Windows\\TauSync.Lib\\docs\\TauSync_v3_CSharp_Implementation_Plan.md"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\TauSync\\docker-compose.yml",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\TauSync\\windows\\README.md",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\TauSync\\windows\\requirements.txt",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\TauSync\\windows\\tausync_py\\README.md",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\android\\README.md",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\README.md",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\native\\windows\\pipe\\CMakeLists.txt",
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\requirements.txt"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\filter\\19885.jpeg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\filter\\19902.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\filter\\25030.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\filter\\25031.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\filter\\25032.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\filter\\25046.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\keep\\22182.jpeg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\keep\\24919.jpeg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\keep\\25001.jpeg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\20750.jpeg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\21099.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\21106.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\21107.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\21108.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\21145.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\21157.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\21159.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\21365.jpeg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\21474.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\21503.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\21504.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\21536.jpeg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\FileDetection\\dataset\\test\\filter\\21633.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\android\\app\\src\\main\\res\\mipmap-hdpi\\ic_launcher.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\android\\app\\src\\main\\res\\mipmap-hdpi\\ic_launcher_round.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\android\\app\\src\\main\\res\\mipmap-mdpi\\ic_launcher.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\android\\app\\src\\main\\res\\mipmap-mdpi\\ic_launcher_round.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\android\\app\\src\\main\\res\\mipmap-xhdpi\\ic_launcher.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\android\\app\\src\\main\\res\\mipmap-xhdpi\\ic_launcher_round.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\android\\app\\src\\main\\res\\mipmap-xxhdpi\\ic_launcher.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\android\\app\\src\\main\\res\\mipmap-xxhdpi\\ic_launcher_round.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\android\\app\\src\\main\\res\\mipmap-xxxhdpi\\ic_launcher.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\android\\app\\src\\main\\res\\mipmap-xxxhdpi\\ic_launcher_round.webp"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\resources\\icons\\android.svg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\resources\\icons\\battery.svg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\resources\\icons\\dashboard.svg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\resources\\icons\\disconnect.svg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\resources\\icons\\lightning.svg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\resources\\icons\\logo.svg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\resources\\icons\\refresh.svg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\resources\\icons\\settings.svg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\resources\\icons\\smartphone.svg"
+  ],
+  [
+    "C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Programming\\Projects\\Ecosystem\\desktop\\resources\\icons\\storage.svg"
+  ]
+]

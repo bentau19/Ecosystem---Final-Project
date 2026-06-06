@@ -118,6 +118,8 @@ public class TauSyncTransportManager implements TransportManager {
 
             } catch (Exception e) {
                 Log.e(TAG, "🔴 CAUGHT exception: " + e.getClass().getName() + " - " + e.getMessage());
+
+//              TODO: error even after failure still connect regulatory.
                 handleConnectionFailure(e);
             } catch (Throwable t) {
                 Log.e(TAG, "🔴 CAUGHT throwable: " + t.getClass().getName() + " - " + t.getMessage());

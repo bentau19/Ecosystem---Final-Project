@@ -63,7 +63,6 @@ class PhoneDetailsRow(QWidget):
         self._device_viewmodel: DeviceViewModel = app_state.device_viewmodel
 
         self._main_layout: FlowLayout
-        self._cards: list[InfoCard] = []
 
         self._setup_ui()
         self._setup_style()
@@ -163,8 +162,16 @@ class PhoneDetailsRow(QWidget):
         self._device_viewmodel.device_infos_updated.connect(self._set_device_infos)
         theme_manager.theme_changed.connect(self._setup_style)
 
+
     @Slot(list)
     def _set_device_infos(self, device_infos: list[DeviceInfoDTO]) -> None:
+        # Clear existing cards before repopulating to avoid duplicates across
+        # logout/login cycles (showEvent re-triggers load_device_info each time).
+        while self._main_layout.count():
+            item = self._main_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
         # Create an InfoCard for each DTO and add it to the flow layout.
         for dto in device_infos:
             if isinstance(dto, DeviceBatteryDTO):
@@ -175,3 +182,4 @@ class PhoneDetailsRow(QWidget):
                 self._main_layout.addWidget(self._create_general_info_card(dto))
             elif isinstance(dto, DeviceOSDTO):
                 self._main_layout.addWidget(self._create_general_info_card(dto))
+
