@@ -99,6 +99,18 @@ public interface TransportManager {
     void streamChannelToOutputStream(String channel, java.io.OutputStream outputStream) throws Exception;
 
     /**
+     * Streams bytes from the provided InputStream into a TauSync channel.
+     * Reads from {@code inputStream} in 64 KB chunks and writes each chunk to the
+     * channel until the stream is exhausted (EOF).
+     * No full-file buffering in RAM — safe for arbitrarily large files.
+     *
+     * @param channel     Channel name (e.g. "file_data_android")
+     * @param inputStream Source stream (e.g. opened via ContentResolver for a URI)
+     * @throws Exception if the channel write or the read from inputStream fails
+     */
+    void streamInputStreamToChannel(String channel, java.io.InputStream inputStream) throws Exception;
+
+    /**
      * Checks if the transport is currently connected.
      */
     boolean isConnected();

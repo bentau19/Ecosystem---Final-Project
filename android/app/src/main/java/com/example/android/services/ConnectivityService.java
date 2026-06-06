@@ -24,6 +24,8 @@ import com.example.android.network.handlers.ChannelHandlerRegistry;
 import com.example.android.network.handlers.DeviceInfoChannelHandler;
 import com.example.android.domain.usecases.ReceiveFileUseCase;
 import com.example.android.domain.usecases.RespondToFileTransferUseCase;
+import com.example.android.domain.usecases.SendFileUseCase;
+import com.example.android.repositories.SendFileRepository;
 import com.example.android.network.handlers.FileDataChannelHandler;
 import com.example.android.network.handlers.FileMetadataChannelHandler;
 import com.example.android.network.handlers.PCNameChannelHandler;
@@ -54,6 +56,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     // File transfer UseCases — initialized after transportManager is ready
     private RespondToFileTransferUseCase respondToFileTransferUseCase;
     private ReceiveFileUseCase receiveFileUseCase;
+    private SendFileUseCase sendFileUseCase;
 
     @Override
     public void onCreate() {
@@ -85,10 +88,12 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // FileDataChannelHandler takes a direct reference to receiveFileUseCase.
         respondToFileTransferUseCase = new RespondToFileTransferUseCase(transportManager);
         receiveFileUseCase = new ReceiveFileUseCase(transportManager, ReceiveFileRepository.getInstance(), this);
+        sendFileUseCase = new SendFileUseCase(transportManager, SendFileRepository.getInstance(), this);
 
         registerChannelHandlers();
         registerFileTransferActionListener();
         registerIncomingRequestListener();
+        registerSendFileActionListener();
 
         Log.d(TAG, "Service initialization complete");
     }
@@ -224,6 +229,10 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             // Hard disconnect resets state models so the application re-opens directly on the connect screen
             deviceRepository.disconnect();
         }
+
+        // Reset file transfer repositories so stale status isn't shown after reconnect
+        ReceiveFileRepository.getInstance().reset();
+        SendFileRepository.getInstance().reset();
 
         // Remove the foreground notification so it doesn't stay in the status bar
         Log.d(TAG, "Removing foreground notification");
@@ -402,6 +411,25 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     }
 
     // ============ File Transfer Action Listener ============
+
+    /**
+     * Registers ConnectivityService as the SendFileActionListener on SendFileRepository.
+     * When the user shares a file, the ViewModel calls repository.requestSend(uri),
+     * which fires this listener on the main thread. We immediately spawn a dedicated
+     * background thread so the blocking network I/O never touches the main thread.
+     */
+    private void registerSendFileActionListener() {
+        SendFileRepository.getInstance().setActionListener(uri -> {
+            new Thread(() -> {
+                try {
+                    sendFileUseCase.execute(uri);
+                } catch (Exception e) {
+                    Log.e(TAG, "Unexpected error in SendFileThread: " + e.getMessage());
+                    SendFileRepository.getInstance().onSendFailed();
+                }
+            }, "SendFileThread").start();
+        });
+    }
 
     /**
      * Registers ConnectivityService as the IncomingRequestListener on the Repository.

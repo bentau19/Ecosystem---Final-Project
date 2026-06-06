@@ -302,6 +302,34 @@ public class TauSyncTransportManager implements TransportManager {
         }
     }
 
+    /**
+     * Streams bytes from the provided InputStream into a TauSync channel.
+     * Reads in 64 KB chunks until the InputStream is exhausted (EOF), then flushes
+     * so the peer's read_to_file() sees a clean EOF and returns.
+     * No full-file buffering in RAM — safe for arbitrarily large files.
+     */
+    @Override
+    public void streamInputStreamToChannel(String channel, java.io.InputStream inputStream) throws Exception {
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException("Cannot stream to channel [" + channel + "]: Not connected");
+        }
+
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream = tauSync.connect(channel)) {
+            java.io.OutputStream out = stream.getOutputStream();
+            byte[] buf = new byte[FILE_CHUNK_SIZE];
+            int n;
+            long totalBytes = 0;
+            int chunkCount = 0;
+            while ((n = inputStream.read(buf, 0, buf.length)) > 0) {
+                out.write(buf, 0, n);
+                totalBytes += n;
+                chunkCount++;
+            }
+            out.flush();
+            Log.d(TAG, "Streamed " + totalBytes + " bytes in " + chunkCount + " chunks to [" + channel + "]");
+        }
+    }
+
     @Override
     public void disconnect() {
         Log.d(TAG, "Disconnect requested");
