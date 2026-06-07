@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModelProvider;
 import com.example.android.data.datasource.SystemDataSource;
 import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
+import com.example.android.domain.usecases.DisconnectDeviceUseCase;
 import com.example.android.domain.usecases.ParseQrDataUseCase;
 import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
 
@@ -52,12 +53,16 @@ public class MainViewModelFactory implements ViewModelProvider.Factory {
             ParseQrDataUseCase parseQr =
                     new ParseQrDataUseCase();
 
+            DisconnectDeviceUseCase disconnectDevice =
+                    new DisconnectDeviceUseCase(repository);
+
             // 4. Create the ViewModel with the fully prepared dependency graph
             return (T) new MainViewModel(
                     repository,
                     refreshStats,
                     connectToDevice,
-                    parseQr
+                    parseQr,
+                    disconnectDevice
             );
         }
 

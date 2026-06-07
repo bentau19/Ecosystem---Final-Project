@@ -42,7 +42,7 @@ class PhoneRequestService:
 
         self.operations: dict[str, Callable[[], None]] = {
             FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC.value: file_transfer_service.receive_metadata,
-            SessionChannels.DISCONNECT_FROM_PHONE.value: self._connectivity.disconnect_device,
+            SessionChannels.DISCONNECT_FROM_PHONE.value: self._connectivity.disconnect,
         }
         self.start()
 
@@ -101,9 +101,8 @@ class PhoneRequestService:
         while self._is_running.is_set():
             tau = self._connectivity.tau
             channels = tau.get_peer_waiting_words()
-            print(f"channels: {channels}")
             for channel in channels:
                 handler = self.operations.get(channel)
                 if handler is not None:
                     handler()
-            sleep(10)
+            sleep(5)

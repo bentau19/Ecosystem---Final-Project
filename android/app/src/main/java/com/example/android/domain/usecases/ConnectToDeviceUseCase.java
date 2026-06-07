@@ -14,8 +14,4 @@ public class ConnectToDeviceUseCase {
     public void execute(RemoteDeviceInfo info) {
         repository.connect(info.getPcName(), info.getPcIp(), info.getConnectionType());
     }
-
-    public void disconnect() {
-        repository.disconnect();
-    }
 }

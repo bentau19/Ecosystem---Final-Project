@@ -218,8 +218,6 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
         if (status == TransportStatus.CONNECTED) {
             deviceRepository.updateConnectionStatus(ConnectionStatus.CONNECTED);
-            // send initial device info
-            new Thread(this::sendInitialDeviceInfo, "InitialDeviceSenderThread").start();
         } else if (status == TransportStatus.CONNECTING || status == TransportStatus.RECONNECTING) {
             deviceRepository.updateConnectionStatus(connectionStatus);
         } else if (status == TransportStatus.FAILED) {
@@ -273,55 +271,25 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     }
 
     /**
-     * Collects active hardware telemetry from system resources and transmits it sequentially as a handshake packet.
-     */
-    private void sendInitialDeviceInfo() {
-        Log.d(TAG, "Sending initial device info");
-        try {
-            sendDeviceInfo(DeviceInfoChannels.NAME_FROM_ANDROID.getValue(), systemDataSource.getDeviceModel());
-            sendDeviceInfo(DeviceInfoChannels.OS_FROM_ANDROID.getValue(), "Android " + Build.VERSION.RELEASE);
-            sendDeviceInfo(DeviceInfoChannels.ID.getValue(), systemDataSource.getDeviceId());
-            sendDeviceInfo(DeviceInfoChannels.IP_FROM_ANDROID.getValue(), systemDataSource.getLocalIp());
-            sendDeviceInfo(DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.getBattery()));
-            sendDeviceInfo(DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.isDeviceCharging()));
-            sendDeviceInfo(DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.getRawStorageStats().getTotal()));
-            sendDeviceInfo(DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.getRawStorageStats().getUsed()));
-
-        } catch (Exception e) {
-            Log.e(TAG, "Error sending initial device info: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Executes the standard write wrapper to push localized values into specific connection tracks.
-     */
-    private void sendDeviceInfo(String channel, String value) {
-        try {
-            Log.v(TAG, "Sending [" + channel + "]: " + value);
-            transportManager.writeToChannel(channel, value);
-        } catch (Exception e) {
-            Log.e(TAG, "Error writing [" + channel + "]: " + e.getMessage());
-        }
-    }
-
-    /**
      * Sends a disconnect notification to the PC when the user initiates a disconnect on the phone.
-     * Uses the DISCONNECT_FROM_PHONE channel to signal the PC to clean up.
+     *
+     * <p>Writes to the {@code DISCONNECT_FROM_PHONE} TauSync channel, then stops this service.
+     * {@code stopSelf()} triggers {@link #onDestroy()} → {@link #cleanup()}, which shuts down
+     * the transport and resets the repository — no explicit sleep is needed because
+     * {@code writeToChannel} closes the stream (and flushes data) before returning.
      */
     private void sendDisconnectToPC() {
         new Thread(() -> {
             try {
-                // send disconnect signal to PC
                 if (transportManager != null && transportManager.isConnected()) {
-                    transportManager.writeToChannel(SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect");
+                    transportManager.writeToChannel(
+                            SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect");
                     Log.d(TAG, "Disconnect signal sent to PC");
                 }
-                Thread.sleep(200);
             } catch (Exception e) {
                 Log.e(TAG, "Failed to send disconnect signal: " + e.getMessage());
             } finally {
-                // final cleanup and stop service
-                stopSelf();
+                stopSelf();  // → onDestroy → cleanup → transportManager.shutdown + repository.disconnect
             }
         }).start();
     }

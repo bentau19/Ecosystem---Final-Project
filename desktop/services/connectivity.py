@@ -38,6 +38,7 @@ class ConnectivityService(QObject):
     """
 
     device_connected = Signal()
+    device_disconnecting = Signal()
     device_disconnected = Signal()
     connection_error = Signal(str)
 
@@ -98,6 +99,11 @@ class ConnectivityService(QObject):
             return
         self._spawn(self._connect_to_device, hostname)
 
+    def disconnect(self) -> None:
+        if not self._is_running.is_set():
+            return
+        self._spawn(self._disconnect_device)
+
     # ── Private Functions ───────────────────────────────────────────────────
 
     def _start(self) -> None:
@@ -115,13 +121,12 @@ class ConnectivityService(QObject):
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            self.disconnect_device()  # call private directly — already on a bg thread
+            self._close_transport()  # tear-down only — no listener restart
             pending_threads: list[threading.Thread] = self._get_pending_threads()
             for t in pending_threads:
                 if t == threading.current_thread():
                     continue
                 t.join()
-            print("b")
 
     def _spawn(self, target, *args):
         # All thread creation must go through here so teardown can join every worker.
@@ -132,23 +137,40 @@ class ConnectivityService(QObject):
             self._threads.append(t)
         t.start()
 
-    def disconnect_device(self) -> None:
-        """Close the TauSync transport and emit ``device_disconnected``.
+    def _disconnect_device(self) -> None:
+        """Graceful session tear-down followed by an immediate listener restart.
 
-        Raw close only — does not send any notification to the phone.
-        This is the shared tear-down primitive used by both the PC-initiated
-        path (:meth:`_stop`) and the phone-initiated path
-        (:class:`~services.phone_request.PhoneRequestService`).  When the PC
-        is initiating the disconnect, call :meth:`_notify_phone_of_disconnect`
-        first so the phone can tear down gracefully before the transport closes.
+        Handles the disconnect handshake (phone-initiated or PC-initiated),
+        closes the transport, emits :attr:`device_disconnected`, then recycles
+        the current background thread as the next connection listener by calling
+        :meth:`_listen` inline.  This keeps one persistent listener thread alive
+        across sessions without spawning an extra thread per reconnect.
+
+        Used only by the mid-session ``disconnect()`` public path.  The full
+        teardown path (:meth:`_stop`) calls :meth:`_close_transport` directly
+        to avoid an unwanted listener restart.
+
+        Emits:
+            device_disconnecting: Before the transport tear-down begins, so the
+                UI can show a loading state on both phone-initiated and
+                PC-initiated disconnect paths.
+            device_disconnected: After the transport is closed.
+        """
+        self.device_disconnecting.emit()
+        self._close_transport()
+        self._listen()  # recycle this thread as the next connection listener
+
+    def _close_transport(self) -> None:
+        """Close the TauSync transport and emit ``device_disconnected`` — no restart.
+
+        Shared tear-down primitive: handles the phone/PC handshake, closes
+        ``tau``, and emits the signal.  Does **not** restart the listener loop —
+        callers that want to keep accepting connections must call :meth:`_listen`
+        (or spawn it) themselves.
 
         Emits:
             device_disconnected: After the transport is closed.
         """
-
-        if not self.connected:
-            return
-
         waiting_words = self._tau.get_peer_waiting_words()
 
         if SessionChannels.DISCONNECT_FROM_PHONE.value in waiting_words:
@@ -161,7 +183,6 @@ class ConnectivityService(QObject):
 
         self._tau.disconnect()
         self.device_disconnected.emit()
-        self._listen()
 
     def _notify_phone_of_disconnect(self) -> None:
         # Failures are swallowed so a missing/gone phone never blocks our own teardown.
@@ -182,7 +203,6 @@ class ConnectivityService(QObject):
     def _listen(self) -> None:
         # Retries on timeout; surfaces unexpected exceptions via connection_error.
         while self._is_running.is_set() and not self.connected:
-            print("a")
             try:
                 self._tau.listen(timeout_seconds=10)
                 self.device_connected.emit()

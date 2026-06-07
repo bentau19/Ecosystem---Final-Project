@@ -9,6 +9,7 @@ import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
+import com.example.android.domain.usecases.DisconnectDeviceUseCase;
 import com.example.android.domain.usecases.ParseQrDataUseCase;
 import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
 
@@ -21,19 +22,20 @@ public class MainViewModel extends ViewModel {
     private final RefreshLocalStatsUseCase refreshStats;
     private final ConnectToDeviceUseCase connectToDevice;
     private final ParseQrDataUseCase parseQr;
+    private final DisconnectDeviceUseCase disconnectDevice;
 
     private final DeviceRepository repository;
-//    private android.content.BroadcastReceiver batteryReceiver;
 
-    public MainViewModel(DeviceRepository repository, RefreshLocalStatsUseCase refreshStats,
+    public MainViewModel(DeviceRepository repository,
+                         RefreshLocalStatsUseCase refreshStats,
                          ConnectToDeviceUseCase connectToDevice,
-                         ParseQrDataUseCase parseQr
-    ) {
+                         ParseQrDataUseCase parseQr,
+                         DisconnectDeviceUseCase disconnectDevice) {
         this.repository = repository;
         this.refreshStats = refreshStats;
         this.connectToDevice = connectToDevice;
         this.parseQr = parseQr;
-
+        this.disconnectDevice = disconnectDevice;
     }
 
     /**
@@ -68,10 +70,11 @@ public class MainViewModel extends ViewModel {
     }
 
     /**
-     * Commands the repository to terminate the current remote session.
+     * Commands the UseCase to terminate the current remote session.
+     * Clears remote PC state in the repository, which propagates to the UI via LiveData.
      */
     public void disconnect() {
-        connectToDevice.disconnect();
+        disconnectDevice.execute();
     }
 
 

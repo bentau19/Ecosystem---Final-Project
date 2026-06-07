@@ -75,6 +75,7 @@ class DeviceViewModel(QObject):
         self._device_info_service: DeviceInfoService = device_info_service
 
         self._connectivity_service.device_connected.connect(self._on_device_connected)
+        self._connectivity_service.device_disconnecting.connect(self.device_disconnecting.emit)
         self._connectivity_service.device_disconnected.connect(self._on_device_disconnected)
         self._device_info_service.device_info_ready.connect(self._on_device_info_ready)
         self._device_info_service.device_fetched.connect(self._on_device_fetched)
@@ -150,8 +151,7 @@ class DeviceViewModel(QObject):
         Qt can repaint the loading overlay before the disconnect completes.
         """
         self.device_disconnecting.emit()
-        self._connectivity_service.stop()
-
+        self._connectivity_service.disconnect()
 
     # ── Private helpers ────────────────────────────────────────────────────────
 
@@ -197,9 +197,9 @@ class DeviceViewModel(QObject):
 
     @Slot()
     def _on_device_disconnected(self) -> None:
-        # Stop info reads, restart the listener so the next device can connect.
+        # _disconnect_device() recycles its thread as the next listener inline —
+        # no explicit connectivity_service.start() needed here.
         self._device_info_service.stop()
-        self._connectivity_service.start()
         self.device_disconnected.emit()
 
     # ── Conversion ────────────────────────────────────────────────────────────

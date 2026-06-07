@@ -128,20 +128,25 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Orchestrates the disconnection sequence.
-     * Sends a command to the service to notify the PC and stop itself.
+     * Orchestrates the phone-initiated disconnection sequence.
+     *
+     * <p>Sends the TauSync signal to the PC via the service, then clears the
+     * repository state optimistically so the UI responds immediately. Navigation
+     * is driven by the {@code ActionsFragment} LiveData observer — do not call
+     * {@code navigateToConnect()} here, as that would race against the observer.
      */
     public void disconnect() {
         Log.d("TauSyncFlow", "Requesting clean disconnect from service...");
 
-        // Send command to service to notify the PC and shut down.
+        // 1. Tell the service to write the DISCONNECT_FROM_PHONE channel signal and stop itself.
         Intent intent = new Intent(this, ConnectivityService.class);
         intent.setAction("com.example.android.ACTION_SEND_DISCONNECT");
         startService(intent);
 
-        // Update the UI and Repository state.
+        // 2. Optimistic state clear — triggers LiveData update →
+        //    ActionsFragment observer → navigateToConnect() automatically.
         viewModel.disconnect();
-        navigateToConnect();
+
         Toast.makeText(this, "Disconnecting...", Toast.LENGTH_SHORT).show();
     }
 

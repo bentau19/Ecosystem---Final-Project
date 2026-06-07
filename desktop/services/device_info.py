@@ -194,6 +194,8 @@ class DeviceInfoService(QObject):
         with self._threads_lock:
             return [t for t in self._threads if t.is_alive()]
 
+    _CHANNEL_TIMEOUT: int = 30  # seconds to wait for each device-info channel
+
     def _get_device_info(self) -> None:
         # Read all device channels in parallel, build the entity, persist, and emit.
         tau = self._connectivity.tau
@@ -201,15 +203,16 @@ class DeviceInfoService(QObject):
             return
         try:
             read = utils.network.read_string_from_channel
+            t = self._CHANNEL_TIMEOUT
             with ThreadPoolExecutor() as pool:
-                f_id       = pool.submit(read, tau, DeviceInfoChannels.ID.value)
-                f_name     = pool.submit(read, tau, DeviceInfoChannels.NAME_FROM_ANDROID.value)
-                f_os       = pool.submit(read, tau, DeviceInfoChannels.OS_FROM_ANDROID.value)
-                f_battery  = pool.submit(read, tau, DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.value)
-                f_charging = pool.submit(read, tau, DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.value)
-                f_stor_tot = pool.submit(read, tau, DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.value)
-                f_stor_use = pool.submit(read, tau, DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.value)
-                f_ip       = pool.submit(read, tau, DeviceInfoChannels.IP_FROM_ANDROID.value)
+                f_id       = pool.submit(read, tau, DeviceInfoChannels.ID.value, t)
+                f_name     = pool.submit(read, tau, DeviceInfoChannels.NAME_FROM_ANDROID.value, t)
+                f_os       = pool.submit(read, tau, DeviceInfoChannels.OS_FROM_ANDROID.value, t)
+                f_battery  = pool.submit(read, tau, DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.value, t)
+                f_charging = pool.submit(read, tau, DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.value, t)
+                f_stor_tot = pool.submit(read, tau, DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.value, t)
+                f_stor_use = pool.submit(read, tau, DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.value, t)
+                f_ip       = pool.submit(read, tau, DeviceInfoChannels.IP_FROM_ANDROID.value, t)
             entity = DeviceEntity(
                 id=f_id.result(),
                 tag="",

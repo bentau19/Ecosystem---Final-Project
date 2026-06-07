@@ -16,7 +16,7 @@ third stage without changing the public interface.
 
 from pathlib import Path
 
-from _checkers._registry import get_checker
+from checkers.registry import get_checker
 
 
 def is_corrupt(file_path: Path) -> bool:

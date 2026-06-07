@@ -13,9 +13,9 @@ Adding support for a new format:
 from collections.abc import Callable
 from pathlib import Path
 
-from _checkers._image import check_image
-from _checkers._zip_based import check_zip
-from _checkers._pdf import check_pdf
+from checkers.image import check_image
+from checkers.zip_based import check_zip
+from checkers.pdf import check_pdf
 
 # ---------------------------------------------------------------------------
 # Extension → checker mapping

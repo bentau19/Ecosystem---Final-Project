@@ -44,8 +44,26 @@ jobs:
         run: pytest desktop/
 
 
+  test-file-detection:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install pillow xxhash numpy pytest
+
+      - name: Run FileDetection tests
+        working-directory: FileDetection
+        run: pytest tests/ -v
+
+
   build:
-    needs: test
+    needs: [test, test-file-detection]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
 

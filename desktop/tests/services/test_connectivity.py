@@ -232,7 +232,7 @@ def test_disconnect_device_emits_device_disconnected(qtbot: QtBot) -> None:
     received: list[bool] = []
     svc.device_disconnected.connect(lambda: received.append(True))
 
-    svc.disconnect_device()
+    svc._disconnect_device()
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=1000)
     assert received == [True]
@@ -247,7 +247,7 @@ def test_disconnect_device_calls_tau_disconnect(qtbot: QtBot) -> None:
     mock_tau.disconnect.side_effect = lambda: call_order.append("disconnect")
     svc.device_disconnected.connect(lambda: call_order.append("signal"))
 
-    svc.disconnect_device()
+    svc._disconnect_device()
 
     qtbot.waitUntil(lambda: len(call_order) >= 2, timeout=1000)
     assert call_order == ["disconnect", "signal"]

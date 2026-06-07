@@ -60,4 +60,4 @@ def test_operations_contains_disconnect_from_phone() -> None:
     svc, mock_connectivity, _ = _make_service()
     key = SessionChannels.DISCONNECT_FROM_PHONE.value
     assert key in svc.operations
-    assert svc.operations[key] == mock_connectivity.disconnect_device
+    assert svc.operations[key] == mock_connectivity.disconnect

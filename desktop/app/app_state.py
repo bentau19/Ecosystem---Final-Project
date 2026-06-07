@@ -56,5 +56,13 @@ class AppState:
             file_transfer_service=self.file_transfer_service,
         )
 
+        # Wire PhoneRequestService lifecycle to device connection events.
+        # On connect  → start() is idempotent (guarded by _is_running); the thread
+        #               that was waiting in the initial wait-loop is now polling.
+        # On disconnect → stop() joins the polling thread; the next connect signal
+        #                 spawns a fresh _listen_to_channels thread.
+        self.device_viewmodel.device_connected.connect(self.phone_request_service.start)
+        self.device_viewmodel.device_disconnected.connect(self.phone_request_service.stop)
+
 
 app_state: Final[AppState] = AppState()

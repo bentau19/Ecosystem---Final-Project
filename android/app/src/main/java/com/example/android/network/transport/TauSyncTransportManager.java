@@ -276,13 +276,17 @@ public class TauSyncTransportManager implements TransportManager {
         // Stop polling
         stopPolling();
 
-        // Dispose TauSync connection
+        // Disconnect TauSync: closes the TCP socket and resets the global role
+        // so that the next attemptConnection() can call connectTo() successfully.
+        // disconnect() is used instead of dispose() because TauSyncTransportManager
+        // creates a fresh TauSync() on every reconnect — dispose() would permanently
+        // poison the singleton globalRole, preventing any future connection.
         if (tauSync != null) {
             try {
-                tauSync.dispose();
-                Log.d(TAG, "TauSync disposed");
+                tauSync.disconnect();
+                Log.d(TAG, "TauSync disconnected");
             } catch (Exception e) {
-                Log.d(TAG, "Error during TauSync disposal: " + e.getMessage());
+                Log.d(TAG, "Error during TauSync disconnect: " + e.getMessage());
             }
             tauSync = null;
         }
