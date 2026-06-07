@@ -1,9 +1,0 @@
-#navigationSectionLabel {
-    color: {{TEXT_SECONDARY}};
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: 2px;
-    background: transparent;
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    padding: 0 10px;
-}
