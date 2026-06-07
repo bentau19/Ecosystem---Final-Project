@@ -4,6 +4,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+pytest.importorskip("torch")  # skip entire module if torch is not installed
+
 from PIL import Image
 
 from image_classification_dataset import ImageClassificationDataset
