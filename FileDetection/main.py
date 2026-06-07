@@ -37,7 +37,7 @@ def _has_duplicate_hash(db_path: Path, file_path: Path) -> list[Path] | None:
         if not rows:
             file_name: str = file_path.stem
             cursor.execute("""INSERT INTO files (file_path, file_name, file_hash)
-                              VALUES (?, ?, ?)""", (file_path, file_name, digest))
+                              VALUES (?, ?, ?)""", (str(file_path), file_name, digest))
             db.commit()
             return None
         else:
