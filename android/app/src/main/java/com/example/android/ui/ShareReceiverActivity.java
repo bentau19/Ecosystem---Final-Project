@@ -9,11 +9,10 @@ import android.util.Log;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.repositories.DeviceRepository;
-import com.example.android.viewmodel.SendFileViewModel;
+import com.example.android.services.ConnectivityService;
 
 /**
  * Invisible trampoline Activity for the Android share sheet (ACTION_SEND).
@@ -54,8 +53,22 @@ public class ShareReceiverActivity extends AppCompatActivity {
             return;
         }
 
+        // Resolve the file name while the Activity is alive and the URI grant is valid.
         String fileName = resolveFileName(fileUri);
-        new ViewModelProvider(this).get(SendFileViewModel.class).sendFile(fileUri, fileName);
+
+        // Delegate the URI grant to ConnectivityService via a single Intent that both
+        // transfers ownership of the share-sheet permission AND carries the send request.
+        // FLAG_GRANT_READ_URI_PERMISSION tells Android to register an independent grant
+        // for the service — one that is tied to the service's lifecycle, not this
+        // Activity's task. ConnectivityService.onStartCommand() receives the Intent
+        // *after* the grant is registered and triggers the send flow from there,
+        // guaranteeing the grant is fully active before any ContentResolver I/O runs.
+        Intent sendIntent = new Intent(this, ConnectivityService.class);
+        sendIntent.setAction("com.example.android.ACTION_GRANT_FILE_URI");
+        sendIntent.setData(fileUri);
+        sendIntent.putExtra("FILE_NAME", fileName);
+        sendIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startService(sendIntent);
     }
 
     private String resolveFileName(Uri uri) {

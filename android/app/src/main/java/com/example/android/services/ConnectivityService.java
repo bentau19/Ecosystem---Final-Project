@@ -169,6 +169,21 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             return START_NOT_STICKY;
         }
 
+        // URI permission delegation + send trigger from ShareReceiverActivity.
+        // By the time onStartCommand runs, Android has already registered the URI grant
+        // for this service (FLAG_GRANT_READ_URI_PERMISSION on the incoming Intent).
+        // Starting the send flow from here guarantees the grant is fully active before
+        // any ContentResolver I/O runs in SendFileUseCase.
+        if (intent != null && "com.example.android.ACTION_GRANT_FILE_URI".equals(intent.getAction())) {
+            android.net.Uri fileUri = intent.getData();
+            String fileName = intent.getStringExtra("FILE_NAME");
+            Log.d(TAG, "URI grant received, starting send: " + fileName);
+            if (fileUri != null && fileName != null) {
+                SendFileRepository.getInstance().requestSend(fileUri, fileName);
+            }
+            return START_NOT_STICKY;
+        }
+
         // Enforce immediate foreground promotion to fulfill Android's strict background execution policies
         Notification notification = notificationManager.buildNotification("Connecting to PC...");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

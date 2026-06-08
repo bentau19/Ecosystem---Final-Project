@@ -77,10 +77,10 @@ public class SendFileRepository {
         return currentFileName;
     }
 
-    // ============ UI → Repository (called by ViewModel) ============
+    // ============ UI → Repository (called by ShareReceiverActivity via ConnectivityService) ============
 
     /**
-     * Called by SendFileViewModel when the user shares a file.
+     * Called by ConnectivityService when the user shares a file via the share sheet.
      * Fires the ActionListener so ConnectivityService can start the send protocol
      * on a background thread.
      *

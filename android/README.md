@@ -69,7 +69,7 @@ ui/
 Important files:
 
 - `MainActivity.java` - Main host activity.
-- `ShareReceiverActivity.java` - Invisible trampoline Activity for Android's share sheet (`ACTION_SEND`). Has no UI — it validates the intent, checks connection state, and delegates to `SendFileViewModel`, then calls `finish()` immediately. Not part of the Single Activity Architecture; acts as a system entry point (similar role to a `BroadcastReceiver`).
+- `ShareReceiverActivity.java` - Invisible trampoline Activity for Android's share sheet (`ACTION_SEND`). Has no UI — it validates the intent, checks connection state, and forwards the file URI directly to `ConnectivityService` via a `startService()` Intent with `FLAG_GRANT_READ_URI_PERMISSION` (URI Intent Delegation). This is required to transfer the share-sheet URI grant from the Activity to the Service, since URI permissions are not automatically inherited by services. Calls `finish()` immediately. Not part of the Single Activity Architecture; acts as a system entry point (similar role to a `BroadcastReceiver`).
 - `fragments/ConnectFragment.java` - Connection screen and QR flow.
 - `fragments/ActionsFragment.java` - Main connected dashboard/actions screen.
 - `adapters/ToolsAdapter.java` - Adapter for action/tool items.
@@ -88,9 +88,10 @@ Important files:
 - `MainViewModel.java` - Coordinates connection state and user actions (QR scan, connect, disconnect, refresh stats).
 - `MainViewModelFactory.java` - Manual dependency creation for `MainViewModel`.
 - `FileTransferViewModel.java` - Coordinates incoming file transfer state (PC → Android). Exposes `getPendingRequest()` and `getTransferStatus()` LiveData, and handles user Accept / Reject decisions.
-- `SendFileViewModel.java` - Coordinates outgoing file transfer state (Android → PC). Exposes `getSendStatus()` and `getCurrentFileName()` LiveData. Delegates all logic to `SendFileRepository`. Used by `ShareReceiverActivity` (not `MainActivity`) since file sending is triggered from the share sheet.
 
 Each ViewModel is scoped to the host Activity and observed by the relevant Fragment or the Activity itself. ViewModels are split by feature to keep each one focused.
+
+> **Note:** `SendFileViewModel` was removed. Outgoing file transfer (Android → PC) is driven entirely by `ShareReceiverActivity` → `ConnectivityService` → `SendFileRepository`, with no ViewModel in the path. Progress and results are exposed as notifications via `AppNotificationManager`.
 
 The ViewModel exposes state to the UI and delegates business actions to use cases or repositories.
 
@@ -358,7 +359,7 @@ services/FileTransferActionReceiver.java
 
 ## File Transfer Flow (Android → PC)
 
-The user shares any file to SyncDose via Android's share sheet. `ShareReceiverActivity` (a transparent trampoline Activity) handles the `ACTION_SEND` Intent, delegates to `SendFileViewModel`, and immediately finishes — the app never comes to the foreground. Progress and results are shown as notifications driven by `ConnectivityService`.
+The user shares any file to SyncDose via Android's share sheet. `ShareReceiverActivity` (a transparent trampoline Activity) handles the `ACTION_SEND` Intent, delegates directly to `ConnectivityService` via a URI-delegating Intent, and immediately finishes — the app never comes to the foreground. Progress and results are shown as notifications driven by `ConnectivityService`.
 
 ### Architecture
 
@@ -366,21 +367,23 @@ The user shares any file to SyncDose via Android's share sheet. `ShareReceiverAc
 System          Android Share Sheet  (ACTION_SEND)
                     ↓
 UI Layer        ShareReceiverActivity  (transparent, no UI, finish() immediately)
-                    ↓  sendFile(uri, fileName)
-ViewModel       SendFileViewModel
-                    ↓  repository.requestSend(uri, fileName)
+                    ↓  startService(ACTION_GRANT_FILE_URI + FLAG_GRANT_READ_URI_PERMISSION)
+Service         ConnectivityService
+                    ↓  SendFileRepository.requestSend(uri, fileName)
 Repository      SendFileRepository  (LiveData source of truth)
                     ↓  ActionListener.onSendRequested(uri)
 Service         ConnectivityService  ──observeForever──> AppNotificationManager
                     ↓  background thread
-Use Case        SendFileUseCase.execute(uri, fileName)
+Use Case        SendFileUseCase.execute(uri)
 ```
+
+`ShareReceiverActivity` bypasses any ViewModel. It uses `FLAG_GRANT_READ_URI_PERMISSION` on the `startService()` Intent to forward the share-sheet URI grant to the service — without this flag the service would receive a `SecurityException` when attempting to open the URI.
 
 ### Step-by-step Flow
 
 **1. User shares a file**
 
-`ShareReceiverActivity` receives the `ACTION_SEND` Intent, checks `ConnectionStatus == CONNECTED`, resolves the file display name via `ContentResolver`, and calls `sendFileViewModel.sendFile(uri, fileName)`. It then calls `finish()` — the activity is gone and the app never appears on screen.
+`ShareReceiverActivity` receives the `ACTION_SEND` Intent, checks `ConnectionStatus == CONNECTED`, resolves the file display name via `ContentResolver`, then calls `startService()` with `ACTION_GRANT_FILE_URI`, the URI, the filename, and `FLAG_GRANT_READ_URI_PERMISSION`. It then calls `finish()` — the activity is gone and the app never appears on screen.
 
 **2. Metadata sent to PC**
 
@@ -419,7 +422,6 @@ IDLE → WAITING_FOR_RESPONSE → SENDING → COMPLETED
 domain/enums/SendFileStatus.java
 domain/usecases/SendFileUseCase.java
 repositories/SendFileRepository.java
-viewmodel/SendFileViewModel.java
 ui/ShareReceiverActivity.java
 ```
 
@@ -501,7 +503,6 @@ Current tests include:
 - `FileTransferRepositoryTest.java` - Verifies all state-machine transitions (IDLE → PENDING_APPROVAL → RECEIVING → COMPLETED / REJECTED / FAILED → IDLE) and that `FileTransferActionListener` / `IncomingRequestListener` callbacks fire at the correct moments.
 - `FileTransferViewModelTest.java` - Verifies that `acceptTransfer()`, `rejectTransfer()`, and `reset()` produce the expected LiveData state changes, and that `getPendingRequest()` / `getTransferStatus()` correctly reflect repository state.
 - `SendFileRepositoryTest.java` - Verifies all state-machine transitions for the Android→PC send flow (IDLE → WAITING_FOR_RESPONSE → SENDING → COMPLETED / REJECTED / FAILED → IDLE) and that `SendFileActionListener` fires at the correct moments.
-- `SendFileViewModelTest.java` - Verifies that `sendFile()` and `reset()` produce the expected LiveData state changes via the repository singleton.
 
 Manual TauSync testing activities are under:
 
