@@ -122,7 +122,7 @@ target file path to the pipe and exits.
 
 ## Android App
 
-**Min SDK:** 24 (Android 7.0) · **Target SDK:** 36 · **JDK:** 21 · **Gradle:** 8.13
+**Min SDK:** 29 (Android 10.0) · **Target SDK:** 36 · **JDK:** 21 · **Gradle:** 8.13
 
 Open `android/` in Android Studio. The app uses manual DI via `MainViewModelFactory` — no
 Hilt or Dagger. `ConnectionService` is a Foreground Service that keeps the TauSync socket

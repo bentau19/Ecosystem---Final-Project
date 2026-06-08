@@ -25,15 +25,14 @@ public class MainViewModel extends ViewModel {
     private final DeviceRepository repository;
 //    private android.content.BroadcastReceiver batteryReceiver;
 
-    public MainViewModel(DeviceRepository repository, RefreshLocalStatsUseCase refreshStats,
+    public MainViewModel(DeviceRepository repository,
+                         RefreshLocalStatsUseCase refreshStats,
                          ConnectToDeviceUseCase connectToDevice,
-                         ParseQrDataUseCase parseQr
-    ) {
+                         ParseQrDataUseCase parseQr) {
         this.repository = repository;
         this.refreshStats = refreshStats;
         this.connectToDevice = connectToDevice;
         this.parseQr = parseQr;
-
     }
 
     /**

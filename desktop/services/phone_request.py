@@ -101,7 +101,7 @@ class PhoneRequestService:
         while self._is_running.is_set():
             tau = self._connectivity.tau
             channels = tau.get_peer_waiting_words()
-            print(f"channels: {channels}")
+            # print(f"channels: {channels}")
             for channel in channels:
                 handler = self.operations.get(channel)
                 if handler is not None:

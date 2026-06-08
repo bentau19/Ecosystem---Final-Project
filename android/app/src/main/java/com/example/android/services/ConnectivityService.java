@@ -9,18 +9,30 @@ import android.os.IBinder;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.Observer;
+import androidx.lifecycle.ProcessLifecycleOwner;
 
 import com.example.android.data.datasource.SystemDataSource;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionStatus;
+import com.example.android.domain.enums.SendFileStatus;
 import com.example.android.domain.enums.ConnectionType;
 import com.example.android.enums.Channel;
 import com.example.android.enums.DeviceInfoChannels;
+import com.example.android.enums.FileTransferChannels;
 import com.example.android.enums.SessionChannels;
 import com.example.android.network.handlers.ChannelHandlerRegistry;
 import com.example.android.network.handlers.DeviceInfoChannelHandler;
+import com.example.android.domain.usecases.ReceiveFileUseCase;
+import com.example.android.domain.usecases.RespondToFileTransferUseCase;
+import com.example.android.domain.usecases.SendFileUseCase;
+import com.example.android.repositories.SendFileRepository;
+import com.example.android.network.handlers.FileDataChannelHandler;
+import com.example.android.network.handlers.FileMetadataChannelHandler;
 import com.example.android.network.handlers.PCNameChannelHandler;
 import com.example.android.network.handlers.DisconnectChannelHandler;
+import com.example.android.repositories.ReceiveFileRepository;
 import com.example.android.network.transport.TransportManager;
 import com.example.android.network.transport.TransportStatus;
 import com.example.android.network.transport.TauSyncTransportManager;
@@ -42,6 +54,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     private SystemDataSource systemDataSource;
     private DeviceRepository deviceRepository;
     private AppNotificationManager notificationManager;
+
+    // File transfer UseCases — initialized after transportManager is ready
+    private RespondToFileTransferUseCase respondToFileTransferUseCase;
+    private ReceiveFileUseCase receiveFileUseCase;
+    private SendFileUseCase sendFileUseCase;
+
+    // Observer for outgoing file transfer notifications — kept so we can remove it in onDestroy
+    private Observer<SendFileStatus> sendFileStatusObserver;
 
     @Override
     public void onCreate() {
@@ -68,7 +88,18 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
         transportManager = new TauSyncTransportManager();
         handlerRegistry = new ChannelHandlerRegistry();
+
+        // Initialize file transfer UseCases before registering handlers —
+        // FileDataChannelHandler takes a direct reference to receiveFileUseCase.
+        respondToFileTransferUseCase = new RespondToFileTransferUseCase(transportManager);
+        receiveFileUseCase = new ReceiveFileUseCase(transportManager, ReceiveFileRepository.getInstance(), this);
+        sendFileUseCase = new SendFileUseCase(transportManager, SendFileRepository.getInstance(), this);
+
         registerChannelHandlers();
+        registerFileTransferActionListener();
+        registerIncomingRequestListener();
+        registerSendFileActionListener();
+        registerSendFileStatusObserver();
 
         Log.d(TAG, "Service initialization complete");
     }
@@ -89,6 +120,19 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         handlerRegistry.registerHandler(
                 SessionChannels.DISCONNECT_FROM_PC.getValue(),
                 new DisconnectChannelHandler(deviceRepository, transportManager, this::cleanup)
+        );
+
+        // FILE_METADATA_PC_TO_ANDROID handles incoming file transfer requests from the PC
+        handlerRegistry.registerHandler(
+                FileTransferChannels.REGULAR_FILE_METADATA_PC_TO_ANDROID.getValue(),
+                new FileMetadataChannelHandler(transportManager, ReceiveFileRepository.getInstance())
+        );
+
+        // FILE_DATA_PC_TO_ANDROID receives the actual file bytes — triggered by the polling loop.
+        // Desktop opens this channel only after receiving ACCEPT, so there is no simultaneous-connect
+        handlerRegistry.registerHandler(
+                FileTransferChannels.REGULAR_FILE_DATA_PC_TO_ANDROID.getValue(),
+                new FileDataChannelHandler(receiveFileUseCase, ReceiveFileRepository.getInstance())
         );
 
         // All other device telemetry data types are registered inline as Getters using generic Lambda functional interfaces
@@ -122,6 +166,21 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         if (intent != null && "com.example.android.ACTION_SEND_DISCONNECT".equals(intent.getAction())) {
             Log.d(TAG, "Received disconnect action, sending disconnect notification to PC");
             sendDisconnectToPC();
+            return START_NOT_STICKY;
+        }
+
+        // URI permission delegation + send trigger from ShareReceiverActivity.
+        // By the time onStartCommand runs, Android has already registered the URI grant
+        // for this service (FLAG_GRANT_READ_URI_PERMISSION on the incoming Intent).
+        // Starting the send flow from here guarantees the grant is fully active before
+        // any ContentResolver I/O runs in SendFileUseCase.
+        if (intent != null && "com.example.android.ACTION_GRANT_FILE_URI".equals(intent.getAction())) {
+            android.net.Uri fileUri = intent.getData();
+            String fileName = intent.getStringExtra("FILE_NAME");
+            Log.d(TAG, "URI grant received, starting send: " + fileName);
+            if (fileUri != null && fileName != null) {
+                SendFileRepository.getInstance().requestSend(fileUri, fileName);
+            }
             return START_NOT_STICKY;
         }
 
@@ -172,6 +231,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         if (notificationManager != null) {
             notificationManager.stopListeningToConnectionChanges();
         }
+        if (sendFileStatusObserver != null) {
+            SendFileRepository.getInstance().getSendStatus().removeObserver(sendFileStatusObserver);
+        }
         cleanup();
         super.onDestroy();
     }
@@ -191,6 +253,10 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             // Hard disconnect resets state models so the application re-opens directly on the connect screen
             deviceRepository.disconnect();
         }
+
+        // Reset file transfer repositories so stale status isn't shown after reconnect
+        ReceiveFileRepository.getInstance().reset();
+        SendFileRepository.getInstance().reset();
 
         // Remove the foreground notification so it doesn't stay in the status bar
         Log.d(TAG, "Removing foreground notification");
@@ -366,5 +432,144 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
     private String getStorageUsed() {
         return String.valueOf(systemDataSource.getRawStorageStats().getUsed());
+    }
+
+    // ============ File Transfer Action Listener ============
+
+    /**
+     * Observes SendFileRepository.getSendStatus() for the lifetime of this service.
+     * Drives the send-progress notification directly — bypassing LiveData lifecycle
+     * restrictions so notifications work even when no Activity is in the foreground.
+     *
+     * Must be called on the main thread (onCreate runs on main thread).
+     */
+    private void registerSendFileStatusObserver() {
+        SendFileRepository repo = SendFileRepository.getInstance();
+        sendFileStatusObserver = status -> {
+            if (status == null) return;
+            String fileName = repo.getCurrentFileName().getValue();
+            String displayName = (fileName != null) ? fileName : "file";
+            switch (status) {
+                case WAITING_FOR_RESPONSE:
+                    notificationManager.showSendFileProgressNotification(
+                            "Waiting for PC to accept…  " + displayName);
+                    break;
+                case SENDING:
+                    notificationManager.showSendFileProgressNotification(
+                            "Sending " + displayName + "…");
+                    break;
+                case COMPLETED:
+                    notificationManager.showSendFileResultNotification("File sent ✓", displayName);
+                    repo.reset();
+                    break;
+                case REJECTED:
+                    notificationManager.showSendFileResultNotification(
+                            "Transfer rejected", "PC declined " + displayName);
+                    repo.reset();
+                    break;
+                case FAILED:
+                    notificationManager.showSendFileResultNotification(
+                            "Transfer failed", "Could not send " + displayName);
+                    repo.reset();
+                    break;
+                case IDLE:
+                default:
+                    break;
+            }
+        };
+        repo.getSendStatus().observeForever(sendFileStatusObserver);
+    }
+
+    /**
+     * Registers ConnectivityService as the SendFileActionListener on SendFileRepository.
+     * When the user shares a file, the ViewModel calls repository.requestSend(uri),
+     * which fires this listener on the main thread. We immediately spawn a dedicated
+     * background thread so the blocking network I/O never touches the main thread.
+     */
+    private void registerSendFileActionListener() {
+        SendFileRepository.getInstance().setActionListener(uri -> {
+            new Thread(() -> {
+                try {
+                    sendFileUseCase.execute(uri);
+                } catch (Exception e) {
+                    Log.e(TAG, "Unexpected error in SendFileThread: " + e.getMessage());
+                    SendFileRepository.getInstance().onSendFailed();
+                }
+            }, "SendFileThread").start();
+        });
+    }
+
+    /**
+     * Registers ConnectivityService as the IncomingRequestListener on the Repository.
+     * This fires immediately when a transfer request arrives — bypassing LiveData's
+     * lifecycle-awareness so the heads-up notification is shown even when the Activity
+     * is paused/stopped (app in background).
+     */
+    private void registerIncomingRequestListener() {
+        ReceiveFileRepository.getInstance().setIncomingRequestListener(request -> {
+            Log.d(TAG, "Incoming request arrived: " + request.getFileName());
+
+            // Show a notification only when the app is in the background.
+            // When the app is in the foreground, MainActivity's LiveData observer
+            // handles the request by showing an in-app AlertDialog instead.
+            boolean appInForeground = ProcessLifecycleOwner.get()
+                    .getLifecycle()
+                    .getCurrentState()
+                    .isAtLeast(Lifecycle.State.STARTED);
+
+            if (!appInForeground) {
+                notificationManager.showFileTransferApprovalNotification(
+                        request.getFileName(),
+                        request.getFormattedSize()
+                );
+            }
+        });
+    }
+
+    /**
+     * Registers ConnectivityService as the FileTransferActionListener on the Repository.
+     * This is the bridge between the user's Accept/Reject decision (ViewModel/UI layer)
+     * and the actual network operations (Transport layer).
+     *
+     * The listener runs on a dedicated background thread to avoid blocking the main thread.
+     */
+    private void registerFileTransferActionListener() {
+        ReceiveFileRepository.getInstance().setActionListener(
+                new ReceiveFileRepository.ReceiveFileActionListener() {
+
+                    @Override
+                    public void onUserAccepted(String fileName) {
+                        new Thread(() -> {
+                            try {
+                                // Tell the PC we accept.
+                                // We do NOT call receiveFileUseCase.execute() here anymore.
+                                // Desktop will open file_data_pc after receiving ACCEPT,
+                                // and the polling loop will trigger FileDataChannelHandler,
+                                // which calls receiveFileUseCase — eliminating the race condition.
+                                respondToFileTransferUseCase.accept();
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error sending accept to PC: " + e.getMessage());
+                                ReceiveFileRepository.getInstance().onTransferFailed();
+                            } finally {
+                                // Dismiss the approval notification — it has served its purpose.
+                                notificationManager.dismissFileTransferNotification();
+                            }
+                        }, "FileTransferAcceptThread").start();
+                    }
+
+                    @Override
+                    public void onUserRejected() {
+                        new Thread(() -> {
+                            try {
+                                respondToFileTransferUseCase.reject();
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error sending reject to PC: " + e.getMessage());
+                            } finally {
+                                notificationManager.dismissFileTransferNotification();
+                            }
+                        }, "FileTransferRejectThread").start();
+                    }
+                }
+        );
     }
 }
