@@ -72,7 +72,22 @@ namespace TauSync.Implementations.Management
             var ctx = ConnectionContext.Instance;
             ConnectAttempt attempt = CreateConnectAttempt(ctx);
             await SendWordRequestAsync(wordTrimmed, attempt.LocalId).ConfigureAwait(false);
-            return await ResolveConnectRaceAsync(ctx, channel, attempt, timeoutSeconds).ConfigureAwait(false);
+            try
+            {
+                return await ResolveConnectRaceAsync(ctx, channel, attempt, timeoutSeconds).ConfigureAwait(false);
+            }
+            finally
+            {
+                // Unregister the service listener after the connection resolves (success or failure).
+                //
+                // Without this cleanup, the callback registered by RegisterWordListener stays in
+                // ConnectionContext._serviceRegistry after the first use. On a second transfer using
+                // the same word, the incoming REQ is handled directly (bypassing _pendingDiscoveryByWord),
+                // so GetPeerWaitingWords() never surfaces the word again and the app's polling loop
+                // cannot trigger a second Connect() call — causing the peer to hang forever.
+                ConnectionContext.Instance.UnregisterService(wordTrimmed);
+                _incomingByWord.TryRemove(wordTrimmed, out _);
+            }
         }
 
         private void ValidateConnectState(string word)

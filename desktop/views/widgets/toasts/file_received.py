@@ -212,6 +212,7 @@ class FileReceivedToast(QWidget):
         self._download_button.clicked.connect(self._on_download_requested)
         self._cancel_button.clicked.connect(self._on_cancel_requested)
         self._cancel_button.clicked.connect(self._close_with_animation)
+        self._file_transfer_vm.receive_complete.connect(self._close_with_animation)
         self._file_transfer_vm.receive_error.connect(self.close)
         theme_manager.theme_changed.connect(self._apply_style)
 

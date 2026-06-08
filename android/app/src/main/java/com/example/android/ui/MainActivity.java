@@ -10,6 +10,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -17,9 +18,13 @@ import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.R;
+import com.example.android.domain.entities.ReceiveFileRequest;
 import com.example.android.domain.enums.ConnectionStatus;
+import com.example.android.domain.enums.ReceiveFileStatus;
+import com.example.android.services.AppNotificationManager;
 import com.example.android.ui.fragments.ActionsFragment;
 import com.example.android.ui.fragments.ConnectFragment;
+import com.example.android.viewmodel.FileTransferViewModel;
 import com.example.android.viewmodel.MainViewModel;
 import com.example.android.viewmodel.MainViewModelFactory;
 import com.google.zxing.integration.android.IntentIntegrator;
@@ -33,7 +38,13 @@ import com.example.android.services.ConnectivityService;
  */
 public class MainActivity extends AppCompatActivity {
 
+    private static final String TAG = "MainActivity";
+
     private MainViewModel viewModel;
+    private FileTransferViewModel fileTransferViewModel;
+    private AppNotificationManager appNotificationManager;
+    private boolean isAppInForeground = false;
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -42,12 +53,17 @@ public class MainActivity extends AppCompatActivity {
         setupStatusBar();
         setContentView(R.layout.activity_main);
 
-        // 1. Initialize the shared ViewModel using the Factory.
-        // Application is passed to the Factory to prepare the Repository.
+        // 1. Initialize ViewModels
         MainViewModelFactory factory = new MainViewModelFactory(this.getApplication());
         viewModel = new ViewModelProvider(this, factory).get(MainViewModel.class);
+        fileTransferViewModel = new ViewModelProvider(this).get(FileTransferViewModel.class);
+        // 2. Initialize notification manager
+        appNotificationManager = new AppNotificationManager(this);
 
-        // 2. Smart navigation logic: Check current connection state from the repository.
+        // 3. Observe file transfer state (receive)
+        observeFileTransfer();
+
+        // 4. Smart navigation logic: Check current connection state from the repository.
         if (savedInstanceState == null) {
             if (viewModel.getConnectionStatus().getValue() == ConnectionStatus.CONNECTED) {
                 replaceFragment(new ActionsFragment());
@@ -56,7 +72,7 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        // 3. Listen to real-time TCP connection status and handle navigation.
+        // 5. Listen to real-time TCP connection status and handle navigation.
         viewModel.getConnectionStatus().observe(this, status -> {
             if (status == null) return;
             switch (status) {
@@ -180,6 +196,95 @@ public class MainActivity extends AppCompatActivity {
                 .replace(R.id.fragment_container, fragment)
                 .commitAllowingStateLoss();
     }
+
+    // --- Lifecycle ---
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        isAppInForeground = true;
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        isAppInForeground = false;
+    }
+
+    // --- File Transfer ---
+
+    /**
+     * Observes FileTransferViewModel LiveData.
+     *
+     * PENDING_APPROVAL:
+     *   - Foreground → AlertDialog with Accept / Reject buttons
+     *   - Background → heads-up notification with action buttons
+     *
+     * COMPLETED / REJECTED / FAILED:
+     *   - Dismiss notification (if shown), display Toast, reset state
+     */
+    private void observeFileTransfer() {
+
+        // Observe the incoming request — triggers the approval UI
+        fileTransferViewModel.getPendingRequest().observe(this, request -> {
+            if (request == null) return;
+
+            appNotificationManager.dismissFileTransferNotification();
+
+            if (isAppInForeground) {
+                showFileTransferDialog(request);
+            } else {
+                appNotificationManager.showFileTransferApprovalNotification(
+                        request.getFileName(),
+                        request.getFormattedSize()
+                );
+            }
+        });
+
+        // Observe status — react to terminal states
+        fileTransferViewModel.getTransferStatus().observe(this, status -> {
+            if (status == null) return;
+
+            switch (status) {
+                case COMPLETED:
+                    appNotificationManager.dismissFileTransferNotification();
+                    Toast.makeText(this, "File saved to Downloads ✓", Toast.LENGTH_LONG).show();
+                    fileTransferViewModel.reset();
+                    break;
+                case REJECTED:
+                    appNotificationManager.dismissFileTransferNotification();
+                    fileTransferViewModel.reset();
+                    break;
+                case FAILED:
+                    appNotificationManager.dismissFileTransferNotification();
+                    Toast.makeText(this, "File transfer failed.", Toast.LENGTH_LONG).show();
+                    fileTransferViewModel.reset();
+                    break;
+                default:
+                    break;
+            }
+        });
+    }
+
+    /**
+     * Shows an AlertDialog asking the user to Accept or Reject the incoming file.
+     * Used when the app is in the foreground.
+     */
+    private void showFileTransferDialog(ReceiveFileRequest request) {
+        new AlertDialog.Builder(this)
+                .setTitle("Incoming File from PC")
+                .setMessage(request.getFileName() + "\n" + request.getFormattedSize())
+                .setPositiveButton("Accept", (dialog, which) -> {
+                    fileTransferViewModel.acceptTransfer();
+                })
+                .setNegativeButton("Reject", (dialog, which) -> {
+                    fileTransferViewModel.rejectTransfer();
+                })
+                .setCancelable(false)
+                .show();
+    }
+
+
 
     // --- UI Configurations ---
 

@@ -78,6 +78,39 @@ public interface TransportManager {
     String readFromChannel(String channel) throws Exception;
 
     /**
+     * Reads raw bytes from a channel.
+     * Used for binary data (file contents) where String conversion would corrupt the data.
+     *
+     * @param channel Channel name
+     * @return Raw byte array, or empty array if not connected / on error
+     * @throws Exception if read fails
+     */
+    byte[] readBytesFromChannel(String channel) throws Exception;
+
+    /**
+     * Streams bytes from a channel directly into the provided OutputStream.
+     * Reads in 64 KB chunks until the peer closes the channel (EOF/FIN).
+     * No full-file buffering in RAM — safe for arbitrarily large files.
+     *
+     * @param channel      Channel name (e.g. "file_data_pc")
+     * @param outputStream Destination stream (e.g. opened via MediaStore)
+     * @throws Exception if the channel read or the write to outputStream fails
+     */
+    void streamChannelToOutputStream(String channel, java.io.OutputStream outputStream) throws Exception;
+
+    /**
+     * Streams bytes from the provided InputStream into a TauSync channel.
+     * Reads from {@code inputStream} in 64 KB chunks and writes each chunk to the
+     * channel until the stream is exhausted (EOF).
+     * No full-file buffering in RAM — safe for arbitrarily large files.
+     *
+     * @param channel     Channel name (e.g. "file_data_android")
+     * @param inputStream Source stream (e.g. opened via ContentResolver for a URI)
+     * @throws Exception if the channel write or the read from inputStream fails
+     */
+    void streamInputStreamToChannel(String channel, java.io.InputStream inputStream) throws Exception;
+
+    /**
      * Checks if the transport is currently connected.
      */
     boolean isConnected();

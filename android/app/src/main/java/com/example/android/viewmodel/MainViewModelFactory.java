@@ -36,7 +36,7 @@ public class MainViewModelFactory implements ViewModelProvider.Factory {
             SystemDataSource systemDataSource =
                     new SystemDataSource(application.getApplicationContext());
 
-            // 2. Initialize Repository - Uses hardware info from the DataSource
+            // 2. Initialize Repository
             DeviceRepository repository =
                     DeviceRepository.getInstance(
                             systemDataSource.getDeviceId(),

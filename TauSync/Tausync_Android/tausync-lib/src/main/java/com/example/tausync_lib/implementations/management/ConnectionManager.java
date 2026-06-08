@@ -95,7 +95,17 @@ public class ConnectionManager implements IConnectionManager {
         ConnectAttempt attempt = createConnectAttempt(ctx);
 
         return sendWordRequestAsync(wordTrimmed, attempt.localId)
-                .thenCompose(ignored -> resolveConnectRaceAsync(ctx, wordChannel, attempt));
+                .thenCompose(ignored -> resolveConnectRaceAsync(ctx, wordChannel, attempt))
+                .whenComplete((stream, ex) -> {
+                    // Unregister the service listener after the connection resolves (success or failure).
+                    //
+                    // Without this cleanup, the callback registered by registerWordListener stays in
+                    // ConnectionContext.serviceRegistry after the first use. On a second transfer using
+                    // the same word, the incoming REQ is handled directly (bypassing pendingDiscoveryByWord),
+                    // so getPeerWaitingWords() never surfaces the word again and the app's polling loop
+                    // cannot trigger a second connect() call — causing the desktop to hang forever.
+                    ConnectionContext.getInstance().unregisterService(wordTrimmed);
+                });
     }
 
     // ── Connect internals ─────────────────────────────────────────────
