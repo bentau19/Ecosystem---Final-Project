@@ -24,8 +24,10 @@ public class AppNotificationManager {
 
     public static final String CHANNEL_ID = "ConnectivityServiceChannel";
     public static final String FILE_TRANSFER_CHANNEL_ID = "FileTransferChannel";
+    public static final String SEND_FILE_CHANNEL_ID = "SendFileChannel";
     public static final int NOTIFICATION_ID = 1;
     public static final int FILE_TRANSFER_NOTIFICATION_ID = 2;
+    public static final int SEND_FILE_NOTIFICATION_ID = 3;
     private static final String TAG = "AppNotificationMgr";
 
     private final Context context;
@@ -187,6 +189,58 @@ public class AppNotificationManager {
     }
 
     /**
+     * Shows (or updates) the ongoing send-file progress notification.
+     * Uses an indeterminate progress bar since byte-level progress is not tracked.
+     *
+     * @param message The status text to display (e.g. "Waiting for PC…", "Sending photo.jpg…").
+     */
+    public void showSendFileProgressNotification(String message) {
+        Notification notification = new NotificationCompat.Builder(context, SEND_FILE_CHANNEL_ID)
+                .setContentTitle("Sending file")
+                .setContentText(message)
+                .setSmallIcon(R.drawable.ic_sync)
+                .setProgress(0, 0, true)   // indeterminate progress bar
+                .setOngoing(true)           // user cannot swipe away while in progress
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(SEND_FILE_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Shows a brief auto-cancel notification with the final send result.
+     * Replaces the ongoing progress notification.
+     *
+     * @param title   Short result title (e.g. "File sent", "Transfer rejected").
+     * @param message Detail line shown below the title.
+     */
+    public void showSendFileResultNotification(String title, String message) {
+        Notification notification = new NotificationCompat.Builder(context, SEND_FILE_CHANNEL_ID)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setSmallIcon(R.drawable.ic_sync)
+                .setAutoCancel(true)
+                .setTimeoutAfter(4_000)   // auto-dismiss after 4 seconds
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(SEND_FILE_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Dismisses the send-file progress / result notification.
+     */
+    public void dismissSendFileNotification() {
+        if (notificationManager != null) {
+            notificationManager.cancel(SEND_FILE_NOTIFICATION_ID);
+        }
+    }
+
+    /**
      * Creates the notification channels required for Android O and above.
      */
     private void createNotificationChannel() {
@@ -207,9 +261,18 @@ public class AppNotificationManager {
             );
             fileTransferChannel.setDescription("Incoming file transfer requests from PC");
 
+            // Send file channel (low importance — silent progress bar)
+            NotificationChannel sendFileChannel = new NotificationChannel(
+                    SEND_FILE_CHANNEL_ID,
+                    "Send File",
+                    NotificationManager.IMPORTANCE_LOW
+            );
+            sendFileChannel.setDescription("Progress of outgoing file transfers to PC");
+
             if (notificationManager != null) {
                 notificationManager.createNotificationChannel(connectivityChannel);
                 notificationManager.createNotificationChannel(fileTransferChannel);
+                notificationManager.createNotificationChannel(sendFileChannel);
             }
         }
     }

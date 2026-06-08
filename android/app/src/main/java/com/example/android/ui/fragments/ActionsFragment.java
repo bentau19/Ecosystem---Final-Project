@@ -14,9 +14,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.example.android.R;
-import com.example.android.domain.entities.ReceiveFileRequest;
 import com.example.android.domain.entities.RemoteDeviceInfo;
-import com.example.android.repositories.ReceiveFileRepository;
 import com.example.android.ui.MainActivity;
 import com.example.android.ui.adapters.ToolsAdapter;
 import com.example.android.ui.models.ToolItem;

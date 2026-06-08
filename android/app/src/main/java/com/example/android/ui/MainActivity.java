@@ -3,11 +3,8 @@ package com.example.android.ui;
 import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.database.Cursor;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.provider.OpenableColumns;
 import android.util.Log;
 import android.view.Window;
 import android.view.WindowManager;
@@ -24,14 +21,12 @@ import com.example.android.R;
 import com.example.android.domain.entities.ReceiveFileRequest;
 import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.domain.enums.ReceiveFileStatus;
-import com.example.android.domain.enums.SendFileStatus;
 import com.example.android.services.AppNotificationManager;
 import com.example.android.ui.fragments.ActionsFragment;
 import com.example.android.ui.fragments.ConnectFragment;
 import com.example.android.viewmodel.FileTransferViewModel;
 import com.example.android.viewmodel.MainViewModel;
 import com.example.android.viewmodel.MainViewModelFactory;
-import com.example.android.viewmodel.SendFileViewModel;
 import com.google.zxing.integration.android.IntentIntegrator;
 import com.google.zxing.integration.android.IntentResult;
 
@@ -47,12 +42,9 @@ public class MainActivity extends AppCompatActivity {
 
     private MainViewModel viewModel;
     private FileTransferViewModel fileTransferViewModel;
-    private SendFileViewModel sendFileViewModel;
     private AppNotificationManager appNotificationManager;
     private boolean isAppInForeground = false;
 
-    // Kept so we can update its message (WAITING → SENDING) or dismiss it on terminal states.
-    private AlertDialog sendProgressDialog;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -65,17 +57,11 @@ public class MainActivity extends AppCompatActivity {
         MainViewModelFactory factory = new MainViewModelFactory(this.getApplication());
         viewModel = new ViewModelProvider(this, factory).get(MainViewModel.class);
         fileTransferViewModel = new ViewModelProvider(this).get(FileTransferViewModel.class);
-        sendFileViewModel = new ViewModelProvider(this).get(SendFileViewModel.class);
-
         // 2. Initialize notification manager
         appNotificationManager = new AppNotificationManager(this);
 
-        // 3. Observe file transfer state (receive) and send state
+        // 3. Observe file transfer state (receive)
         observeFileTransfer();
-        observeSendFile();
-
-        // 3b. Handle share Intent if the app was cold-launched from the share sheet
-        handleShareIntent(getIntent());
 
         // 4. Smart navigation logic: Check current connection state from the repository.
         if (savedInstanceState == null) {
@@ -293,142 +279,7 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    // --- Send File (Android → PC) ---
 
-    /**
-     * Called by the OS when this Activity is already running (singleTop) and a new
-     * share Intent arrives.  Delegates to handleShareIntent so the logic lives in
-     * one place.
-     */
-    @Override
-    protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        handleShareIntent(intent);
-    }
-
-    /**
-     * Entry point for an ACTION_SEND share Intent.
-     *
-     * Validates:
-     *   - Intent is an ACTION_SEND with an EXTRA_STREAM URI
-     *   - A PC connection is currently active
-     *
-     * Then resolves the display name and hands off to the ViewModel.
-     */
-    private void handleShareIntent(Intent intent) {
-        if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
-
-        Uri fileUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-        if (fileUri == null) {
-            Toast.makeText(this, "No file found in share request.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        // Guard: must be connected to PC before sending
-        ConnectionStatus connectionStatus = viewModel.getConnectionStatus().getValue();
-        if (connectionStatus != ConnectionStatus.CONNECTED) {
-            Toast.makeText(this, "Not connected to PC — connect first.", Toast.LENGTH_LONG).show();
-            return;
-        }
-
-        String fileName = resolveFileName(fileUri);
-        sendFileViewModel.sendFile(fileUri, fileName);
-    }
-
-    /**
-     * Observes SendFileViewModel LiveData and drives the progress dialog + result Toasts.
-     *
-     * WAITING_FOR_RESPONSE → show non-cancellable dialog ("Waiting for PC to accept…")
-     * SENDING              → update dialog message ("Sending fileName…")
-     * COMPLETED            → dismiss dialog, success Toast, reset
-     * REJECTED             → dismiss dialog, rejected Toast, reset
-     * FAILED               → dismiss dialog, error Toast, reset
-     */
-    private void observeSendFile() {
-        sendFileViewModel.getSendStatus().observe(this, status -> {
-            if (status == null) return;
-
-            String fileName = sendFileViewModel.getCurrentFileName().getValue();
-            String displayName = (fileName != null) ? fileName : "file";
-
-            switch (status) {
-                case WAITING_FOR_RESPONSE:
-                    showSendProgressDialog("Waiting for PC to accept…\n" + displayName);
-                    break;
-                case SENDING:
-                    showSendProgressDialog("Sending " + displayName + "…");
-                    break;
-                case COMPLETED:
-                    dismissSendProgressDialog();
-                    Toast.makeText(this, "File sent successfully ✓", Toast.LENGTH_LONG).show();
-                    sendFileViewModel.reset();
-                    break;
-                case REJECTED:
-                    dismissSendProgressDialog();
-                    Toast.makeText(this, "PC rejected the file.", Toast.LENGTH_LONG).show();
-                    sendFileViewModel.reset();
-                    break;
-                case FAILED:
-                    dismissSendProgressDialog();
-                    Toast.makeText(this, "File transfer failed.", Toast.LENGTH_LONG).show();
-                    sendFileViewModel.reset();
-                    break;
-                default:
-                    break;
-            }
-        });
-    }
-
-    /**
-     * Shows (or updates) the non-cancellable send-progress dialog.
-     * Reuses the existing dialog instance when it is already showing so the
-     * WAITING_FOR_RESPONSE → SENDING transition is seamless (no flicker).
-     */
-    private void showSendProgressDialog(String message) {
-        if (sendProgressDialog != null && sendProgressDialog.isShowing()) {
-            sendProgressDialog.setMessage(message);
-        } else {
-            sendProgressDialog = new AlertDialog.Builder(this)
-                    .setTitle("Sending File")
-                    .setMessage(message)
-                    .setCancelable(false)
-                    .create();
-            sendProgressDialog.show();
-        }
-    }
-
-    /** Dismisses the send-progress dialog and nulls the reference. */
-    private void dismissSendProgressDialog() {
-        if (sendProgressDialog != null && sendProgressDialog.isShowing()) {
-            sendProgressDialog.dismiss();
-        }
-        sendProgressDialog = null;
-    }
-
-    /**
-     * Resolves a human-readable display name from a content URI.
-     * Uses a Cursor opened via try-with-resources to prevent memory leaks.
-     * Falls back to the last path segment if the column is missing.
-     *
-     * @param uri Content URI from the share Intent.
-     * @return Display name, never null.
-     */
-    private String resolveFileName(Uri uri) {
-        try (Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
-            if (cursor != null && cursor.moveToFirst()) {
-                int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-                if (nameIndex >= 0) {
-                    String name = cursor.getString(nameIndex);
-                    if (name != null && !name.isEmpty()) return name;
-                }
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "Could not resolve file name from URI: " + e.getMessage());
-        }
-        // Fallback: last path segment of the URI
-        String lastSegment = uri.getLastPathSegment();
-        return (lastSegment != null) ? lastSegment : "file";
-    }
 
     // --- UI Configurations ---
 

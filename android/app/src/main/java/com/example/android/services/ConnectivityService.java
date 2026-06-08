@@ -10,11 +10,13 @@ import android.util.Log;
 
 import androidx.annotation.Nullable;
 import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.Observer;
 import androidx.lifecycle.ProcessLifecycleOwner;
 
 import com.example.android.data.datasource.SystemDataSource;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionStatus;
+import com.example.android.domain.enums.SendFileStatus;
 import com.example.android.domain.enums.ConnectionType;
 import com.example.android.enums.Channel;
 import com.example.android.enums.DeviceInfoChannels;
@@ -58,6 +60,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     private ReceiveFileUseCase receiveFileUseCase;
     private SendFileUseCase sendFileUseCase;
 
+    // Observer for outgoing file transfer notifications — kept so we can remove it in onDestroy
+    private Observer<SendFileStatus> sendFileStatusObserver;
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -94,6 +99,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         registerFileTransferActionListener();
         registerIncomingRequestListener();
         registerSendFileActionListener();
+        registerSendFileStatusObserver();
 
         Log.d(TAG, "Service initialization complete");
     }
@@ -209,6 +215,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         Log.d(TAG, "Service destroyed");
         if (notificationManager != null) {
             notificationManager.stopListeningToConnectionChanges();
+        }
+        if (sendFileStatusObserver != null) {
+            SendFileRepository.getInstance().getSendStatus().removeObserver(sendFileStatusObserver);
         }
         cleanup();
         super.onDestroy();
@@ -411,6 +420,50 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     }
 
     // ============ File Transfer Action Listener ============
+
+    /**
+     * Observes SendFileRepository.getSendStatus() for the lifetime of this service.
+     * Drives the send-progress notification directly — bypassing LiveData lifecycle
+     * restrictions so notifications work even when no Activity is in the foreground.
+     *
+     * Must be called on the main thread (onCreate runs on main thread).
+     */
+    private void registerSendFileStatusObserver() {
+        SendFileRepository repo = SendFileRepository.getInstance();
+        sendFileStatusObserver = status -> {
+            if (status == null) return;
+            String fileName = repo.getCurrentFileName().getValue();
+            String displayName = (fileName != null) ? fileName : "file";
+            switch (status) {
+                case WAITING_FOR_RESPONSE:
+                    notificationManager.showSendFileProgressNotification(
+                            "Waiting for PC to accept…  " + displayName);
+                    break;
+                case SENDING:
+                    notificationManager.showSendFileProgressNotification(
+                            "Sending " + displayName + "…");
+                    break;
+                case COMPLETED:
+                    notificationManager.showSendFileResultNotification("File sent ✓", displayName);
+                    repo.reset();
+                    break;
+                case REJECTED:
+                    notificationManager.showSendFileResultNotification(
+                            "Transfer rejected", "PC declined " + displayName);
+                    repo.reset();
+                    break;
+                case FAILED:
+                    notificationManager.showSendFileResultNotification(
+                            "Transfer failed", "Could not send " + displayName);
+                    repo.reset();
+                    break;
+                case IDLE:
+                default:
+                    break;
+            }
+        };
+        repo.getSendStatus().observeForever(sendFileStatusObserver);
+    }
 
     /**
      * Registers ConnectivityService as the SendFileActionListener on SendFileRepository.

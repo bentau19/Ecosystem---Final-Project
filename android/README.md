@@ -69,6 +69,7 @@ ui/
 Important files:
 
 - `MainActivity.java` - Main host activity.
+- `ShareReceiverActivity.java` - Invisible trampoline Activity for Android's share sheet (`ACTION_SEND`). Has no UI — it validates the intent, checks connection state, and delegates to `SendFileViewModel`, then calls `finish()` immediately. Not part of the Single Activity Architecture; acts as a system entry point (similar role to a `BroadcastReceiver`).
 - `fragments/ConnectFragment.java` - Connection screen and QR flow.
 - `fragments/ActionsFragment.java` - Main connected dashboard/actions screen.
 - `adapters/ToolsAdapter.java` - Adapter for action/tool items.
@@ -87,9 +88,9 @@ Important files:
 - `MainViewModel.java` - Coordinates connection state and user actions (QR scan, connect, disconnect, refresh stats).
 - `MainViewModelFactory.java` - Manual dependency creation for `MainViewModel`.
 - `FileTransferViewModel.java` - Coordinates incoming file transfer state (PC → Android). Exposes `getPendingRequest()` and `getTransferStatus()` LiveData, and handles user Accept / Reject decisions.
-- `SendFileViewModel.java` - Coordinates outgoing file transfer state (Android → PC). Exposes `getSendStatus()` and `getCurrentFileName()` LiveData. Delegates all logic to `SendFileRepository`.
+- `SendFileViewModel.java` - Coordinates outgoing file transfer state (Android → PC). Exposes `getSendStatus()` and `getCurrentFileName()` LiveData. Delegates all logic to `SendFileRepository`. Used by `ShareReceiverActivity` (not `MainActivity`) since file sending is triggered from the share sheet.
 
-Each ViewModel is scoped to `MainActivity` and observed by the relevant Fragment or the Activity itself. ViewModels are split by feature to keep each one focused.
+Each ViewModel is scoped to the host Activity and observed by the relevant Fragment or the Activity itself. ViewModels are split by feature to keep each one focused.
 
 The ViewModel exposes state to the UI and delegates business actions to use cases or repositories.
 
@@ -165,7 +166,7 @@ services/
 Important files:
 
 - `ConnectivityService.java` - Foreground service that owns the active PC connection.
-- `AppNotificationManager.java` - Manages both the persistent foreground service notification and the file transfer heads-up notification (with Accept / Reject action buttons).
+- `AppNotificationManager.java` - Manages all app notifications: the persistent foreground service notification, the incoming file transfer heads-up notification (with Accept / Reject action buttons), and the send file progress / result notifications.
 - `FileTransferActionReceiver.java` - `BroadcastReceiver` that handles Accept / Reject actions from the file transfer notification when the app is in the background. Calls directly into `FileTransferRepository` since `BroadcastReceiver` has no lifecycle and cannot hold a ViewModel reference.
 
 `ConnectivityService` is responsible for:
@@ -178,6 +179,7 @@ Important files:
 - Dispatching PC channel requests to the correct handler.
 - Instantiating `RespondToFileTransferUseCase` and `ReceiveFileUseCase` and registering itself as the `FileTransferRepository.FileTransferActionListener`.
 - Running the accept / reject network operations on a dedicated background thread (`FileTransferAcceptThread` / `FileTransferRejectThread`).
+- Observing `SendFileRepository.getSendStatus()` via `observeForever` to drive send-file progress and result notifications without involving `MainActivity`.
 - Cleaning up both `DeviceRepository` and `FileTransferRepository` state on disconnect.
 
 ## Network Layer
@@ -356,18 +358,20 @@ services/FileTransferActionReceiver.java
 
 ## File Transfer Flow (Android → PC)
 
-The user shares any file to SyncDose via Android's share sheet. `MainActivity` receives the `ACTION_SEND` Intent, resolves the display name via `ContentResolver`, and delegates to `SendFileViewModel`.
+The user shares any file to SyncDose via Android's share sheet. `ShareReceiverActivity` (a transparent trampoline Activity) handles the `ACTION_SEND` Intent, delegates to `SendFileViewModel`, and immediately finishes — the app never comes to the foreground. Progress and results are shown as notifications driven by `ConnectivityService`.
 
 ### Architecture
 
 ```text
-UI Layer        MainActivity  (share Intent / progress dialog)
+System          Android Share Sheet  (ACTION_SEND)
+                    ↓
+UI Layer        ShareReceiverActivity  (transparent, no UI, finish() immediately)
                     ↓  sendFile(uri, fileName)
 ViewModel       SendFileViewModel
                     ↓  repository.requestSend(uri, fileName)
 Repository      SendFileRepository  (LiveData source of truth)
                     ↓  ActionListener.onSendRequested(uri)
-Service         ConnectivityService
+Service         ConnectivityService  ──observeForever──> AppNotificationManager
                     ↓  background thread
 Use Case        SendFileUseCase.execute(uri, fileName)
 ```
@@ -376,22 +380,22 @@ Use Case        SendFileUseCase.execute(uri, fileName)
 
 **1. User shares a file**
 
-`MainActivity.handleShareIntent()` validates the Intent, checks `ConnectionStatus == CONNECTED`, resolves the file display name, and calls `sendFileViewModel.sendFile(uri, fileName)`.
+`ShareReceiverActivity` receives the `ACTION_SEND` Intent, checks `ConnectionStatus == CONNECTED`, resolves the file display name via `ContentResolver`, and calls `sendFileViewModel.sendFile(uri, fileName)`. It then calls `finish()` — the activity is gone and the app never appears on screen.
 
 **2. Metadata sent to PC**
 
-`SendFileUseCase` serializes `{name, size}` as JSON and writes it to the `file_meta_android` TauSync channel. Status → `WAITING_FOR_RESPONSE`. A non-cancellable progress dialog appears on Android.
+`SendFileUseCase` serializes `{name, size}` as JSON and writes it to the `file_meta_android` TauSync channel. Status → `WAITING_FOR_RESPONSE`. `ConnectivityService` observes the status change and shows a "Waiting for PC to accept…" progress notification.
 
 **3. PC responds**
 
 The PC's polling loop detects `file_meta_android`, shows a toast to the user, and writes `accept_pc` or `reject_pc` to the `file_response_pc` channel. `SendFileUseCase` reads the response with a 123-second timeout.
 
-- **Accepted** → status → `SENDING`, dialog message updates; use case streams file bytes to `file_data_android`.
-- **Rejected** → status → `REJECTED`, dialog dismissed, rejection Toast shown.
+- **Accepted** → status → `SENDING`; notification updates to "Sending filename…"; use case streams file bytes to `file_data_android`.
+- **Rejected** → status → `REJECTED`; result notification shown and auto-dismissed after 4 seconds.
 
 **4. Transfer complete**
 
-On success, status → `COMPLETED`. `MainActivity` dismisses the dialog, shows "File sent successfully ✓", and calls `sendFileViewModel.reset()`.
+On success, status → `COMPLETED`. `ConnectivityService` shows a "File sent ✓" result notification (auto-dismissed after 4 seconds) and calls `SendFileRepository.reset()`.
 
 ### TauSync Channels Used
 
@@ -416,6 +420,7 @@ domain/enums/SendFileStatus.java
 domain/usecases/SendFileUseCase.java
 repositories/SendFileRepository.java
 viewmodel/SendFileViewModel.java
+ui/ShareReceiverActivity.java
 ```
 
 ---

@@ -71,9 +71,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Share sheet entry point — any file type -->
-            <!-- singleTop ensures the existing MainActivity instance is reused   -->
-            <!-- (onNewIntent is called) instead of creating a duplicate Activity. -->
+        </activity>
+
+        <!-- Invisible system hook for the share sheet — not part of the app's UI.
+             Acts like a BroadcastReceiver: receives the Intent, delegates to
+             SendFileRepository, and finishes immediately without showing any UI.
+             MainActivity is never brought to the foreground. -->
+        <activity
+            android:name=".ui.ShareReceiverActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.Transparent">
+
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
