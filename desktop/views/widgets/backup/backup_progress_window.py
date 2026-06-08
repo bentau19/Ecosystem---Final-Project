@@ -5,38 +5,36 @@ A standalone :class:`QMainWindow` that tracks per-file backup progress for a
 batch of files.  The window minimises to a dedicated system-tray icon; closing
 it prompts the user to confirm cancellation of the backup.
 
-The widget is **purely presentational** — it exposes a clean public API that a
-future ``BackupViewModel`` can drive without this widget knowing anything about
-services or repositories::
+The widget is **purely presentational** — it is driven entirely by a
+``BackupViewModel`` connected via :meth:`BackupProgressWindow.connect_viewmodel`::
 
-    from views.widgets.backup.backup_progress_window import (
-        BackupProgressWindow, BackupProgressItem, BackupStatus,
-    )
+    from domain.dto.backup_file import BackupFileDTO
+    from views.widgets.backup.backup_progress_window import BackupProgressWindow
 
+    # 1. Create the window from the ViewModel's ``backup_ready`` payload.
     items = [
-        BackupProgressItem(path="C:/phone/dcim/photo.jpg", name="photo.jpg", size_bytes=3_000_000),
-        BackupProgressItem(path="C:/phone/dcim/video.mp4", name="video.mp4", size_bytes=54_000_000),
+        BackupFileDTO(path="C:/phone/dcim/photo.jpg",     name="photo.jpg",     size_bytes=3_000_000),
+        BackupFileDTO(path="C:/phone/dcim/video.mp4",     name="video.mp4",     size_bytes=54_000_000),
     ]
     win = BackupProgressWindow(items)
+    win.connect_viewmodel(app_state.backup_viewmodel)
     win.show()
 
-    # From a ViewModel / Service thread (via queued signals):
-    win.update_progress("C:/phone/dcim/photo.jpg", bytes_done=1_500_000, speed_bps=750_000)
-    win.set_status("C:/phone/dcim/photo.jpg", BackupStatus.DONE)
-    win.set_overall(total_bytes=57_000_000, done_bytes=3_000_000)
+The window itself emits three signals that ``connect_viewmodel`` wires to the
+ViewModel:
+
+* ``pause_requested``  → ``vm.pause()``
+* ``resume_requested`` → ``vm.resume()``
+* ``cancel_requested`` → ``vm.cancel()``
 """
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
-from PySide6.QtCore import Qt, QEvent, QRectF, QSize, Signal, Slot
-from PySide6.QtGui import (
-    QCloseEvent, QColor, QIcon, QImageReader, QPainter, QPainterPath, QPixmap,
-)
+from PySide6.QtCore import Qt, QEvent, Signal, Slot
+from PySide6.QtGui import QCloseEvent, QColor, QIcon
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QMenu, QMessageBox, QPushButton, QScrollArea,
@@ -44,6 +42,8 @@ from PySide6.QtWidgets import (
 )
 
 from app.theme_manager import theme_manager
+from domain.dto.backup_file import BackupFileDTO
+from domain.enums.backup_status import BackupStatus
 from resources.colors import (
     BackupProgressColors, LightBackupProgressColors,
     Palette,
@@ -51,7 +51,13 @@ from resources.colors import (
 from resources.paths import BackupStyles, Icons
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet, themed
+from views.widgets.backup.helpers import (
+    IMAGE_EXTS, file_emoji, file_ext, fmt_size, load_thumb,
+)
 from views.widgets.bar import Bar
+
+if TYPE_CHECKING:
+    from viewmodels.backup import BackupViewModel
 
 # ── Layout constants ───────────────────────────────────────────────────────────
 _WINDOW_MIN_WIDTH:  Final[int] = 620
@@ -62,96 +68,14 @@ _ROW_ICON_SIZE:     Final[int] = 44
 _BUTTON_HEIGHT:     Final[int] = 36
 _STATUS_BADGE_W:    Final[int] = 90
 
-# ── File-type extension sets ───────────────────────────────────────────────────
-_IMAGE_EXTS: frozenset[str] = frozenset({
-    "jpg", "jpeg", "png", "gif", "bmp", "webp",
-    "tiff", "tif", "heic", "heif", "ico",
-})
-_VIDEO_EXTS:   frozenset[str] = frozenset({"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v"})
-_AUDIO_EXTS:   frozenset[str] = frozenset({"mp3", "wav", "flac", "aac", "ogg", "wma", "m4a"})
-_DOC_EXTS:     frozenset[str] = frozenset({"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv"})
-_ARCHIVE_EXTS: frozenset[str] = frozenset({"zip", "rar", "7z", "tar", "gz", "bz2"})
 
-
-def _ext(name: str) -> str:
-    """Return the lowercase extension of *name*, or ``""`` if none."""
-    return name.rsplit(".", 1)[-1].lower() if "." in name else ""
-
-
-def _file_emoji(name: str) -> str:
-    """Return a Unicode emoji that represents the file type of *name*."""
-    e = _ext(name)
-    if e in _IMAGE_EXTS:   return "🖼"
-    if e in _VIDEO_EXTS:   return "🎬"
-    if e in _AUDIO_EXTS:   return "🎵"
-    if e in _DOC_EXTS:     return "📄"
-    if e in _ARCHIVE_EXTS: return "📦"
-    return "📁"
-
-
-# ── Thumbnail helpers ──────────────────────────────────────────────────────────
-
-def _make_rounded_pixmap(pixmap: QPixmap, radius: int) -> QPixmap:
-    """Clip *pixmap* to a rounded rectangle, preserving transparency."""
-    result = QPixmap(pixmap.size())
-    result.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(result)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    path = QPainterPath()
-    path.addRoundedRect(QRectF(result.rect()), radius, radius)
-    painter.setClipPath(path)
-    painter.drawPixmap(0, 0, pixmap)
-    painter.end()
-    return result
-
-
-def _load_thumb(path: str, size: int) -> QPixmap | None:
-    """Load an image at *size* × *size* resolution with center-crop.
-
-    Uses :class:`QImageReader` scaled-size hint for memory efficiency.
-    Returns ``None`` if the file is missing, corrupt, or an unsupported format.
-    """
-    reader = QImageReader(path)
-    reader.setAutoTransform(True)
-    original = reader.size()
-    if not original.isValid():
-        return None
-    hint = QSize(size * 2, size * 2)
-    reader.setScaledSize(
-        original.scaled(hint, Qt.AspectRatioMode.KeepAspectRatioByExpanding)
-    )
-    image = reader.read()
-    if image.isNull():
-        return None
-    pixmap = QPixmap.fromImage(image)
-    w, h = pixmap.width(), pixmap.height()
-    if w > size or h > size:
-        x = max(0, (w - size) // 2)
-        y = max(0, (h - size) // 2)
-        pixmap = pixmap.copy(x, y, min(w, size), min(h, size))
-    pixmap = pixmap.scaled(
-        size, size,
-        Qt.AspectRatioMode.KeepAspectRatio,
-        Qt.TransformationMode.SmoothTransformation,
-    )
-    return _make_rounded_pixmap(pixmap, radius=8)
-
-
-# ── Formatting helpers ─────────────────────────────────────────────────────────
-
-def _fmt_size(size_bytes: int) -> str:
-    """Return a concise human-readable byte-size string (e.g. ``"2.3 MB"``)."""
-    if size_bytes < 1_024:       return f"{size_bytes} B"
-    if size_bytes < 1_024 ** 2:  return f"{size_bytes / 1_024:.1f} KB"
-    if size_bytes < 1_024 ** 3:  return f"{size_bytes / 1_024 ** 2:.1f} MB"
-    return f"{size_bytes / 1_024 ** 3:.1f} GB"
-
+# ── Speed / ETA formatter (progress-window only) ───────────────────────────────
 
 def _fmt_speed_eta(speed_bps: float, remaining_bytes: int) -> str:
     """Format a speed + ETA string, e.g. ``"2.3 MB/s  ·  12s left"``."""
     if speed_bps <= 0:
         return ""
-    speed_str = _fmt_size(int(speed_bps)) + "/s"
+    speed_str = fmt_size(int(speed_bps)) + "/s"
     secs = remaining_bytes / speed_bps
     if secs < 60:
         eta = f"{int(secs)}s left"
@@ -162,34 +86,14 @@ def _fmt_speed_eta(speed_bps: float, remaining_bytes: int) -> str:
     return f"{speed_str}  ·  {eta}"
 
 
-# ── Data model ─────────────────────────────────────────────────────────────────
-
-class BackupStatus(StrEnum):
-    """Lifecycle state of a single file in the backup queue."""
-    QUEUED = "queued"
-    ACTIVE = "active"
-    DONE   = "done"
-    FAILED = "failed"
-
-
-@dataclass
-class BackupProgressItem:
-    """Descriptor for one file in the backup queue.
-
-    Args:
-        path: Absolute path to the source file on disk (used as the dict key).
-        name: Display name shown in the row (typically ``Path(path).name``).
-        size_bytes: Total byte count of the file.
-        status: Current :class:`BackupStatus`; defaults to :attr:`~BackupStatus.QUEUED`.
-        bytes_done: Bytes transferred so far; updated by :meth:`BackupProgressWindow.update_progress`.
-        speed_bps: Current transfer speed in bytes/second; updated alongside *bytes_done*.
-    """
-    path:       str
-    name:       str
-    size_bytes: int
-    status:     BackupStatus = field(default=BackupStatus.QUEUED)
-    bytes_done: int          = 0
-    speed_bps:  float        = 0.0
+def _badge_text(status: BackupStatus) -> str:
+    """Return the short display string for a status badge."""
+    return {
+        BackupStatus.QUEUED: "Queued",
+        BackupStatus.ACTIVE: "● Syncing",
+        BackupStatus.DONE:   "✓  Done",
+        BackupStatus.FAILED: "✗  Failed",
+    }[status]
 
 
 # ── File row widget ────────────────────────────────────────────────────────────
@@ -205,9 +109,13 @@ class _BackupFileRow(QFrame):
     Call :meth:`set_status` and :meth:`update_progress` to refresh the row.
     """
 
-    def __init__(self, item: BackupProgressItem, parent: QWidget | None = None) -> None:
+    def __init__(self, item: BackupFileDTO, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._item = item
+        self._path:       str   = item.path
+        self._name:       str   = item.name
+        self._size_bytes: int   = item.size_bytes
+        self._bytes_done: int   = 0
+        self._status: BackupStatus = BackupStatus.QUEUED
         self._setup_ui()
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -219,11 +127,10 @@ class _BackupFileRow(QFrame):
             bytes_done: Number of bytes transferred so far.
             speed_bps: Current transfer speed in bytes per second.
         """
-        self._item.bytes_done = bytes_done
-        self._item.speed_bps  = speed_bps
-        pct = int(bytes_done / self._item.size_bytes * 100) if self._item.size_bytes else 0
+        self._bytes_done = bytes_done
+        pct = int(bytes_done / self._size_bytes * 100) if self._size_bytes else 0
         self._row_bar.set_percent(pct)
-        remaining = max(0, self._item.size_bytes - bytes_done)
+        remaining = max(0, self._size_bytes - bytes_done)
         self._speed_label.setText(_fmt_speed_eta(speed_bps, remaining))
 
     def set_status(self, status: BackupStatus) -> None:
@@ -232,7 +139,7 @@ class _BackupFileRow(QFrame):
         Args:
             status: The new :class:`BackupStatus` for this row.
         """
-        self._item.status = status
+        self._status = status
         is_active = status == BackupStatus.ACTIVE
         self._row_bar.setVisible(is_active)
         self._speed_label.setVisible(is_active)
@@ -249,7 +156,7 @@ class _BackupFileRow(QFrame):
 
     def _setup_ui(self) -> None:
         self.setObjectName("BackupProgressRow")
-        self.setProperty("status", self._item.status.value)
+        self.setProperty("status", self._status.value)
         self._create_widgets()
         self._setup_layout()
 
@@ -268,44 +175,42 @@ class _BackupFileRow(QFrame):
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setFixedSize(_ROW_ICON_SIZE, _ROW_ICON_SIZE)
 
-        if _ext(self._item.name) in _IMAGE_EXTS:
-            pixmap = _load_thumb(self._item.path, _ROW_ICON_SIZE)
+        if file_ext(self._name) in IMAGE_EXTS:
+            pixmap = load_thumb(self._path, _ROW_ICON_SIZE)
             if pixmap is not None:
                 lbl.setPixmap(pixmap)
                 return lbl
 
-        lbl.setText(_file_emoji(self._item.name))
+        lbl.setText(file_emoji(self._name))
         return lbl
 
     def _create_name_label(self) -> QLabel:
-        lbl = QLabel(self._item.name)
+        lbl = QLabel(self._name)
         lbl.setObjectName("RowFileName")
-        lbl.setToolTip(self._item.path)   # full path visible on hover
+        lbl.setToolTip(self._path)  # full path visible on hover
         return lbl
 
     def _create_size_label(self) -> QLabel:
-        lbl = QLabel(_fmt_size(self._item.size_bytes))
+        lbl = QLabel(fmt_size(self._size_bytes))
         lbl.setObjectName("RowFileSize")
         return lbl
 
     def _create_row_bar(self) -> Bar:
         """Inline gradient progress bar — hidden until status → active."""
-        pct = int(self._item.bytes_done / self._item.size_bytes * 100) if self._item.size_bytes else 0
-        bar = Bar(pct, QColor(Palette.CYAN_400), QColor(Palette.TEAL_400))
-        bar.setVisible(self._item.status == BackupStatus.ACTIVE)
+        bar = Bar(0, QColor(Palette.CYAN_400), QColor(Palette.TEAL_400))
+        bar.setVisible(False)
         return bar
 
     def _create_speed_label(self) -> QLabel:
-        remaining = max(0, self._item.size_bytes - self._item.bytes_done)
-        lbl = QLabel(_fmt_speed_eta(self._item.speed_bps, remaining))
+        lbl = QLabel("")
         lbl.setObjectName("RowSpeed")
-        lbl.setVisible(self._item.status == BackupStatus.ACTIVE)
+        lbl.setVisible(False)
         return lbl
 
     def _create_status_badge(self) -> QLabel:
-        lbl = QLabel(_badge_text(self._item.status))
+        lbl = QLabel(_badge_text(self._status))
         lbl.setObjectName("StatusBadge")
-        lbl.setProperty("status", self._item.status.value)
+        lbl.setProperty("status", self._status.value)
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setFixedWidth(_STATUS_BADGE_W)
         return lbl
@@ -335,16 +240,6 @@ class _BackupFileRow(QFrame):
         root.addWidget(self._status_badge, 0, Qt.AlignmentFlag.AlignVCenter)
 
 
-def _badge_text(status: BackupStatus) -> str:
-    """Return the short display string for a status badge."""
-    return {
-        BackupStatus.QUEUED: "Queued",
-        BackupStatus.ACTIVE: "● Syncing",
-        BackupStatus.DONE:   "✓  Done",
-        BackupStatus.FAILED: "✗  Failed",
-    }[status]
-
-
 # ── Main window ────────────────────────────────────────────────────────────────
 
 class BackupProgressWindow(QMainWindow):
@@ -355,15 +250,18 @@ class BackupProgressWindow(QMainWindow):
     double-clicking the tray icon restores the window.  Closing the window
     prompts for cancellation confirmation.
 
-    Drive from a future ``BackupViewModel``::
+    Drive the window by calling :meth:`connect_viewmodel` after construction::
 
-        win.update_progress(path, bytes_done=1_500_000, speed_bps=750_000)
-        win.set_status(path, BackupStatus.DONE)
-        win.set_overall(total_bytes=20_000_000, done_bytes=3_000_000)
+        win = BackupProgressWindow(files)
+        win.connect_viewmodel(app_state.backup_viewmodel)
+        win.show()
+
+    The three user-action signals are wired to the ViewModel automatically by
+    :meth:`connect_viewmodel` — callers do not need to connect them manually.
 
     Signals:
-        pause_requested:  Emitted when the user clicks **Pause All** (stub).
-        resume_requested: Emitted when the user clicks **Resume** (stub).
+        pause_requested:  Emitted when the user clicks **Pause All**.
+        resume_requested: Emitted when the user clicks **Resume**.
         cancel_requested: Emitted after the user confirms cancellation.
     """
 
@@ -373,106 +271,68 @@ class BackupProgressWindow(QMainWindow):
 
     def __init__(
             self,
-            items: list[BackupProgressItem],
+            items: list[BackupFileDTO],
             parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._items:       list[BackupProgressItem]  = items
         self._rows:        dict[str, _BackupFileRow] = {}
-        self._paused:      bool                      = False
-        self._backup_done: bool                      = False   # skips cancel-confirm on close
-        self._cancelling:  bool                      = False   # prevents double close-event dialog
-        self._started_at:  datetime                  = datetime.now()
+        # Lightweight status map kept in the view for footer summary text only.
+        self._statuses:    dict[str, BackupStatus]   = {
+            item.path: BackupStatus.QUEUED for item in items
+        }
+        self._total_files: int      = len(items)
+        self._paused:      bool     = False
+        self._backup_done: bool     = False  # skips cancel-confirm on close
+        self._cancelling:  bool     = False  # prevents double close-event dialog
+        self._started_at:  datetime = datetime.now()
 
-        self._setup_ui()
+        self._setup_ui(items)
         self._apply_style()
         self._connect_signals()
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    # ── ViewModel wiring ──────────────────────────────────────────────────────
 
-    def update_progress(self, path: str, bytes_done: int, speed_bps: float = 0.0) -> None:
-        """Update the per-file progress bar and speed / ETA for *path*.
+    def connect_viewmodel(self, vm: BackupViewModel) -> None:
+        """Wire this window to *vm*, replacing any previous connection.
 
-        Also recomputes the overall progress bar via :meth:`_refresh_overall`.
-
-        Args:
-            path: Absolute path of the file being backed up.
-            bytes_done: Bytes transferred so far for this file.
-            speed_bps: Current transfer speed in bytes per second (0 = unknown).
-        """
-        row = self._rows.get(path)
-        if row is not None:
-            row.update_progress(bytes_done, speed_bps)
-            for item in self._items:
-                if item.path == path:
-                    item.bytes_done = bytes_done
-                    item.speed_bps  = speed_bps
-                    break
-        self._refresh_overall()
-
-    def set_status(self, path: str, status: BackupStatus) -> None:
-        """Change the visual state of a single file row.
+        All ViewModel → View signal connections are established here, and the
+        three user-action signals (pause / resume / cancel) are forwarded to
+        the corresponding ViewModel methods.
 
         Args:
-            path: Absolute path of the affected file.
-            status: The new :class:`BackupStatus` for that file.
+            vm: The :class:`~viewmodels.backup.BackupViewModel` driving this session.
         """
-        row = self._rows.get(path)
-        if row is not None:
-            row.set_status(status)
-        for item in self._items:
-            if item.path == path:
-                item.status = status
-                break
-        self._refresh_summary()
-        self._refresh_tray_tooltip()
+        # ViewModel → View
+        vm.file_progress_updated.connect(self._on_file_progress)
+        vm.file_status_changed.connect(self._on_file_status_changed)
+        vm.overall_updated.connect(self._on_overall_updated)
+        vm.backup_complete.connect(self._on_backup_complete)
+        vm.backup_error.connect(self._on_backup_error)
 
-    def set_overall(self, total_bytes: int, done_bytes: int) -> None:
-        """Directly set the overall progress bar values.
-
-        Prefer calling :meth:`update_progress` per file and letting
-        :meth:`_refresh_overall` derive the totals automatically.  Use this
-        method when the caller has authoritative totals.
-
-        Args:
-            total_bytes: Total byte count across all files.
-            done_bytes: Bytes transferred so far across all files.
-        """
-        if total_bytes > 0:
-            pct = int(done_bytes / total_bytes * 100)
-            self._overall_bar.set_percent(pct)
-            self._overall_pct.setText(f"{pct}%")
-        self._refresh_tray_tooltip()
-
-    def mark_done(self) -> None:
-        """Mark the entire backup as complete and lock the action buttons."""
-        self._backup_done = True
-        self._overall_bar.set_percent(100)
-        self._overall_pct.setText("100%")
-        self._overall_stats.setText("Backup complete  ✓")
-        self._pause_btn.setEnabled(False)
-        self._cancel_btn.setEnabled(False)
-        self._tray_icon.setToolTip("SyncDose — Backup complete ✓")
+        # View → ViewModel
+        self.pause_requested.connect(vm.pause)
+        self.resume_requested.connect(vm.resume)
+        self.cancel_requested.connect(vm.cancel)
 
     # ── UI construction ───────────────────────────────────────────────────────
 
-    def _setup_ui(self) -> None:
+    def _setup_ui(self, items: list[BackupFileDTO]) -> None:
         self.setObjectName("BackupProgressWindow")
         self.setWindowTitle("SyncDose — Backup Progress")
         self.setMinimumWidth(_WINDOW_MIN_WIDTH)
         self.setMinimumHeight(_WINDOW_MIN_HEIGHT)
         self.setMaximumHeight(_WINDOW_MAX_HEIGHT)
-        self._create_widgets()
+        self._create_widgets(items)
         self._setup_layout()
         self._setup_tray()
 
-    def _create_widgets(self) -> None:
-        self._header           = self._create_header()
-        self._overall_section  = self._create_overall_section()
-        self._scroll_area      = self._create_scroll_area()
-        self._summary_label    = self._create_summary_label()
-        self._pause_btn        = self._create_pause_button()
-        self._cancel_btn       = self._create_cancel_button()
+    def _create_widgets(self, items: list[BackupFileDTO]) -> None:
+        self._header          = self._create_header()
+        self._overall_section = self._create_overall_section()
+        self._scroll_area     = self._create_scroll_area(items)
+        self._summary_label   = self._create_summary_label()
+        self._pause_btn       = self._create_pause_button()
+        self._cancel_btn      = self._create_cancel_button()
 
     # ── Header ────────────────────────────────────────────────────────────────
 
@@ -488,7 +348,7 @@ class BackupProgressWindow(QMainWindow):
         title = QLabel("Backing Up Files")
         title.setObjectName("HeaderTitle")
 
-        n = len(self._items)
+        n = self._total_files
         subtitle = QLabel(
             f"{n} file{'s' if n != 1 else ''}  ·  "
             f"Started {self._started_at.strftime('%H:%M')}"
@@ -515,7 +375,6 @@ class BackupProgressWindow(QMainWindow):
         container = QWidget()
         container.setObjectName("OverallSection")
 
-        # Custom Bar widget (matches the project's existing progress-bar pattern)
         self._overall_bar = Bar(
             0,
             QColor(Palette.CYAN_400),
@@ -548,7 +407,7 @@ class BackupProgressWindow(QMainWindow):
 
     # ── Scroll area ───────────────────────────────────────────────────────────
 
-    def _create_scroll_area(self) -> QScrollArea:
+    def _create_scroll_area(self, items: list[BackupFileDTO]) -> QScrollArea:
         content = QWidget()
         content.setObjectName("FileScrollContent")
 
@@ -557,8 +416,8 @@ class BackupProgressWindow(QMainWindow):
         layout.setSpacing(Spacing.SM)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        if self._items:
-            for item in self._items:
+        if items:
+            for item in items:
                 row = _BackupFileRow(item, parent=content)
                 self._rows[item.path] = row
                 layout.addWidget(row)
@@ -679,11 +538,56 @@ class BackupProgressWindow(QMainWindow):
         self._cancel_btn.clicked.connect(self._on_cancel_requested)
         theme_manager.theme_changed.connect(self._apply_style)
 
-    # ── Slots ─────────────────────────────────────────────────────────────────
+    # ── ViewModel slots ───────────────────────────────────────────────────────
+
+    @Slot(str, int, float)
+    def _on_file_progress(self, path: str, bytes_done: int, speed_bps: float) -> None:
+        """Route a progress tick from the ViewModel to the matching row widget."""
+        row = self._rows.get(path)
+        if row is not None:
+            row.update_progress(bytes_done, speed_bps)
+
+    @Slot(str, object)
+    def _on_file_status_changed(self, path: str, status: BackupStatus) -> None:
+        """Propagate a status transition to the matching row and refresh summaries."""
+        row = self._rows.get(path)
+        if row is not None:
+            row.set_status(status)
+        self._statuses[path] = status
+        self._refresh_summary()
+        self._refresh_tray_tooltip()
+
+    @Slot(int, int)
+    def _on_overall_updated(self, total_bytes: int, done_bytes: int) -> None:
+        """Update the overall progress bar from authoritative ViewModel totals."""
+        if total_bytes > 0:
+            pct = int(done_bytes / total_bytes * 100)
+            self._overall_bar.set_percent(pct)
+            self._overall_pct.setText(f"{pct}%")
+        self._overall_stats.setText(self._build_stats_text())
+        self._refresh_tray_tooltip()
+
+    @Slot()
+    def _on_backup_complete(self) -> None:
+        """Lock the UI into the completed state."""
+        self._backup_done = True
+        self._overall_bar.set_percent(100)
+        self._overall_pct.setText("100%")
+        self._overall_stats.setText("Backup complete  ✓")
+        self._pause_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(False)
+        self._tray_icon.setToolTip("SyncDose — Backup complete ✓")
+
+    @Slot(str)
+    def _on_backup_error(self, error: str) -> None:
+        """Surface a session-level error in the stats label."""
+        self._overall_stats.setText(f"Error: {error}")
+
+    # ── User-action slots ─────────────────────────────────────────────────────
 
     @Slot()
     def _on_pause_clicked(self) -> None:
-        """Toggle pause / resume state (stub — backend not yet wired)."""
+        """Toggle pause / resume state and emit the appropriate signal."""
         self._paused = not self._paused
         if self._paused:
             self._pause_btn.setText("▶  Resume")
@@ -725,7 +629,7 @@ class BackupProgressWindow(QMainWindow):
     # ── Qt event overrides ────────────────────────────────────────────────────
 
     def changeEvent(self, event: QEvent) -> None:
-        """Intercept minimize → hide to tray (mirrors ``MainWindow`` pattern)."""
+        """Intercept minimize → hide to tray."""
         if event.type() == QEvent.Type.WindowStateChange and self.isMinimized():
             self.hide()
         super().changeEvent(event)
@@ -733,11 +637,9 @@ class BackupProgressWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         """Ask for cancellation confirmation unless the backup is already done.
 
-        Guards against a double-dialog when :meth:`_on_cancel_requested` calls
-        ``self.close()`` after the user already confirmed — the ``_cancelling``
-        flag lets that second pass through immediately.
+        The ``_cancelling`` flag lets a second close pass (triggered by
+        :meth:`_on_cancel_requested`) through immediately without a second dialog.
         """
-        # Already confirmed cancellation, or backup completed naturally.
         if self._cancelling or self._backup_done:
             self._tray_icon.hide()
             event.accept()
@@ -761,13 +663,6 @@ class BackupProgressWindow(QMainWindow):
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    def _refresh_overall(self) -> None:
-        """Recompute the overall % from accumulated per-item byte counts."""
-        total = sum(i.size_bytes  for i in self._items)
-        done  = sum(i.bytes_done  for i in self._items)
-        self.set_overall(total, done)
-        self._overall_stats.setText(self._build_stats_text())
-
     def _refresh_summary(self) -> None:
         self._summary_label.setText(self._build_summary_text())
 
@@ -775,12 +670,11 @@ class BackupProgressWindow(QMainWindow):
         self._tray_icon.setToolTip(f"SyncDose — Backup {self._overall_bar.percent}% complete")
 
     def _build_stats_text(self) -> str:
-        done  = sum(1 for i in self._items if i.status == BackupStatus.DONE)
-        total = len(self._items)
-        return f"{done} of {total} file{'s' if total != 1 else ''} complete"
+        done = sum(1 for s in self._statuses.values() if s == BackupStatus.DONE)
+        return f"{done} of {self._total_files} file{'s' if self._total_files != 1 else ''} complete"
 
     def _build_summary_text(self) -> str:
-        counts = {s: sum(1 for i in self._items if i.status == s) for s in BackupStatus}
+        counts = {s: sum(1 for v in self._statuses.values() if v == s) for s in BackupStatus}
         parts: list[str] = []
         if counts[BackupStatus.DONE]:   parts.append(f"{counts[BackupStatus.DONE]} done")
         if counts[BackupStatus.ACTIVE]: parts.append(f"{counts[BackupStatus.ACTIVE]} syncing")
@@ -795,37 +689,31 @@ if __name__ == "__main__":
     import resources_qrc  # noqa: F401 — registers Qt virtual resource paths
 
     sample_items = [
-        BackupProgressItem(
+        BackupFileDTO(
             r"C:\Users\Lavi\OneDrive - Bar-Ilan University - Students\Photos\My Photos\2022\2-February\9725.webp",
-            "vacation_2022.webp", 3_456_000, BackupStatus.DONE, 3_456_000,
+            "vacation_2022.webp", 3_456_000,
         ),
-        BackupProgressItem(
-            "C:/phone/dcim/portrait.heic",
-            "portrait.heic", 8_200_000, BackupStatus.ACTIVE, 3_280_000, 820_000,
-        ),
-        BackupProgressItem(
-            "C:/phone/dcim/family_video.mp4",
-            "family_video.mp4", 54_000_000,
-        ),
-        BackupProgressItem(
-            "C:/phone/dcim/night_shot.jpg",
-            "night_shot.jpg", 2_100_000,
-        ),
-        BackupProgressItem(
-            "C:/phone/docs/quarterly_report.pdf",
-            "quarterly_report.pdf", 890_000, BackupStatus.FAILED,
-        ),
-        BackupProgressItem(
-            "C:/phone/music/favourite_track.mp3",
-            "favourite_track.mp3", 5_400_000,
-        ),
-        BackupProgressItem(
-            "C:/phone/archives/photos_2024.zip",
-            "photos_2024.zip", 120_000_000,
-        ),
+        BackupFileDTO("C:/phone/dcim/portrait.heic",   "portrait.heic",    8_200_000),
+        BackupFileDTO("C:/phone/dcim/family_video.mp4","family_video.mp4", 54_000_000),
+        BackupFileDTO("C:/phone/dcim/night_shot.jpg",  "night_shot.jpg",   2_100_000),
+        BackupFileDTO("C:/phone/docs/quarterly_report.pdf", "quarterly_report.pdf", 890_000),
+        BackupFileDTO("C:/phone/music/favourite_track.mp3", "favourite_track.mp3",  5_400_000),
+        BackupFileDTO("C:/phone/archives/photos_2024.zip",  "photos_2024.zip",     120_000_000),
     ]
 
     app = QApplication(sys.argv)
     win = BackupProgressWindow(sample_items)
+
+    # Simulate some in-progress state without a real ViewModel.
+    win._rows[sample_items[0].path].set_status(BackupStatus.DONE)
+    win._rows[sample_items[0].path].update_progress(3_456_000, 0)
+    win._rows[sample_items[1].path].set_status(BackupStatus.ACTIVE)
+    win._rows[sample_items[1].path].update_progress(3_280_000, 820_000)
+    win._rows[sample_items[4].path].set_status(BackupStatus.FAILED)
+    win._statuses[sample_items[0].path] = BackupStatus.DONE
+    win._statuses[sample_items[1].path] = BackupStatus.ACTIVE
+    win._statuses[sample_items[4].path] = BackupStatus.FAILED
+    win._refresh_summary()
+
     win.show()
     sys.exit(app.exec())
