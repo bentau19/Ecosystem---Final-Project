@@ -26,7 +26,7 @@ _ANDROID_ENUMS_PATH: Path = _PROJECT_ROOT / "android" / "app" / "src" / "main" /
 _DESKTOP_ENUMS_PATH: Path = _PROJECT_ROOT / "desktop" / "domain" / "enums"
 
 _ANDROID_JSON_PATH: Path = _PROJECT_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "example" / "android" / "jsons"
-_DESKTOP_JSON_PATH: Path = _PROJECT_ROOT / "desktop" / "serializers" / "jsons"
+_DESKTOP_JSON_PATH: Path = _PROJECT_ROOT / "desktop" / "serializers" / "schemas"
 
 # All JSON enum definitions live here.
 _SHARED_DIR: Path = _PROJECT_ROOT / "shared"

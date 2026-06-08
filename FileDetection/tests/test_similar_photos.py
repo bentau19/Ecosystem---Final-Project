@@ -1,4 +1,10 @@
-"""Unit tests for similar_photos.py — _dhash, _hamming_distance, _UnionFind, SimilarPhotoAccumulator."""
+"""
+Unit tests for similar_photos.py.
+
+Covers: dhash, hamming_distance, _UnionFind, group_by_hash,
+        find_similar_groups, pick_best, deduplicate_to_best, save_best_photos,
+        SimilarPhotoAccumulator (including seed_entries).
+"""
 
 import threading
 from pathlib import Path
@@ -10,8 +16,13 @@ from PIL import Image
 from similar_photos import (
     SimilarPhotoAccumulator,
     _UnionFind,
+    deduplicate_to_best,
     _dhash,
+    find_similar_groups,
+    group_by_hash,
     _hamming_distance,
+    pick_best,
+    save_best_photos,
 )
 
 
@@ -37,7 +48,7 @@ def _save_gradient_png(path: Path, size: tuple[int, int] = (100, 100)) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# _dhash
+# dhash
 # ---------------------------------------------------------------------------
 
 def test_dhash_returns_int() -> None:
@@ -72,7 +83,7 @@ def test_dhash_uniform_and_reversed_gradient_differ() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _hamming_distance
+# hamming_distance
 # ---------------------------------------------------------------------------
 
 def test_hamming_identical_is_zero() -> None:
@@ -290,3 +301,190 @@ def test_accumulator_concurrent_adds_do_not_raise(tmp_path: Path) -> None:
 
     assert not errors
     assert 1 <= acc.size() <= len(paths)
+
+
+# ---------------------------------------------------------------------------
+# group_by_hash
+# ---------------------------------------------------------------------------
+
+def test_group_by_hash_empty_input_returns_empty() -> None:
+    assert group_by_hash([], threshold=10) == []
+
+
+def test_group_by_hash_identical_hashes_produce_one_group(tmp_path: Path) -> None:
+    a = tmp_path / "a.png"
+    b = tmp_path / "b.png"
+    hashed = [(a, 0b1010), (b, 0b1010)]  # same hash → distance 0
+    groups = group_by_hash(hashed, threshold=10)
+    assert len(groups) == 1
+    assert set(groups[0]) == {a, b}
+
+
+def test_group_by_hash_distant_hashes_produce_separate_groups(tmp_path: Path) -> None:
+    a = tmp_path / "a.png"
+    b = tmp_path / "b.png"
+    hashed = [(a, 0), (b, 2**64 - 1)]  # 64-bit Hamming distance
+    groups = group_by_hash(hashed, threshold=10)
+    assert len(groups) == 2
+
+
+def test_group_by_hash_transitivity(tmp_path: Path) -> None:
+    """A~B and B~C → all three in one group even if A and C differ by > threshold."""
+    a, b, c = tmp_path / "a.png", tmp_path / "b.png", tmp_path / "c.png"
+    # A=0b00, B=0b01 (dist 1), C=0b11 (dist 1 from B, dist 2 from A)
+    hashed = [(a, 0b00), (b, 0b01), (c, 0b11)]
+    groups = group_by_hash(hashed, threshold=1)
+    assert len(groups) == 1
+    assert set(groups[0]) == {a, b, c}
+
+
+# ---------------------------------------------------------------------------
+# find_similar_groups
+# ---------------------------------------------------------------------------
+
+def test_find_similar_groups_identical_images_one_group(tmp_path: Path) -> None:
+    a = _save_solid_png(tmp_path / "a.png")
+    b = _save_solid_png(tmp_path / "b.png")  # same pixels → same dHash
+    groups = find_similar_groups([a, b], threshold=10)
+    assert len(groups) == 1
+    assert set(groups[0]) == {a, b}
+
+
+def test_find_similar_groups_dissimilar_images_separate_groups(tmp_path: Path) -> None:
+    solid    = _save_solid_png(tmp_path / "solid.png")
+    gradient = _save_gradient_png(tmp_path / "gradient.png")
+    groups   = find_similar_groups([solid, gradient], threshold=10)
+    assert len(groups) == 2
+
+
+def test_find_similar_groups_unreadable_file_dropped(tmp_path: Path) -> None:
+    good = _save_solid_png(tmp_path / "good.png")
+    bad  = tmp_path / "bad.png"
+    bad.write_bytes(b"not an image")
+    groups = find_similar_groups([good, bad], threshold=10)
+    # bad is dropped; only good remains — one singleton group
+    all_paths = [p for g in groups for p in g]
+    assert bad not in all_paths
+    assert good in all_paths
+
+
+def test_find_similar_groups_empty_list_returns_empty() -> None:
+    assert find_similar_groups([]) == []
+
+
+# ---------------------------------------------------------------------------
+# pick_best
+# ---------------------------------------------------------------------------
+
+def test_pick_best_returns_highest_scoring_path(tmp_path: Path) -> None:
+    low  = _save_solid_png(tmp_path / "low.png")
+    high = _save_solid_png(tmp_path / "high.png")
+    scores = {str(low): 1.0, str(high): 9.0}
+    with patch("similar_photos.score_image", side_effect=lambda p: scores[str(p)]):
+        assert pick_best([low, high]) == high
+
+
+def test_pick_best_single_element_returns_it(tmp_path: Path) -> None:
+    p = _save_solid_png(tmp_path / "only.png")
+    with patch("similar_photos.score_image", return_value=5.0):
+        assert pick_best([p]) == p
+
+
+# ---------------------------------------------------------------------------
+# deduplicate_to_best
+# ---------------------------------------------------------------------------
+
+def test_deduplicate_to_best_keys_are_best_paths(tmp_path: Path) -> None:
+    a = _save_solid_png(tmp_path / "a.png")
+    b = _save_solid_png(tmp_path / "b.png")
+    scores = {str(a): 3.0, str(b): 7.0}
+    with patch("similar_photos.score_image", side_effect=lambda p: scores[str(p)]):
+        result = deduplicate_to_best([a, b], threshold=10)
+    assert b in result          # b is best
+    assert a not in result      # a is not a key
+    assert a in result[b]       # but a is in b's group
+
+
+def test_deduplicate_to_best_dissimilar_images_separate_keys(tmp_path: Path) -> None:
+    solid    = _save_solid_png(tmp_path / "solid.png")
+    gradient = _save_gradient_png(tmp_path / "gradient.png")
+    with patch("similar_photos.score_image", return_value=5.0):
+        result = deduplicate_to_best([solid, gradient], threshold=10)
+    assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# save_best_photos
+# ---------------------------------------------------------------------------
+
+def test_save_best_photos_creates_output_dir_and_copies_file(tmp_path: Path) -> None:
+    src     = _save_solid_png(tmp_path / "src.png")
+    out_dir = tmp_path / "output"
+    with patch("similar_photos.score_image", return_value=5.0):
+        saved = save_best_photos([src], out_dir, threshold=10)
+    assert out_dir.exists()
+    assert len(saved) == 1
+    assert saved[0].exists()
+    assert saved[0].read_bytes() == src.read_bytes()
+
+
+def test_save_best_photos_only_best_per_group_copied(tmp_path: Path) -> None:
+    a = _save_solid_png(tmp_path / "a.png")
+    b = _save_solid_png(tmp_path / "b.png")  # same dHash group
+    out_dir = tmp_path / "out"
+    scores = {str(a): 2.0, str(b): 8.0}
+    with patch("similar_photos.score_image", side_effect=lambda p: scores[str(p)]):
+        saved = save_best_photos([a, b], out_dir, threshold=10)
+    assert len(saved) == 1
+    assert saved[0].name == "b.png"
+
+
+# ---------------------------------------------------------------------------
+# SimilarPhotoAccumulator — seed_entries
+# ---------------------------------------------------------------------------
+
+def test_accumulator_default_init_starts_empty() -> None:
+    acc = SimilarPhotoAccumulator()
+    assert acc.size() == 0
+
+
+def test_accumulator_none_seed_behaves_same_as_default() -> None:
+    acc = SimilarPhotoAccumulator(seed_entries=None)
+    assert acc.size() == 0
+
+
+def test_accumulator_seed_entries_initialises_groups(tmp_path: Path) -> None:
+    p = tmp_path / "seeded.png"
+    _save_solid_png(p)
+    acc = SimilarPhotoAccumulator(threshold=10, seed_entries=[(p, 0, 5.0)])
+    assert acc.size() == 1
+    assert acc.current_bests() == [p]
+
+
+def test_accumulator_seed_entry_similar_incoming_lower_score_rejected(tmp_path: Path) -> None:
+    seeded = tmp_path / "seeded.png"
+    newcomer = tmp_path / "newcomer.png"
+    _save_solid_png(seeded)
+    _save_solid_png(newcomer)  # same dHash as seeded (solid colour)
+
+    acc = SimilarPhotoAccumulator(threshold=10, seed_entries=[(seeded, 0, 9.0)])
+    with patch("similar_photos.score_image", return_value=3.0):
+        winner, is_new_best = acc.add(newcomer)
+
+    assert is_new_best is False
+    assert winner == seeded
+    assert acc.size() == 1
+
+
+def test_accumulator_seed_entry_dissimilar_incoming_creates_new_group(tmp_path: Path) -> None:
+    seeded   = tmp_path / "seeded.png"
+    gradient = tmp_path / "gradient.png"
+    _save_solid_png(seeded)
+    _save_gradient_png(gradient)
+
+    acc = SimilarPhotoAccumulator(threshold=10, seed_entries=[(seeded, 0, 5.0)])
+    with patch("similar_photos.score_image", return_value=5.0):
+        _, is_new_best = acc.add(gradient)
+
+    assert is_new_best is True
+    assert acc.size() == 2

@@ -52,4 +52,9 @@
         <file alias="overlay.qss">styles/loading/overlay.qss</file>
     </qresource>
 
+    <qresource prefix="/styles/backup">
+        <file alias="backup-review.qss">styles/backup/backup-review.qss</file>
+        <file alias="backup-progress.qss">styles/backup/backup-progress.qss</file>
+    </qresource>
+
 </RCC>

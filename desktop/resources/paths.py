@@ -75,3 +75,10 @@ class LoadingStyles(PathsEnum):
     """Qt virtual paths to loading-widget QSS stylesheets."""
 
     OVERLAY = ":/styles/loading/overlay.qss"
+
+
+class BackupStyles(PathsEnum):
+    """Qt virtual paths to backup-widget QSS stylesheets."""
+
+    REVIEW   = ":/styles/backup/backup-review.qss"
+    PROGRESS = ":/styles/backup/backup-progress.qss"

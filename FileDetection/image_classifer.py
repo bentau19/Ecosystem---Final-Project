@@ -189,6 +189,25 @@ def test(image_model: ImageClassifier):
     print("-------------------------Test Finished---------------------")
 
 
+def is_wanted(img: Path, model_path: Path = Path(__file__).parent / "model.pth"):
+    image_model = ImageClassifier()
+    image_model.load_state_dict(torch.load(str(model_path)))
+
+    image_model.eval()
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225])
+    ])
+    img = Image.open(img).convert('RGB')
+    img_tensor = transform(img)
+
+    with torch.no_grad():
+        output = softmax(image_model(img_tensor.unsqueeze(0)), dim=1)
+        return 0 if output[0][0] > 0.95 else 1
+
+
 def main(argc: int, argv: list[str]):
     image_model = ImageClassifier()
 
