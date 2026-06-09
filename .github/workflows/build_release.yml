@@ -55,8 +55,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: desktop/installer/**/bin/Release/*.exe
-
+          path: |
+            desktop/installer/Package/bin/Release/*.msi
+            desktop/installer/Bundle/bin/*.msi
 
   # =========================
   # ANDROID BUILD
