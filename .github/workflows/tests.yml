@@ -1,0 +1,94 @@
+name: Test
+
+on:
+  push:
+
+jobs:
+  # =========================
+  # ANDROID TESTS
+  # =========================
+  android-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/libs.versions.toml') }}
+          restore-keys: gradle-
+
+      - name: Run Android unit tests
+        run: cd android && ./gradlew :app:testDebugUnitTest
+
+
+  # =========================
+  # WINDOWS TESTS
+  # =========================
+  windows-test:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/tau_sync
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          pip install -r TauSync/windows/requirements.txt
+          pip install -r desktop/requirements.txt
+          pip install TauSync/windows
+          pip install pytest
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build native
+        run: |
+          cmake -S desktop/native/windows/pipe -B desktop/native/windows/pipe/build
+          cmake --build desktop/native/windows/pipe/build --config Release
+
+      - name: Copy file
+        run: |
+          Copy-Item `
+            desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd `
+            desktop/native/windows/pipe/
+
+      - name: Run tests
+        run: pytest desktop/
+
+
+  # =========================
+  # FILE DETECTION TESTS
+  # =========================
+  filedetection-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install pillow xxhash numpy pytest
+
+      - name: Run FileDetection tests
+        working-directory: FileDetection
+        run: pytest tests/ -v
