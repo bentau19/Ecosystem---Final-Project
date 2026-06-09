@@ -16,32 +16,32 @@
 
 
 
-<util:RegistrySearch Id="AspNetCore10Check"
+<util:RegistrySearch Id="DotNet8Check"
                      Root="HKLM"
-                     Key="SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.AspNetCore.App"
-                     Value="10.0"
+                     Key="SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App"
+                     Value="8.0"
                      Result="exists"
-                     Variable="AspNetCore10Installed" />
+                     Variable="DotNet8Installed" />
 
     <Chain>
 
-      <!-- Install .NET runtime if missing -->
- <ExePackage Id="AspNetCore10Runtime"
-            InstallArguments="/install /quiet /norestart"
-            RepairArguments="/repair /quiet /norestart"
-            UninstallArguments="/uninstall /quiet /norestart"
-            DetectCondition="AspNetCore10Installed"
-            Vital="yes">
+      <!-- Install .NET 8 Runtime if missing (required by TauSync C# library via pythonnet) -->
+      <ExePackage Id="DotNet8Runtime"
+                  InstallArguments="/install /quiet /norestart"
+                  RepairArguments="/repair /quiet /norestart"
+                  UninstallArguments="/uninstall /quiet /norestart"
+                  DetectCondition="DotNet8Installed"
+                  Vital="yes">
 
-    <ExePackagePayload
-    Name="aspnetcore-runtime-10.0.8-win-x64.exe"
-        DownloadUrl="https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/10.0.8/aspnetcore-runtime-10.0.8-win-x64.exe"
-        Size="11285744"
-        Compressed="no"
-        Hash="a8209d7bf770a69d8ba4643f903cd425636253d73d0ecabe6f4a4ff2870fbe619f252f5fa27b8e8f6f31b65a4495e55e4511f2fc4e40c7d867a9ee618844af86"
-        Version="10.0.8"
-        ProductName="Microsoft ASP.NET Core 10.0.8 Runtime" />
-</ExePackage>
+        <ExePackagePayload
+            Name="dotnet-runtime-8.0.16-win-x64.exe"
+            DownloadUrl="https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.16/dotnet-runtime-8.0.16-win-x64.exe"
+            Size="29032704"
+            Compressed="no"
+            Hash="TODO_REPLACE_WITH_SHA512_OF_dotnet-runtime-8.0.16-win-x64.exe"
+            Version="8.0.16"
+            ProductName="Microsoft .NET Runtime 8.0.16" />
+      </ExePackage>
 
       <!-- Your MSI -->
       <MsiPackage SourceFile="..\Package\bin\Release\Package.msi"

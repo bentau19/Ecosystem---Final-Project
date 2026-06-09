@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 
 import resources_qrc  # noqa: F401
 from app.app_state import app_state
-from dto.device_info import DeviceInfoDTO
+from domain.dto.device_info import DeviceInfoDTO
 from resources.spacing import Spacing
 from views.widgets.dashboard.dashboard_content import DashboardContent
 from views.widgets.divider import Divider

@@ -57,7 +57,7 @@ jobs:
           name: windows-installer
           path: |
             desktop/installer/Package/bin/Release/*.msi
-            desktop/installer/Bundle/bin/*.msi
+            desktop/installer/Bundle/bin/Release/SyncDoseSetup.exe
 
   # =========================
   # ANDROID BUILD
@@ -112,7 +112,7 @@ jobs:
       - name: Download Android artifacts
         uses: actions/download-artifact@v4
         with:
-          name: release-apk
+          name: debug-apk
           path: artifacts/android
 
       - name: Create GitHub Release

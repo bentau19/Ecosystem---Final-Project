@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 )
 
 from domain.enums.screen import Screen
-from dto.device_info import DeviceInfoDTO, DeviceNameDTO
+from domain.dto.device_info import DeviceInfoDTO, DeviceNameDTO
 from resources.paths import Icons, Styles
 from resources.spacing import Spacing
 from app.app_state import app_state
