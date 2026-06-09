@@ -2,29 +2,33 @@ from datetime import datetime
 from domain.entities.device_info import DeviceEntity
 from serializers.serializer import ISerializer
 
+_DeviceRow = tuple[str, str, str, str, str, int, bool, float, float, str]
 
-class DeviceSerializer(ISerializer[DeviceEntity | None, dict]):
+
+class DeviceSerializer(ISerializer[DeviceEntity | None, _DeviceRow | None]):
     """Serializes and deserializes the currently connected device entity.
 
-    Maps between a ``PreviousDeviceEntity`` (or ``None`` when no device is
-    connected) and its JSON-safe dictionary representation.
+    Maps between a ``DeviceEntity`` (or ``None`` when no device is present)
+    and its SQLite row tuple representation
+    ``(id, name, os, tag, last_connected, battery_level, battery_charging,
+    storage_used, storage_total, ip)``.
 
-    An empty dict (``{}``) round-trips to ``None`` so that an absent device
-    can be stored as an empty JSON object without any special-case logic in
-    the store.
+    A falsy row (``None`` or empty tuple) round-trips to ``None`` so that
+    absent devices can be handled without special-case logic in the repository.
     """
 
     def serialize(self, entity: DeviceEntity | None) -> tuple[
                                                             str, str, str, str, str, int, bool, int, int, str] | None:
-        """Convert a PreviousDeviceEntity to a JSON-serializable dictionary.
+        """Convert a ``DeviceEntity`` to a SQLite row tuple.
 
         Args:
             entity: The entity to serialize, or ``None`` if no device is
                 currently connected.
 
         Returns:
-            A plain dict suitable for ``json.dump``, or ``{}`` when ``data``
-            is ``None``.
+            A tuple ``(id, name, os, tag, last_connected, battery_level,
+            battery_charging, storage_used, storage_total, ip)`` suitable for
+            ``cursor.execute``, or ``None`` when ``entity`` is ``None``.
         """
         if entity is None:
             return None
@@ -33,15 +37,17 @@ class DeviceSerializer(ISerializer[DeviceEntity | None, dict]):
                 entity.storage_total, entity.ip)
 
     def deserialize(self, db_row: tuple) -> DeviceEntity | None:
-        """Reconstruct a PreviousDeviceEntity from a plain dictionary.
+        """Reconstruct a ``DeviceEntity`` from a SQLite row tuple.
 
         Args:
-            db_row: A plain dict loaded via ``json.load``.  An empty dict is
-                treated as "no current device" and returns ``None``.
+            db_row: A tuple with columns ``(id, name, os, tag, last_connected,
+                battery_level, battery_charging, storage_used, storage_total,
+                ip)`` as returned by ``cursor.fetchone()``.  A falsy value
+                (``None`` or empty tuple) is treated as "not found" and returns
+                ``None``.
 
         Returns:
-            A ``PreviousDeviceEntity`` if ``data`` is non-empty, otherwise
-            ``None``.
+            A ``DeviceEntity`` if ``db_row`` is non-empty, otherwise ``None``.
         """
         if not db_row:
             return None

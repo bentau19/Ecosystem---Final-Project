@@ -15,6 +15,7 @@ import androidx.lifecycle.ProcessLifecycleOwner;
 
 import com.example.android.data.datasource.SystemDataSource;
 import com.example.android.domain.entities.RemoteDeviceInfo;
+import com.example.android.domain.enums.BackupTransferStatus;
 import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.domain.enums.SendFileStatus;
 import com.example.android.domain.enums.ConnectionType;
@@ -24,9 +25,11 @@ import com.example.android.enums.FileTransferChannels;
 import com.example.android.enums.SessionChannels;
 import com.example.android.network.handlers.ChannelHandlerRegistry;
 import com.example.android.network.handlers.DeviceInfoChannelHandler;
+import com.example.android.domain.usecases.BackupTransferUseCase;
 import com.example.android.domain.usecases.ReceiveFileUseCase;
 import com.example.android.domain.usecases.RespondToFileTransferUseCase;
 import com.example.android.domain.usecases.SendFileUseCase;
+import com.example.android.repositories.BackupRepository;
 import com.example.android.repositories.SendFileRepository;
 import com.example.android.network.handlers.FileDataChannelHandler;
 import com.example.android.network.handlers.FileMetadataChannelHandler;
@@ -59,9 +62,13 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     private RespondToFileTransferUseCase respondToFileTransferUseCase;
     private ReceiveFileUseCase receiveFileUseCase;
     private SendFileUseCase sendFileUseCase;
+    private BackupTransferUseCase backupTransferUseCase;
 
     // Observer for outgoing file transfer notifications — kept so we can remove it in onDestroy
     private Observer<SendFileStatus> sendFileStatusObserver;
+
+    // Observer for backup transfer progress notifications — kept for removal in onDestroy
+    private Observer<BackupTransferStatus> backupTransferStatusObserver;
 
     @Override
     public void onCreate() {
@@ -94,12 +101,15 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         respondToFileTransferUseCase = new RespondToFileTransferUseCase(transportManager);
         receiveFileUseCase = new ReceiveFileUseCase(transportManager, ReceiveFileRepository.getInstance(), this);
         sendFileUseCase = new SendFileUseCase(transportManager, SendFileRepository.getInstance(), this);
+        backupTransferUseCase = new BackupTransferUseCase(transportManager, BackupRepository.getInstance(), this);
 
         registerChannelHandlers();
         registerFileTransferActionListener();
         registerIncomingRequestListener();
         registerSendFileActionListener();
         registerSendFileStatusObserver();
+        registerBackupTransferActionListener();
+        registerBackupTransferProgressObserver();
 
         Log.d(TAG, "Service initialization complete");
     }
@@ -165,6 +175,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // Check if this is a disconnect request action
         if (intent != null && "com.example.android.ACTION_SEND_DISCONNECT".equals(intent.getAction())) {
             Log.d(TAG, "Received disconnect action, sending disconnect notification to PC");
+            // Post DISCONNECTING immediately so the UI disables the button before the
+            // background thread fires. The final DISCONNECTED post comes from cleanup().
+            deviceRepository.updateConnectionStatus(ConnectionStatus.DISCONNECTING);
             sendDisconnectToPC();
             return START_NOT_STICKY;
         }
@@ -234,6 +247,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         if (sendFileStatusObserver != null) {
             SendFileRepository.getInstance().getSendStatus().removeObserver(sendFileStatusObserver);
         }
+        if (backupTransferStatusObserver != null) {
+            BackupRepository.getInstance().getTransferStatus().removeObserver(backupTransferStatusObserver);
+        }
         cleanup();
         super.onDestroy();
     }
@@ -284,8 +300,6 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
         if (status == TransportStatus.CONNECTED) {
             deviceRepository.updateConnectionStatus(ConnectionStatus.CONNECTED);
-            // send initial device info
-            new Thread(this::sendInitialDeviceInfo, "InitialDeviceSenderThread").start();
         } else if (status == TransportStatus.CONNECTING || status == TransportStatus.RECONNECTING) {
             deviceRepository.updateConnectionStatus(connectionStatus);
         } else if (status == TransportStatus.FAILED) {
@@ -339,55 +353,25 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     }
 
     /**
-     * Collects active hardware telemetry from system resources and transmits it sequentially as a handshake packet.
-     */
-    private void sendInitialDeviceInfo() {
-        Log.d(TAG, "Sending initial device info");
-        try {
-            sendDeviceInfo(DeviceInfoChannels.NAME_FROM_ANDROID.getValue(), systemDataSource.getDeviceModel());
-            sendDeviceInfo(DeviceInfoChannels.OS_FROM_ANDROID.getValue(), "Android " + Build.VERSION.RELEASE);
-            sendDeviceInfo(DeviceInfoChannels.ID.getValue(), systemDataSource.getDeviceId());
-            sendDeviceInfo(DeviceInfoChannels.IP_FROM_ANDROID.getValue(), systemDataSource.getLocalIp());
-            sendDeviceInfo(DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.getBattery()));
-            sendDeviceInfo(DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.isDeviceCharging()));
-            sendDeviceInfo(DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.getRawStorageStats().getTotal()));
-            sendDeviceInfo(DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.getRawStorageStats().getUsed()));
-
-        } catch (Exception e) {
-            Log.e(TAG, "Error sending initial device info: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Executes the standard write wrapper to push localized values into specific connection tracks.
-     */
-    private void sendDeviceInfo(String channel, String value) {
-        try {
-            Log.v(TAG, "Sending [" + channel + "]: " + value);
-            transportManager.writeToChannel(channel, value);
-        } catch (Exception e) {
-            Log.e(TAG, "Error writing [" + channel + "]: " + e.getMessage());
-        }
-    }
-
-    /**
      * Sends a disconnect notification to the PC when the user initiates a disconnect on the phone.
-     * Uses the DISCONNECT_FROM_PHONE channel to signal the PC to clean up.
+     *
+     * <p>Writes to the {@code DISCONNECT_FROM_PHONE} TauSync channel, then stops this service.
+     * {@code stopSelf()} triggers {@link #onDestroy()} → {@link #cleanup()}, which shuts down
+     * the transport and resets the repository — no explicit sleep is needed because
+     * {@code writeToChannel} closes the stream (and flushes data) before returning.
      */
     private void sendDisconnectToPC() {
         new Thread(() -> {
             try {
-                // send disconnect signal to PC
                 if (transportManager != null && transportManager.isConnected()) {
-                    transportManager.writeToChannel(SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect");
+                    transportManager.writeToChannel(
+                            SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect");
                     Log.d(TAG, "Disconnect signal sent to PC");
                 }
-                Thread.sleep(200);
             } catch (Exception e) {
                 Log.e(TAG, "Failed to send disconnect signal: " + e.getMessage());
             } finally {
-                // final cleanup and stop service
-                stopSelf();
+                stopSelf();  // → onDestroy → cleanup → transportManager.shutdown + repository.disconnect
             }
         }).start();
     }
@@ -522,6 +506,80 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                         request.getFileName(),
                         request.getFormattedSize()
                 );
+            }
+        });
+    }
+
+    // ============ Backup Transfer ============
+
+    /**
+     * Registers ConnectivityService as the {@link BackupRepository.TransferActionListener}.
+     *
+     * <p>When the scan completes and the ViewModel calls
+     * {@link BackupRepository#requestTransfer}, this listener fires and spawns a
+     * dedicated background thread that runs {@link BackupTransferUseCase#execute}.
+     * Mirrors {@link #registerSendFileActionListener} exactly.
+     */
+    private void registerBackupTransferActionListener() {
+        BackupRepository.getInstance().setTransferActionListener(files -> {
+            new Thread(() -> {
+                try {
+                    backupTransferUseCase.execute(files);
+                } catch (Exception e) {
+                    Log.e(TAG, "Unexpected error in BackupTransferThread: " + e.getMessage());
+                    BackupRepository.getInstance().onTransferFailed();
+                }
+            }, "BackupTransferThread").start();
+        });
+    }
+
+    /**
+     * Observes {@link BackupRepository#getTransferStatus()} for the lifetime of this
+     * service and drives the sticky progress notification.
+     *
+     * <p>Mirrors {@link #registerSendFileStatusObserver} — must be called on the main
+     * thread (onCreate runs on main thread) because LiveData.observeForever requires it.
+     */
+    private void registerBackupTransferProgressObserver() {
+        BackupRepository repo = BackupRepository.getInstance();
+        backupTransferStatusObserver = status -> {
+            if (status == null) return;
+
+            switch (status) {
+                case SENDING: {
+                    // Read the current progress values from the LiveData
+                    Integer sent  = repo.getTransferSent().getValue();
+                    Integer total = repo.getTransferTotal().getValue();
+                    int s = (sent  != null) ? sent  : 0;
+                    int t = (total != null) ? total : 0;
+                    notificationManager.showBackupProgressNotification(s, t);
+                    break;
+                }
+                case COMPLETED: {
+                    Integer total = repo.getTransferTotal().getValue();
+                    int t = (total != null) ? total : 0;
+                    notificationManager.showBackupCompleteNotification(t);
+                    break;
+                }
+                case FAILED:
+                    // Dismiss silently — BackupFragment will show an in-app error Toast
+                    notificationManager.dismissBackupProgressNotification();
+                    break;
+                case IDLE:
+                default:
+                    break;
+            }
+        };
+        repo.getTransferStatus().observeForever(backupTransferStatusObserver);
+
+        // Also observe transferSent so the notification counter ticks on every file
+        repo.getTransferSent().observeForever(sent -> {
+            if (BackupTransferStatus.SENDING.equals(
+                    repo.getTransferStatus().getValue())) {
+                Integer total = repo.getTransferTotal().getValue();
+                int s = (sent  != null) ? sent  : 0;
+                int t = (total != null) ? total : 0;
+                notificationManager.showBackupProgressNotification(s, t);
             }
         });
     }

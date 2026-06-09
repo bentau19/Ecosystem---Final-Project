@@ -20,6 +20,11 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from domain.dto.file_metadata import FileMetadataDTO
+from domain.dto.file_receive_complete import FileReceiveCompleteDTO
+from domain.dto.file_receive_prompt import FileReceivePromptDTO
+from domain.dto.file_send_complete import FileSendCompleteDTO
+
 if TYPE_CHECKING:
     from services.connectivity import ConnectivityService
     from services.file_transfer import FileTransferService
@@ -34,23 +39,27 @@ class FileTransferViewModel(QObject):
     their result so the view can inform the user.
 
     Signals:
-        send_complete (Signal[str, int]): ``(filename, total_bytes)`` on success.
+        send_complete (Signal[FileSendCompleteDTO]): Emitted on success.
         send_error (Signal[str]): Error message on send failure or rejection.
-        metadata_received (Signal[str, int]): ``(filename, size_bytes)`` emitted
-            when incoming file metadata arrives — show an accept/reject prompt
-            and call :meth:`receive_file` or :meth:`reject_receive` in response.
-        receive_complete (Signal[str, str]): ``(filename, dest_path)`` on success.
+        metadata_received (Signal[FileReceivePromptDTO]): Emitted when incoming
+            file metadata arrives — show an accept/reject prompt and call
+            :meth:`receive_file` or :meth:`reject_receive` in response.
+            The ``modified_at`` timestamp is stored internally and forwarded to
+            the service automatically; the view does not need to handle it.
+        receive_complete (Signal[FileReceiveCompleteDTO]): Emitted on success.
         receive_error (Signal[str]): Error message on receive failure.
         device_ready_changed (Signal[bool]): ``True`` when a device connects,
             ``False`` when it disconnects — use this to enable/disable UI controls.
     """
 
-    send_complete: Signal = Signal(str, int)
+    send_complete: Signal = Signal(object)       # FileSendCompleteDTO
     send_error: Signal = Signal(str)
 
-    metadata_received: Signal = Signal(str, int)
-    receive_complete: Signal = Signal(str, str)
+    metadata_received: Signal = Signal(object)   # FileReceivePromptDTO
+    receive_complete: Signal = Signal(object)    # FileReceiveCompleteDTO
     receive_error: Signal = Signal(str)
+
+    device_ready_changed: Signal = Signal(bool)
 
     def __init__(
             self,
@@ -72,6 +81,10 @@ class FileTransferViewModel(QObject):
         super().__init__(parent)
         self._service: FileTransferService = file_transfer_service
         self._is_device_connected: bool = False
+        # Holds the modified_at timestamp (Unix ms) received with the last
+        # incoming metadata payload.  Forwarded to receive_file so the view
+        # never needs to know about filesystem timestamps.
+        self._pending_modified_at: int = 0
 
         # ── Service signal forwarding ─────────────────────────────────────────
         self._service.file_send_complete.connect(self._on_send_complete)
@@ -120,16 +133,24 @@ class FileTransferViewModel(QObject):
     def receive_file(self, dest_path: str, file_size: int) -> None:
         """Accept the incoming transfer and save it to *dest_path*.
 
-        Not gated by connectivity — the service handles a stale transport
-        gracefully by emitting :attr:`receive_error`.
+        Emits :attr:`receive_error` immediately when no device is connected so
+        the view always receives feedback — even in the rare race where the
+        device disconnects between the metadata prompt appearing and the user
+        accepting it.
+
+        The ``modified_at`` timestamp stored from the preceding
+        :attr:`metadata_received` signal is forwarded to the service
+        automatically so the received file's ``mtime`` matches the phone's
+        original timestamp.
 
         Args:
             dest_path: Absolute path where the received file will be written.
             file_size: Exact byte count from the accepted metadata.
         """
         if not self.device_connected:
+            self.receive_error.emit("Device disconnected — file transfer cancelled.")
             return
-        self._service.receive_file(dest_path, file_size)
+        self._service.receive_file(dest_path, file_size, self._pending_modified_at)
 
     def reject_receive(self) -> None:
         """Decline the incoming transfer.
@@ -143,22 +164,24 @@ class FileTransferViewModel(QObject):
 
     @Slot()
     def _on_device_connected(self) -> None:
-        # Gate new operations and start the file-transfer service.
+        # Gate new operations, start the file-transfer service, and notify the view.
         self._is_device_connected = True
         self._service.start()
+        self.device_ready_changed.emit(True)
 
     @Slot()
     def _on_device_disconnected(self) -> None:
-        # Drop the connectivity gate and stop the service.
+        # Drop the connectivity gate, stop the service, and notify the view.
         self._is_device_connected = False
         self._service.stop()
+        self.device_ready_changed.emit(False)
 
     # ── Service forwarding slots ──────────────────────────────────────────────
 
-    @Slot(str, int)
-    def _on_send_complete(self, filename: str, total_bytes: int) -> None:
-        # Forward send-complete from service to the view layer.
-        self.send_complete.emit(filename, total_bytes)
+    @Slot(object)
+    def _on_send_complete(self, dto: FileSendCompleteDTO) -> None:
+        # Forward send-complete DTO from service to the view layer.
+        self.send_complete.emit(dto)
 
     @Slot(str)
     def _on_send_rejected(self, filename: str) -> None:
@@ -170,15 +193,16 @@ class FileTransferViewModel(QObject):
         # Forward send errors unchanged.
         self.send_error.emit(error)
 
-    @Slot(str, int)
-    def _on_metadata_received(self, filename: str, size: int) -> None:
-        # Forward incoming metadata so the view can show the accept/reject prompt.
-        self.metadata_received.emit(filename, size)
+    @Slot(object)
+    def _on_metadata_received(self, dto: FileMetadataDTO) -> None:
+        # Store the timestamp for use in receive_file; forward only name+size to the view.
+        self._pending_modified_at = dto.modified_at
+        self.metadata_received.emit(FileReceivePromptDTO(filename=dto.name, size=dto.size))
 
-    @Slot(str, str)
-    def _on_receive_complete(self, filename: str, dest_path: str) -> None:
-        # Forward receive-complete from service to the view layer.
-        self.receive_complete.emit(filename, dest_path)
+    @Slot(object)
+    def _on_receive_complete(self, dto: FileReceiveCompleteDTO) -> None:
+        # Forward receive-complete DTO from service to the view layer.
+        self.receive_complete.emit(dto)
 
     @Slot(str)
     def _on_receive_error(self, error: str) -> None:

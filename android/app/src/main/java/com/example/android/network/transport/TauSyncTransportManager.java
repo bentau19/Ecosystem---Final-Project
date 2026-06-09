@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * TauSyncTransportManager - Concrete implementation of TransportManager for TauSync.
- *
+ * <p>
  * Responsibilities:
  * ✓ Manages TauSync connection lifecycle
  * ✓ Implements automatic reconnection with exponential backoff
@@ -118,6 +118,8 @@ public class TauSyncTransportManager implements TransportManager {
 
             } catch (Exception e) {
                 Log.e(TAG, "🔴 CAUGHT exception: " + e.getClass().getName() + " - " + e.getMessage());
+
+//              TODO: error even after failure still connect regulatory.
                 handleConnectionFailure(e);
             } catch (Throwable t) {
                 Log.e(TAG, "🔴 CAUGHT throwable: " + t.getClass().getName() + " - " + t.getMessage());
@@ -340,13 +342,17 @@ public class TauSyncTransportManager implements TransportManager {
         // Stop polling
         stopPolling();
 
-        // Dispose TauSync connection
+        // Disconnect TauSync: closes the TCP socket and resets the global role
+        // so that the next attemptConnection() can call connectTo() successfully.
+        // disconnect() is used instead of dispose() because TauSyncTransportManager
+        // creates a fresh TauSync() on every reconnect — dispose() would permanently
+        // poison the singleton globalRole, preventing any future connection.
         if (tauSync != null) {
             try {
-                tauSync.dispose();
-                Log.d(TAG, "TauSync disposed");
+                tauSync.disconnect();
+                Log.d(TAG, "TauSync disconnected");
             } catch (Exception e) {
-                Log.d(TAG, "Error during TauSync disposal: " + e.getMessage());
+                Log.d(TAG, "Error during TauSync disconnect: " + e.getMessage());
             }
             tauSync = null;
         }

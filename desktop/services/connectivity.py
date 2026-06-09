@@ -8,6 +8,7 @@ import threading
 
 from PySide6.QtCore import QObject, Signal
 
+import utils
 from domain.enums.session_channels import SessionChannels
 from tausync_py import TauSync
 from utils import network
@@ -32,12 +33,16 @@ class ConnectivityService(QObject):
 
     Signals:
         device_connected: Emitted when a remote device connects.
+        device_disconnecting: Emitted at the very start of
+            :meth:`disconnect_device`, before any teardown work begins, so
+            the UI can immediately show a "Disconnecting…" state.
         device_disconnected: Emitted after :meth:`disconnect_device` completes.
         connection_error (Signal[str]): Emitted with the exception message if
             the connection attempt fails.
     """
 
     device_connected = Signal()
+    device_disconnecting = Signal()
     device_disconnected = Signal()
     connection_error = Signal(str)
 
@@ -115,13 +120,12 @@ class ConnectivityService(QObject):
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            self.disconnect_device()  # call private directly — already on a bg thread
+            self._disconnect_device()
             pending_threads: list[threading.Thread] = self._get_pending_threads()
             for t in pending_threads:
                 if t == threading.current_thread():
                     continue
                 t.join()
-            print("b")
 
     def _spawn(self, target, *args):
         # All thread creation must go through here so teardown can join every worker.
@@ -135,32 +139,48 @@ class ConnectivityService(QObject):
     def disconnect_device(self) -> None:
         """Close the TauSync transport and emit ``device_disconnected``.
 
-        Raw close only — does not send any notification to the phone.
-        This is the shared tear-down primitive used by both the PC-initiated
-        path (:meth:`_stop`) and the phone-initiated path
-        (:class:`~services.phone_request.PhoneRequestService`).  When the PC
-        is initiating the disconnect, call :meth:`_notify_phone_of_disconnect`
-        first so the phone can tear down gracefully before the transport closes.
+        Safe to call even when the peer has already gone away (e.g. Android
+        crash): ``_disconnect_device`` fast-paths through the network teardown
+        when ``tau.is_connected`` is already ``False``, so the UI lifecycle
+        signals are always emitted regardless of transport state.
 
         Emits:
+            device_disconnecting: Before any teardown begins.
             device_disconnected: After the transport is closed.
         """
+        self._spawn(self._disconnect_device)
 
-        if not self.connected:
-            return
+    def _disconnect_device(self) -> None:
+        self.device_disconnecting.emit()
 
-        waiting_words = self._tau.get_peer_waiting_words()
-
-        if SessionChannels.DISCONNECT_FROM_PHONE.value in waiting_words:
+        # Only attempt network I/O when the transport still reports a live peer.
+        # If Android already crashed, is_connected is False and we skip straight
+        # to the finally block — no 10-second _notify_phone_of_disconnect wait.
+        try:
+            if self._tau.is_connected:
+                waiting_words = self._tau.get_peer_waiting_words()
+                if SessionChannels.DISCONNECT_FROM_PHONE.value in waiting_words:
+                    try:
+                        _ = utils.network.read_string_from_channel(
+                            self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value
+                        )
+                    except Exception as e:
+                        print(f"[Desktop] ⚠ Failed to read phone disconnect signal: {e}")
+                else:
+                    self._notify_phone_of_disconnect()
+        except Exception as e:
+            # get_peer_waiting_words() raises RuntimeError on a dead connection.
+            # Swallow it so teardown always completes.
+            print(f"[Desktop] ⚠ Peer appears to have disconnected unexpectedly: {e}")
+        finally:
             try:
-                _ = network.read_string_from_channel(self._tau, SessionChannels.DISCONNECT_FROM_PHONE.value)
+                self._tau.disconnect()
             except Exception as e:
-                print(f"[Desktop] ⚠ Failed to read phone disconnect signal: {e}")
-        else:
-            self._notify_phone_of_disconnect()
+                print(f"[Desktop] ⚠ Error during tau.disconnect(): {e}")
+            self.device_disconnected.emit()
 
-        self._tau.disconnect()
-        self.device_disconnected.emit()
+        if self._is_running.is_set():
+            self._listen()
 
     def _notify_phone_of_disconnect(self) -> None:
         # Failures are swallowed so a missing/gone phone never blocks our own teardown.
@@ -168,14 +188,15 @@ class ConnectivityService(QObject):
         # for the phone to open the meeting-word channel, which prevents device_disconnected
         # from ever being emitted and leaves the UI stuck on the dashboard.
         try:
+            print(f"[Desktop] Sending disconnect notification to phone")
             with self._tau.connect(SessionChannels.DISCONNECT_FROM_PC.value, timeout_seconds=10) as stream:
                 stream.write_string("disconnect")
+            print(f"[Desktop] Disconnect notification sent to phone")
         except Exception as e:
             print(f"[Desktop] Warning: Failed to notify phone of disconnect: {e}")
 
     def _connect_to_device(self, hostname: str) -> None:
         # TODO: connect via Bluetooth using the previously stored device ID.
-        self.device_connected.emit()
         pass
 
     def _listen(self) -> None:

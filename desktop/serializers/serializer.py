@@ -17,9 +17,8 @@ class ISerializer(ABC, Generic[T, K]):
         K: The serialized form type (e.g. ``tuple``, ``dict``).
     """
 
-    @staticmethod
     @abstractmethod
-    def serialize(data: T) -> K:
+    def serialize(self, data: T) -> K:
         """Convert a domain entity into its serialized representation.
 
         Args:
@@ -30,9 +29,8 @@ class ISerializer(ABC, Generic[T, K]):
         """
         ...
 
-    @staticmethod
     @abstractmethod
-    def deserialize(data: K) -> T:
+    def deserialize(self, data: K) -> T:
         """Reconstruct a domain entity from its serialized representation.
 
         Args:

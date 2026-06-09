@@ -3,7 +3,7 @@ from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout
 
 from app.app_state import app_state
 from app.theme_manager import theme_manager
-from dto.tool import ToolDTO
+from domain.dto.tool import ToolDTO
 from resources.colors import DashboardColors, LightColors, LightDashboardColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
@@ -64,8 +64,8 @@ class ToolsSectionHeader(QWidget):
 
     @staticmethod
     def _create_tag() -> QLabel:
-        # Return the initial count tag; text is updated dynamically by _update_tag.
-        tag: QLabel = QLabel("6 tools available")
+        # Start empty; _update_tag populates the real count on the first tools_changed signal.
+        tag: QLabel = QLabel("")
         tag.setObjectName("tag")
         return tag
 

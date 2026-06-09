@@ -1,0 +1,232 @@
+/* ── Backup file review dialog ─────────────────────────────────────────────────
+   Tokens resolved via BackupReviewColors / LightBackupReviewColors:
+     {{BACKGROUND}}     — dialog body surface
+     {{BORDER}}         — dialog border + dividers
+     {{TEXT_PRIMARY}}   — heading / filename text
+     {{TEXT_SECONDARY}} — subtitle / meta / summary text
+     {{ROW_BG}}         — file row default background
+     {{ROW_BORDER}}     — file row default border
+     {{ROW_HOVER}}      — file row hover background
+     {{KEEP_BG}}        — row bg when decision = "keep"
+     {{KEEP_BORDER}}    — row / button border when kept
+     {{KEEP_TEXT}}      — keep button active text
+     {{DELETE_BG}}      — row bg when decision = "delete"
+     {{DELETE_BORDER}}  — row / button border when deleted
+     {{DELETE_TEXT}}    — delete button active text
+     {{ICON_BG}}        — FileThumbFallback circle background
+     {{ICON_BORDER}}    — FileThumbFallback circle border
+     {{ICON_TEXT}}      — FileThumbFallback text + Apply button gradient start
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Dialog body */
+QDialog#BackupReviewDialog {
+    background-color: {{BACKGROUND}};
+    border: 1px solid {{BORDER}};
+    border-radius: 12px;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────────── */
+
+QWidget#BackupReviewHeader {
+    background-color: {{BACKGROUND}};
+}
+
+QLabel#HeaderIcon {
+    background-color: {{ICON_BG}};
+    border: 1px solid {{ICON_BORDER}};
+    border-radius: 20px;
+    color: {{ICON_TEXT}};
+    font-size: 20px;
+    font-weight: 700;
+}
+
+QLabel#HeaderTitle {
+    color: {{TEXT_PRIMARY}};
+    font-size: 16px;
+    font-weight: 600;
+    background: transparent;
+}
+
+QLabel#HeaderSubtitle {
+    color: {{TEXT_SECONDARY}};
+    font-size: 12px;
+    background: transparent;
+}
+
+/* ── Dividers ─────────────────────────────────────────────────────────────── */
+
+QFrame#BackupDivider {
+    background-color: {{BORDER}};
+    border: none;
+}
+
+/* ── Scroll area ──────────────────────────────────────────────────────────── */
+
+QScrollArea#FileScrollArea,
+QWidget#ScrollContent {
+    background-color: {{BACKGROUND}};
+    border: none;
+}
+
+/* ── File rows ────────────────────────────────────────────────────────────── */
+
+QFrame#BackupFileRow {
+    background-color: {{ROW_BG}};
+    border: 1px solid {{ROW_BORDER}};
+    border-radius: 8px;
+}
+
+QFrame#BackupFileRow:hover {
+    background-color: {{ROW_HOVER}};
+}
+
+/* Green tint — user chose "keep" */
+QFrame#BackupFileRow[decision="keep"] {
+    background-color: {{KEEP_BG}};
+    border: 1px solid {{KEEP_BORDER}};
+}
+
+/* Red tint — user chose "delete" */
+QFrame#BackupFileRow[decision="delete"] {
+    background-color: {{DELETE_BG}};
+    border: 1px solid {{DELETE_BORDER}};
+}
+
+/* Thumbnail — actual image pixmap with rounded corners applied in Python */
+QLabel#FileThumb {
+    background: transparent;
+    border: none;
+}
+
+/* Fallback shown when the image file cannot be read */
+QLabel#FileThumbFallback {
+    background-color: {{ICON_BG}};
+    border: 1px solid {{ICON_BORDER}};
+    border-radius: 8px;
+    color: {{ICON_TEXT}};
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+/* Zero-state when no images are passed to the dialog */
+QLabel#EmptyLabel {
+    color: {{TEXT_SECONDARY}};
+    font-size: 13px;
+    background: transparent;
+}
+
+QLabel#FileName {
+    color: {{TEXT_PRIMARY}};
+    font-size: 13px;
+    font-weight: 600;
+    background: transparent;
+}
+
+QLabel#FileMeta {
+    color: {{TEXT_SECONDARY}};
+    font-size: 11px;
+    background: transparent;
+}
+
+/* ── Keep / Delete action buttons ─────────────────────────────────────────── */
+
+QPushButton#KeepButton,
+QPushButton#DeleteButton {
+    background-color: transparent;
+    border: 1px solid {{ROW_BORDER}};
+    border-radius: 6px;
+    color: {{TEXT_SECONDARY}};
+    font-size: 12px;
+    font-weight: 500;
+    outline: none;
+}
+
+QPushButton#KeepButton:hover {
+    border-color: {{KEEP_BORDER}};
+    color: {{KEEP_TEXT}};
+}
+
+QPushButton#DeleteButton:hover {
+    border-color: {{DELETE_BORDER}};
+    color: {{DELETE_TEXT}};
+}
+
+/* Active (selected) states */
+QPushButton#KeepButton[active=true] {
+    background-color: {{KEEP_BG}};
+    border-color: {{KEEP_BORDER}};
+    color: {{KEEP_TEXT}};
+    font-weight: 600;
+}
+
+QPushButton#DeleteButton[active=true] {
+    background-color: {{DELETE_BG}};
+    border-color: {{DELETE_BORDER}};
+    color: {{DELETE_TEXT}};
+    font-weight: 600;
+}
+
+QPushButton#KeepButton:pressed   { background-color: {{KEEP_BG}}; }
+QPushButton#DeleteButton:pressed { background-color: {{DELETE_BG}}; }
+
+/* ── Footer ───────────────────────────────────────────────────────────────── */
+
+QLabel#SummaryLabel {
+    color: {{TEXT_SECONDARY}};
+    font-size: 12px;
+    background: transparent;
+}
+
+/* Cancel — neutral ghost button */
+QPushButton#CancelButton {
+    background-color: transparent;
+    border: 1px solid {{BORDER}};
+    border-radius: 8px;
+    color: {{TEXT_SECONDARY}};
+    font-size: 13px;
+    font-weight: 500;
+    outline: none;
+}
+
+QPushButton#CancelButton:hover {
+    color: {{TEXT_PRIMARY}};
+    border-color: {{ICON_TEXT}};
+}
+
+QPushButton#CancelButton:pressed {
+    background-color: transparent;
+}
+
+/* Apply — primary cyan gradient CTA (mirrors other primary buttons in the app) */
+QPushButton#ApplyButton {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 {{ICON_TEXT}},
+        stop:1 #0891b2
+    );
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    padding: 0px 16px;
+    outline: none;
+}
+
+QPushButton#ApplyButton:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 {{ICON_TEXT}},
+        stop:1 {{ICON_TEXT}}
+    );
+}
+
+QPushButton#ApplyButton:pressed {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #0891b2,
+        stop:1 #0891b2
+    );
+}

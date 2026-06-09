@@ -40,7 +40,7 @@ class DeviceRepository(
         super().__init__(parent)
 
         self._serializer = DeviceSerializer()
-        self._db_path = Path(os.environ.get("APPDATA")) / "SyncDose" / "app.db"
+        self._db_path = Path(os.environ["APPDATA"]) / "SyncDose" / "app.db"
         
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db_path.touch(exist_ok=True)

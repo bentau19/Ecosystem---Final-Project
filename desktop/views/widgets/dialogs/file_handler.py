@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout, QWidget, QApplication
 
 from app.theme_manager import theme_manager
-from resources.colors import HandlerDialogColors, LightHandlerDialogColors, Palette
+from resources.colors import HandlerDialogColors, LightHandlerDialogColors
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet_disk, themed
 
@@ -190,7 +190,7 @@ class PhoneNotDetectedDialog(_BaseHandlerDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize with the phone-not-detected copy and cyan accent."""
         super().__init__(
-            accent=Palette.CYAN_400,
+            accent=HandlerDialogColors.ACCENT,
             icon_char="⊗",
             title="Phone Not Detected",
             message=(
@@ -211,7 +211,7 @@ class TransferErrorDialog(_BaseHandlerDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize with the generic-error copy and cyan accent."""
         super().__init__(
-            accent=Palette.CYAN_400,
+            accent=HandlerDialogColors.ACCENT,
             icon_char="!",
             title="An Error Occurred",
             message="Something went wrong while sending the file. Please try again.",

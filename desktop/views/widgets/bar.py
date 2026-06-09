@@ -35,6 +35,20 @@ class Bar(QWidget):
         # Fix the bar height to 7 px so it renders as a thin horizontal track.
         self.setFixedHeight(7)
 
+    @property
+    def percent(self) -> int:
+        """Current fill level in the range ``[0, 100]``."""
+        return self._percentage
+
+    def set_percent(self, percent: int) -> None:
+        """Update the fill percentage and schedule a repaint.
+
+        Args:
+            percent: New fill level clamped to ``[0, 100]``.
+        """
+        self._percentage = max(0, min(100, percent))
+        self.update()
+
     def paintEvent(self, event: QPaintEvent) -> None:
         """Handle the paint event to draw the battery bar.
         

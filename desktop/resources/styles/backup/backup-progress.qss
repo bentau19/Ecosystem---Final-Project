@@ -1,0 +1,264 @@
+/* ── Backup Progress Window ──────────────────────────────────────────────────
+   Tokens resolved via BackupProgressColors / LightBackupProgressColors:
+     {{BACKGROUND}}        — window body surface
+     {{SURFACE}}           — elevated card surface (overall section)
+     {{BORDER}}            — borders + dividers
+     {{ROW_BG}}            — file row default background
+     {{ROW_BORDER}}        — file row default border
+     {{ROW_ACTIVE_BG}}     — file row bg when actively syncing
+     {{ROW_ACTIVE_BORDER}} — file row border when actively syncing
+     {{TEXT_PRIMARY}}      — primary text (filenames, %)
+     {{TEXT_SECONDARY}}    — secondary text (sizes, stats)
+     {{PROGRESS_TRACK}}    — empty portion of progress bar track
+     {{PROGRESS_FILL}}     — progress bar gradient start
+     {{PROGRESS_FILL_END}} — progress bar gradient end
+     {{STATUS_QUEUED_TEXT}}  — "Queued" badge text
+     {{STATUS_ACTIVE_BG}}    — "Syncing" badge + row background
+     {{STATUS_ACTIVE_TEXT}}  — "Syncing" badge text + speed label
+     {{STATUS_DONE_BG}}      — "Done" badge + row background
+     {{STATUS_DONE_TEXT}}    — "Done" badge text + row border
+     {{STATUS_FAILED_BG}}    — "Failed" badge + row background
+     {{STATUS_FAILED_TEXT}}  — "Failed" badge text + row border
+     {{BTN_PAUSE_BORDER}}    — Pause button border
+     {{BTN_PAUSE_TEXT}}      — Pause button text
+     {{BTN_CANCEL_BORDER}}   — Cancel button border
+     {{BTN_CANCEL_TEXT}}     — Cancel button text
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── Window + central widget ─────────────────────────────────────────────── */
+
+QMainWindow#BackupProgressWindow {
+    background-color: {{BACKGROUND}};
+}
+
+QWidget#BPWContent {
+    background-color: {{BACKGROUND}};
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+
+QWidget#BPWHeader {
+    background-color: {{BACKGROUND}};
+}
+
+QLabel#HeaderIcon {
+    background-color: {{STATUS_ACTIVE_BG}};
+    border: 1px solid {{ROW_ACTIVE_BORDER}};
+    border-radius: 20px;
+    color: {{STATUS_ACTIVE_TEXT}};
+    font-size: 20px;
+}
+
+QLabel#HeaderTitle {
+    color: {{TEXT_PRIMARY}};
+    font-size: 16px;
+    font-weight: 600;
+    background: transparent;
+}
+
+QLabel#HeaderSubtitle {
+    color: {{TEXT_SECONDARY}};
+    font-size: 12px;
+    background: transparent;
+}
+
+/* ── Overall progress section ────────────────────────────────────────────── */
+
+QWidget#OverallSection {
+    background-color: {{SURFACE}};
+    border: 1px solid {{BORDER}};
+    border-radius: 10px;
+}
+
+QLabel#OverallPercent {
+    color: {{TEXT_PRIMARY}};
+    font-size: 22px;
+    font-weight: 700;
+    background: transparent;
+}
+
+QLabel#OverallStats {
+    color: {{TEXT_SECONDARY}};
+    font-size: 11px;
+    background: transparent;
+}
+
+/* ── Scroll area ─────────────────────────────────────────────────────────── */
+
+QScrollArea#FileScrollArea,
+QWidget#FileScrollContent {
+    background-color: {{BACKGROUND}};
+    border: none;
+}
+
+/* Scrollbar styling */
+QScrollArea#FileScrollArea QScrollBar:vertical {
+    background: {{BACKGROUND}};
+    width: 6px;
+    margin: 0;
+    border-radius: 3px;
+}
+
+QScrollArea#FileScrollArea QScrollBar::handle:vertical {
+    background: {{BORDER}};
+    border-radius: 3px;
+    min-height: 24px;
+}
+
+QScrollArea#FileScrollArea QScrollBar::add-line:vertical,
+QScrollArea#FileScrollArea QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+/* ── File rows ───────────────────────────────────────────────────────────── */
+
+QFrame#BackupProgressRow {
+    background-color: {{ROW_BG}};
+    border: 1px solid {{ROW_BORDER}};
+    border-radius: 8px;
+}
+
+QFrame#BackupProgressRow[status="active"] {
+    background-color: {{ROW_ACTIVE_BG}};
+    border: 1px solid {{ROW_ACTIVE_BORDER}};
+}
+
+QFrame#BackupProgressRow[status="done"] {
+    background-color: {{STATUS_DONE_BG}};
+    border: 1px solid {{STATUS_DONE_TEXT}};
+}
+
+QFrame#BackupProgressRow[status="failed"] {
+    background-color: {{STATUS_FAILED_BG}};
+    border: 1px solid {{STATUS_FAILED_TEXT}};
+}
+
+/* File-type icon label (emoji, no background) */
+QLabel#FileTypeIcon {
+    background: transparent;
+    border: none;
+    font-size: 22px;
+}
+
+QLabel#RowFileName {
+    color: {{TEXT_PRIMARY}};
+    font-size: 13px;
+    font-weight: 600;
+    background: transparent;
+}
+
+QLabel#RowFileSize {
+    color: {{TEXT_SECONDARY}};
+    font-size: 11px;
+    background: transparent;
+}
+
+QLabel#RowSpeed {
+    color: {{STATUS_ACTIVE_TEXT}};
+    font-size: 11px;
+    background: transparent;
+}
+
+/* ── Status badges ───────────────────────────────────────────────────────── */
+
+QLabel#StatusBadge {
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+QLabel#StatusBadge[status="queued"] {
+    color: {{STATUS_QUEUED_TEXT}};
+    background: transparent;
+    border: 1px solid {{BORDER}};
+}
+
+QLabel#StatusBadge[status="active"] {
+    color: {{STATUS_ACTIVE_TEXT}};
+    background-color: {{STATUS_ACTIVE_BG}};
+    border: 1px solid {{ROW_ACTIVE_BORDER}};
+}
+
+QLabel#StatusBadge[status="done"] {
+    color: {{STATUS_DONE_TEXT}};
+    background-color: {{STATUS_DONE_BG}};
+    border: 1px solid {{STATUS_DONE_TEXT}};
+}
+
+QLabel#StatusBadge[status="failed"] {
+    color: {{STATUS_FAILED_TEXT}};
+    background-color: {{STATUS_FAILED_BG}};
+    border: 1px solid {{STATUS_FAILED_TEXT}};
+}
+
+/* ── Dividers ────────────────────────────────────────────────────────────── */
+
+QFrame#BPWDivider {
+    background-color: {{BORDER}};
+    border: none;
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+
+QWidget#BPWFooter {
+    background-color: {{BACKGROUND}};
+}
+
+QLabel#FooterSummary {
+    color: {{TEXT_SECONDARY}};
+    font-size: 12px;
+    background: transparent;
+}
+
+/* Pause / Resume — neutral ghost button */
+QPushButton#PauseButton {
+    background-color: transparent;
+    border: 1px solid {{BTN_PAUSE_BORDER}};
+    border-radius: 8px;
+    color: {{BTN_PAUSE_TEXT}};
+    font-size: 13px;
+    font-weight: 500;
+    padding: 0px 16px;
+    outline: none;
+}
+
+QPushButton#PauseButton:hover {
+    border-color: {{PROGRESS_FILL}};
+    color: {{PROGRESS_FILL}};
+}
+
+QPushButton#PauseButton:pressed {
+    background-color: {{STATUS_ACTIVE_BG}};
+}
+
+QPushButton#PauseButton:disabled {
+    color: {{STATUS_QUEUED_TEXT}};
+    border-color: {{BORDER}};
+}
+
+/* Cancel All — danger ghost button */
+QPushButton#CancelAllButton {
+    background-color: transparent;
+    border: 1px solid {{BTN_CANCEL_BORDER}};
+    border-radius: 8px;
+    color: {{BTN_CANCEL_TEXT}};
+    font-size: 13px;
+    font-weight: 500;
+    padding: 0px 16px;
+    outline: none;
+}
+
+QPushButton#CancelAllButton:hover {
+    background-color: {{STATUS_FAILED_BG}};
+}
+
+QPushButton#CancelAllButton:pressed {
+    background-color: {{STATUS_FAILED_BG}};
+    border-color: {{STATUS_FAILED_TEXT}};
+}
+
+QPushButton#CancelAllButton:disabled {
+    color: {{STATUS_QUEUED_TEXT}};
+    border-color: {{BORDER}};
+}

@@ -2,4 +2,23 @@
     <string name="app_name">SyncApp</string>
     <string name="connect_to_pc">Connect to PC</string>
     <string name="disconnected_to_pc">Disconnected</string>
+
+    <!-- Backup screen -->
+    <string name="backup_title">File Backup</string>
+    <string name="backup_section_type">SELECT BACKUP TYPE</string>
+    <string name="backup_btn_all_media">Backup All Photos &amp; Videos</string>
+    <string name="backup_btn_all_media_sub">Scans entire phone storage</string>
+    <string name="backup_btn_folder">Backup Folder Files</string>
+    <string name="backup_btn_folder_sub">Choose a subfolder (e.g. DCIM/Camera)</string>
+    <string name="backup_section_options">OPTIONS</string>
+    <string name="backup_opt_no_junk">Don\'t classify junk files</string>
+    <string name="backup_opt_delete_after">Delete originals after backup</string>
+    <string name="backup_start">Start Backup</string>
+    <string name="backup_back_desc">Go back</string>
+    <!-- Shown in the folder card subtitle once the user has picked a folder -->
+    <string name="backup_folder_selected_prefix">📁 </string>
+
+    <!-- Backup transfer progress notification -->
+    <string name="backup_notif_progress_title">Backup in progress</string>
+    <string name="backup_notif_complete_title">Backup complete</string>
 </resources>

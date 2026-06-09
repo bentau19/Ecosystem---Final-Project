@@ -1,9 +1,12 @@
 package com.example.tausync_lib.sdk;
 
+import android.util.Log;
+
 import com.example.tausync_lib.implementations.management.ConnectionContext;
 import com.example.tausync_lib.implementations.management.ConnectionManager;
 import com.example.tausync_lib.implementations.management.TauSyncStream;
 
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -205,14 +208,63 @@ public final class TauSync {
     }
 
     /**
-     * Disposes the underlying ConnectionManager.
+     * Closes the TCP transport and resets the process-wide role so that
+     * {@link #connectTo(String)} or {@link #listen()} can be called again on
+     * this instance (or a new one).
+     *
+     * <p>Unlike {@link #dispose()}, this instance is NOT marked as permanently
+     * dead after this call. Safe to call when already disconnected (no-op if
+     * the instance is disposed).
+     *
+     * <p>Mirrors the Python {@code tausync_py.TauSync.disconnect()} contract.
+     */
+    public void disconnect() {
+        if (disposed) return;
+
+        // 1. Close the TCP socket. SocketTransport.disconnect() closes streams/socket
+        //    but does NOT set disposed=true, so the transport can accept a new connection.
+        ConnectionContext.getInstance().getWifiTransportAsSocket().disconnect();
+
+        // 2. Clear all in-flight routing, service registry, and pending discovery
+        //    frames so the next connection starts from a clean state.
+        ConnectionContext.getInstance().reset();
+
+        // 3. Close and release the ConnectionManager.
+        if (manager != null) {
+            try { manager.close(); } catch (Exception ignored) {}
+            manager = null;
+        }
+
+        // 4. Reset global role so connectTo()/listen() can proceed on the next call.
+        synchronized (roleLock) {
+            globalRole = ROLE_NONE;
+            globalTarget = null;
+        }
+    }
+
+    /**
+     * Permanently disposes this instance and the underlying ConnectionManager.
      * Safe to call multiple times.
+     *
+     * <p>Also resets the process-wide role, mirroring Python {@code tausync_py.TauSync.dispose()}.
+     * Create a new {@link TauSync} instance if you need to reconnect after disposal.
      */
     public void dispose() {
         if (disposed) return;
         disposed = true;
+
+        // Close socket and clear session state (same as disconnect, but instance is now dead).
+        ConnectionContext.getInstance().getWifiTransportAsSocket().disconnect();
+        ConnectionContext.getInstance().reset();
+
         if (manager != null) {
             try { manager.close(); } catch (Exception ignored) {}
+        }
+
+        // Reset global role so a new TauSync() created afterwards can connect.
+        synchronized (roleLock) {
+            globalRole = ROLE_NONE;
+            globalTarget = null;
         }
     }
 

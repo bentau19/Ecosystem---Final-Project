@@ -12,8 +12,7 @@ class ToolSerializer(ISerializer[ToolEntity | None, tuple]):
     absent tools can be handled without special-case logic in the repository.
     """
 
-    @staticmethod
-    def serialize(entity: ToolEntity | None) -> tuple[str, str, str, bool] | None:
+    def serialize(self, entity: ToolEntity | None) -> tuple[str, str, str, bool] | None:
         """Convert a ToolEntity to a SQLite row tuple.
 
         Args:
@@ -33,8 +32,7 @@ class ToolSerializer(ISerializer[ToolEntity | None, tuple]):
             entity.is_enabled,
         )
 
-    @staticmethod
-    def deserialize(db_row: tuple) -> ToolEntity | None:
+    def deserialize(self, db_row: tuple) -> ToolEntity | None:
         """Reconstruct a ToolEntity from a SQLite row tuple.
 
         Args:

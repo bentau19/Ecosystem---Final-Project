@@ -7,6 +7,9 @@ from unittest.mock import MagicMock
 import pytest
 from pytestqt.qtbot import QtBot
 
+from domain.dto.file_metadata import FileMetadataDTO
+from domain.dto.file_receive_complete import FileReceiveCompleteDTO
+from domain.dto.file_send_complete import FileSendCompleteDTO
 from domain.enums.file_transfer_channels import FileTransferChannels
 from domain.enums.file_transfer_response import FileTransferResponse
 from services.file_transfer import FileTransferService
@@ -79,20 +82,25 @@ def _make_tau(
 def _make_metadata_tau(
     filename: str,
     file_size: int,
+    modified_at: int = 0,
 ) -> tuple[MagicMock, MagicMock, MagicMock]:
     """Build a mock ``TauSync`` pre-loaded with Android-to-PC metadata.
 
     The meta stream's ``read_all`` returns a JSON-encoded payload using
-    the ``file_name``/``file_size`` wire keys.
+    the ``file_name``/``file_size``/``modified_at`` wire keys.
 
     Args:
         filename: Filename Android is "sending".
         file_size: Byte-count Android is "sending".
+        modified_at: Optional last-modified timestamp in Unix epoch ms.
+            Defaults to ``0`` (not provided).
 
     Returns:
         ``(tau, meta_stream, data_stream)`` so tests can assert on calls.
     """
-    meta_payload = json.dumps({"file_name": filename, "file_size": file_size}).encode("utf-8")
+    meta_payload = json.dumps(
+        {"file_name": filename, "file_size": file_size, "modified_at": modified_at}
+    ).encode("utf-8")
     meta_stream = MagicMock()
     meta_stream.read_all.return_value = meta_payload
 
@@ -142,7 +150,7 @@ def test_send_file_emits_send_complete_with_correct_values(
     tmp_path,
     make_service,
 ) -> None:
-    """``file_send_complete`` carries ``(filename, total_bytes)``."""
+    """``file_send_complete`` carries a ``FileSendCompleteDTO`` with filename and total_bytes."""
     sample = tmp_path / "video.mp4"
     payload = b"x" * 512
     sample.write_bytes(payload)
@@ -152,13 +160,14 @@ def test_send_file_emits_send_complete_with_correct_values(
     data_stream.write_file.return_value = len(payload)
 
     svc = make_service(_make_tau(meta_stream, data_stream))
-    received: list[tuple] = []
-    svc.file_send_complete.connect(lambda name, n: received.append((name, n)))
+    received: list[FileSendCompleteDTO] = []
+    svc.file_send_complete.connect(received.append)
 
     svc.send_file(str(sample))
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=1000)
-    assert received == [("video.mp4", 512)]
+    assert received[0].filename == "video.mp4"
+    assert received[0].total_bytes == 512
 
 
 def test_send_file_emits_send_error_when_file_missing(qtbot: QtBot, make_service) -> None:
@@ -399,16 +408,36 @@ def test_send_file_emits_error_when_transport_raises(
 
 
 def test_receive_metadata_emits_file_metadata_received(qtbot: QtBot, make_service) -> None:
-    """``file_metadata_received`` carries the filename and size from the peer."""
-    tau, _, _ = _make_metadata_tau("photo.jpg", 4096)
+    """``file_metadata_received`` carries a ``FileMetadataDTO`` with filename, size, and modified_at."""
+    tau, _, _ = _make_metadata_tau("photo.jpg", 4096, modified_at=1_700_000_000_000)
     svc = make_service(tau)
 
-    received: list[tuple] = []
-    svc.file_metadata_received.connect(lambda n, s: received.append((n, s)))
+    received: list[FileMetadataDTO] = []
+    svc.file_metadata_received.connect(received.append)
     svc.receive_metadata()
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=1000)
-    assert received == [("photo.jpg", 4096)]
+    assert received[0].name == "photo.jpg"
+    assert received[0].size == 4096
+    assert received[0].modified_at == 1_700_000_000_000
+
+
+def test_receive_metadata_emits_zero_modified_at_when_absent(qtbot: QtBot, make_service) -> None:
+    """``file_metadata_received`` emits ``modified_at=0`` when the sender omits the field."""
+    meta_stream = MagicMock()
+    meta_stream.read_all.return_value = json.dumps(
+        {"file_name": "doc.pdf", "file_size": 512}
+    ).encode("utf-8")
+
+    svc = make_service(_make_tau(meta_stream, MagicMock()))
+    received: list[FileMetadataDTO] = []
+    svc.file_metadata_received.connect(received.append)
+    svc.receive_metadata()
+
+    qtbot.waitUntil(lambda: len(received) > 0, timeout=1000)
+    assert received[0].name == "doc.pdf"
+    assert received[0].size == 512
+    assert received[0].modified_at == 0
 
 
 def test_receive_metadata_emits_error_on_bad_json(qtbot: QtBot, make_service) -> None:
@@ -447,7 +476,7 @@ def test_receive_metadata_does_not_emit_signal_on_error(qtbot: QtBot, make_servi
     svc = make_service(_make_tau(meta_stream, MagicMock()))
     received: list = []
     errors: list[str] = []
-    svc.file_metadata_received.connect(lambda *_: received.append(True))
+    svc.file_metadata_received.connect(lambda _: received.append(True))
     svc.file_receive_error.connect(lambda msg: errors.append(msg))
     svc.receive_metadata()
 
@@ -479,20 +508,19 @@ def test_receive_file_emits_receive_complete(
     tmp_path,
     make_service,
 ) -> None:
-    """``file_receive_complete`` carries ``(filename, dest_path)`` on success."""
+    """``file_receive_complete`` carries a ``FileReceiveCompleteDTO`` with filename and dest_path."""
     dest = str(tmp_path / "music.mp3")
     resp_stream = MagicMock()
     data_stream = MagicMock()
     svc = make_service(_make_tau(MagicMock(), data_stream, resp_stream=resp_stream))
 
-    received: list[tuple] = []
-    svc.file_receive_complete.connect(lambda n, p: received.append((n, p)))
+    received: list[FileReceiveCompleteDTO] = []
+    svc.file_receive_complete.connect(received.append)
     svc.receive_file(dest, 8192)
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=1000)
-    name, path = received[0]
-    assert name == "music.mp3"
-    assert path == dest
+    assert received[0].filename == "music.mp3"
+    assert received[0].dest_path == dest
 
 
 def test_receive_file_writes_accepted_to_response_channel(
@@ -589,6 +617,56 @@ def test_receive_file_does_not_emit_complete_on_error(
 
     qtbot.waitUntil(lambda: len(errors) > 0, timeout=1000)
     assert complete == []
+
+
+def test_receive_file_applies_utime_when_modified_at_provided(
+    qtbot: QtBot,
+    tmp_path,
+    make_service,
+) -> None:
+    """When ``modified_at_ms > 0`` the received file's ``mtime`` must match it."""
+    dest = tmp_path / "photo.jpg"
+    dest.write_bytes(b"")  # pre-create so read_to_file mock doesn't need to write it
+
+    modified_at_ms: int = 1_700_000_000_000  # 2023-11-14 in ms
+    expected_mtime: float = modified_at_ms / 1000.0
+
+    resp_stream = MagicMock()
+    data_stream = MagicMock()
+    svc = make_service(_make_tau(MagicMock(), data_stream, resp_stream=resp_stream))
+
+    complete: list = []
+    svc.file_receive_complete.connect(lambda *_: complete.append(True))
+    svc.receive_file(str(dest), 0, modified_at_ms)
+
+    qtbot.waitUntil(lambda: len(complete) > 0, timeout=1000)
+    assert abs(dest.stat().st_mtime - expected_mtime) < 1.0
+
+
+def test_receive_file_skips_utime_when_modified_at_is_zero(
+    qtbot: QtBot,
+    tmp_path,
+    make_service,
+) -> None:
+    """When ``modified_at_ms == 0`` the file's ``mtime`` must not be backdated."""
+    import time
+
+    dest = tmp_path / "doc.pdf"
+    dest.write_bytes(b"")
+
+    before: float = time.time()
+
+    resp_stream = MagicMock()
+    data_stream = MagicMock()
+    svc = make_service(_make_tau(MagicMock(), data_stream, resp_stream=resp_stream))
+
+    complete: list = []
+    svc.file_receive_complete.connect(lambda *_: complete.append(True))
+    svc.receive_file(str(dest), 0, 0)
+
+    qtbot.waitUntil(lambda: len(complete) > 0, timeout=1000)
+    # mtime should be close to now, not some ancient timestamp
+    assert dest.stat().st_mtime >= before - 5
 
 
 # ---------------------------------------------------------------------------

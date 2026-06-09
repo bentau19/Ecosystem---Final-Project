@@ -10,6 +10,9 @@
     },
     "file_size": {
       "type": "number"
+    },
+    "modified_at": {
+      "type": "number"
     }
   }
 }

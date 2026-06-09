@@ -1,17 +1,27 @@
+from PySide6.QtGui import QHideEvent, QShowEvent
 from PySide6.QtWidgets import QHBoxLayout, QWidget
 
+from app.app_state import app_state
+from app.navigation_manager import navigation_manager
+from domain.enums.screen import Screen
 from resources.spacing import Spacing
+from views.widgets.loading.overlay import LoadingOverlay
 from views.widgets.login.left_panel import LeftPanel
 from views.widgets.login.right_panel import RightPanel
 
 
 class LoginScreen(QWidget):
-    """
-    Login screen composed of a left QR-code panel and a right
+    """Login screen composed of a left QR-code panel and a right
     'Previously connected' device list panel.
 
     The two panels share the full screen area in a fixed stretch ratio
-    (5 : 6, left : right) with no margins or gap between them.
+    (2 : 1, left : right) with no margins or gap between them.
+
+    A :class:`~views.widgets.loading.overlay.LoadingOverlay` covers the whole
+    screen while a connection attempt is in progress. It starts on
+    ``device_connecting`` (fired on both the button and QR paths) and is
+    hidden automatically when ``device_connected`` navigates away to the
+    dashboard, triggering :meth:`hideEvent`.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -23,6 +33,7 @@ class LoginScreen(QWidget):
         super().__init__(parent)
         self._left_panel: LeftPanel
         self._right_panel: RightPanel
+        self._loading_overlay: LoadingOverlay
 
         self._setup_ui()
         self._apply_style()
@@ -36,9 +47,11 @@ class LoginScreen(QWidget):
         self._setup_layout()
 
     def _create_widgets(self) -> None:
-        # Instantiate left (QR) and right (device list) panels.
+        # Instantiate left (QR) and right (device list) panels, then the overlay.
         self._left_panel = LeftPanel(self)
         self._right_panel = RightPanel(parent=self)
+        # Overlay is created last so it sits above all sibling widgets in z-order.
+        self._loading_overlay = LoadingOverlay(self)
 
     def _setup_layout(self) -> None:
         # Place panels side-by-side; left is slightly narrower than right.
@@ -55,5 +68,38 @@ class LoginScreen(QWidget):
         pass
 
     def _connect_signals(self) -> None:
-        # No screen-level signals to wire; panels connect internally.
-        pass
+        # device_connecting fires on both paths (button and QR) and starts the
+        # overlay. device_connected fires once a TCP handshake succeeds and is
+        # the authoritative trigger for navigation — owned here rather than in
+        # PreviousDeviceCard so it works even when no previous devices exist in
+        # the DB (zero cards → zero listeners otherwise). hideEvent then resets
+        # the overlay to a clean state.
+        vm = app_state.device_viewmodel
+        vm.device_connecting.connect(lambda: self._loading_overlay.start("Connecting…"))
+        vm.device_connected.connect(lambda: navigation_manager.go_to_screen(Screen.DASHBOARD))
+
+    # ── Qt event overrides ────────────────────────────────────────────────────
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """Reload the previous-devices list whenever the login screen becomes visible.
+
+        Re-triggers :meth:`~viewmodels.device.DeviceViewModel.load_devices` so
+        the right panel always reflects current DB state — including any device
+        that was just connected and saved during the session the user is
+        returning from.
+
+        Args:
+            event: The show event delivered by Qt.
+        """
+        super().showEvent(event)
+        app_state.device_viewmodel.load_devices()
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        """Reset the loading overlay to a clean hidden state when navigation
+        switches away from this screen.
+
+        Args:
+            event: The hide event delivered by Qt.
+        """
+        super().hideEvent(event)
+        self._loading_overlay.hide()

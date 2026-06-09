@@ -6,6 +6,8 @@
 # --- החרגה (Whitelist) של ה-DLL הספציפי למנוע ---
 # אנחנו מאפשרים ל-Git לעקוב אחרי הקובץ הזה למרות שהוא בתוך תיקיית bin
 !TauSync/Tausync_Windows/TauSync.Lib/bin/Debug/net8.0/TauSync.Lib.dll
+!TauSync/windows/tausync_py/dll
+TauSync/windows/tausync_py.egg-info/PKG-INFO
 # קבצי הגדרות אישיים של Visual Studio / Cursor
 .vs/
 *.user
@@ -14,6 +16,8 @@
 *.suo
 *.jpg
 *.png
+
+
 ### --- Python Specific --- ###
 __pycache__/
 *.py[cod]
@@ -49,3 +53,9 @@ desktop.ini
 .run
 graphify-out
 *.idea/
+.graphify_ast.json
+.graphify_chunks.json
+.graphify_*.json
+.graphify_detect.json
+.graphify_python
+.graphify_uncached.txt

@@ -200,6 +200,22 @@ public final class ConnectionContext {
         return routingMap.containsKey(id);
     }
 
+    /**
+     * Clears all routing, service, and discovery state accumulated during a session.
+     *
+     * <p>Must be called before re-establishing a new connection so that stale handlers
+     * and pending discovery frames from the previous session are not replayed on the
+     * incoming frames of the new session.
+     */
+    public void reset() {
+        routingMap.clear();
+        targetMap.clear();
+        serviceRegistry.clear();
+        pendingDiscoveryByWord.clear();
+        releasedIds.clear();
+        nextCorrelationId.set(CoreConfig.MIN_ID);
+    }
+
     // ── Frame Dispatch ────────────────────────────────────────────────
 
     /**

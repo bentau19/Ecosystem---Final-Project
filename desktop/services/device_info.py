@@ -66,6 +66,7 @@ class DeviceInfoService(QObject):
         super().__init__(parent)
         self._connectivity: ConnectivityService = connectivity
         self._device_repository: DeviceRepository = repository
+
         self._threads: list[threading.Thread] = []
 
         self._lifecycle_lock: threading.Lock = threading.Lock()
@@ -175,9 +176,12 @@ class DeviceInfoService(QObject):
                 t.join()
 
     def _save(self, entity: DeviceEntity) -> None:
-        # Persist entity via repository and re-emit the saved signal at service level.
+        # Persist entity via repository, then emit both the saved signal and
+        # device_info_ready so the ViewModel only receives the entity after it
+        # is guaranteed to be on disk.
         self._device_repository.save(entity)
         self.device_saved.emit(entity)
+        self.device_info_ready.emit(entity)
 
     def _fetch_device_by_id(self, device_id: str) -> None:
         # Look up the entity and emit device_fetched (None if not found).
@@ -194,6 +198,8 @@ class DeviceInfoService(QObject):
         with self._threads_lock:
             return [t for t in self._threads if t.is_alive()]
 
+    _CHANNEL_TIMEOUT: int = 30  # seconds to wait for each device-info channel
+
     def _get_device_info(self) -> None:
         # Read all device channels in parallel, build the entity, persist, and emit.
         tau = self._connectivity.tau
@@ -201,15 +207,16 @@ class DeviceInfoService(QObject):
             return
         try:
             read = utils.network.read_string_from_channel
+            t = self._CHANNEL_TIMEOUT
             with ThreadPoolExecutor() as pool:
-                f_id       = pool.submit(read, tau, DeviceInfoChannels.ID.value)
-                f_name     = pool.submit(read, tau, DeviceInfoChannels.NAME_FROM_ANDROID.value)
-                f_os       = pool.submit(read, tau, DeviceInfoChannels.OS_FROM_ANDROID.value)
-                f_battery  = pool.submit(read, tau, DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.value)
-                f_charging = pool.submit(read, tau, DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.value)
-                f_stor_tot = pool.submit(read, tau, DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.value)
-                f_stor_use = pool.submit(read, tau, DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.value)
-                f_ip       = pool.submit(read, tau, DeviceInfoChannels.IP_FROM_ANDROID.value)
+                f_id = pool.submit(read, tau, DeviceInfoChannels.ID.value, t)
+                f_name = pool.submit(read, tau, DeviceInfoChannels.NAME_FROM_ANDROID.value, t)
+                f_os = pool.submit(read, tau, DeviceInfoChannels.OS_FROM_ANDROID.value, t)
+                f_battery = pool.submit(read, tau, DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.value, t)
+                f_charging = pool.submit(read, tau, DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.value, t)
+                f_stor_tot = pool.submit(read, tau, DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.value, t)
+                f_stor_use = pool.submit(read, tau, DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.value, t)
+                f_ip = pool.submit(read, tau, DeviceInfoChannels.IP_FROM_ANDROID.value, t)
             entity = DeviceEntity(
                 id=f_id.result(),
                 tag="",
@@ -222,12 +229,11 @@ class DeviceInfoService(QObject):
                 last_connected=date.today(),
                 ip=f_ip.result(),
             )
-            self.save(entity)
+            self._save(entity)
 
-            # Send PC name to the connected Android device on a background thread
+            # Send PC name to the connected Android device on a background thread.
             self._spawn(self._send_pc_name)
-            
-            self.device_info_ready.emit(entity)
+            # device_info_ready is emitted from _save (after the DB write) — not here.
         except Exception as exc:
             self.read_error.emit(str(exc))
 

@@ -8,11 +8,12 @@ from PySide6.QtWidgets import (
 import utils.styles
 from app.app_state import app_state
 from app.theme_manager import theme_manager
-from resources.colors import Colors, LightColors
-from utils.styles import themed
+from domain.dto.file_receive_prompt import FileReceivePromptDTO
 from domain.enums.screen import Screen
+from resources.colors import Colors, LightColors
 from resources.paths import Icons, Styles
 from app.navigation_manager import navigation_manager, NavigationManager
+from utils.styles import themed
 from views.screens.dashboard import DashboardScreen
 from views.screens.login import LoginScreen
 from views.widgets.dialogs.file_handler import TransferErrorDialog
@@ -111,10 +112,10 @@ class MainWindow(QMainWindow):
 
     # ── Slots ──────────────────────────────────────────────────────────────────
 
-    @Slot(str,int)
-    def _on_file_received_metadata(self, filename: str, file_size: int) -> None:
+    @Slot(object)
+    def _on_file_received_metadata(self, dto: FileReceivePromptDTO) -> None:
         # Show the file-received toast when incoming metadata arrives.
-        self._toast = FileReceivedToast(filename, file_size)
+        self._toast = FileReceivedToast(dto.filename, dto.size)
         self._toast.show_toast()
 
     @Slot(int)

@@ -31,7 +31,9 @@ public class ConnectionManager implements IConnectionManager {
     private final IProtocolHandler protocolHandler;
     private final Gson gson = new Gson();
 
-    /** Per-word queue of incoming connections (peer sent REQ before us or simultaneously). */
+    /**
+     * Per-word queue of incoming connections (peer sent REQ before us or simultaneously).
+     */
     private final ConcurrentHashMap<String, LinkedBlockingQueue<TauSyncStream>> incomingByWord =
             new ConcurrentHashMap<>();
 
@@ -214,7 +216,10 @@ public class ConnectionManager implements IConnectionManager {
     private static void cleanupLosingOutgoingAttempt(ConnectionContext ctx, ConnectAttempt attempt) {
         ctx.releaseId(attempt.localId);
         ctx.unregisterHandler(attempt.localId);
-        try { attempt.backStream.close(); } catch (Exception ignored) {}
+        try {
+            attempt.backStream.close();
+        } catch (Exception ignored) {
+        }
     }
 
     private void handleWordRequest(String wordKey, LinkedBlockingQueue<TauSyncStream> channel,
@@ -270,7 +275,10 @@ public class ConnectionManager implements IConnectionManager {
                     || !response.getStatus().trim().equalsIgnoreCase("OK")) {
                 ctx.releaseId(localId);
                 ctx.unregisterHandler(localId);
-                try { backStream.close(); } catch (Exception ignored) {}
+                try {
+                    backStream.close();
+                } catch (Exception ignored) {
+                }
                 throw new RuntimeException("Connect rejected by peer.");
             }
             ctx.setTargetForSend(localId, response.getSenderID());
@@ -345,7 +353,8 @@ public class ConnectionManager implements IConnectionManager {
             byte[] finFrame = protocolHandler.buildFrame(peerId, new byte[0], CoreConfig.FLAG_FIN);
             try {
                 wifiTransport.sendRaw(finFrame).get();
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
         ConnectionContext.getInstance().releaseId(localId);
     }
