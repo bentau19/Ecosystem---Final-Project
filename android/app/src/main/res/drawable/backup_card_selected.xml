@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Selected state for a backup mode card.
+     Applied programmatically when the user taps a mode card. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/surface_card" />
+    <stroke
+        android:width="2dp"
+        android:color="@color/accent_cyan" />
+    <corners android:radius="18dp" />
+</shape>

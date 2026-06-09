@@ -59,6 +59,8 @@ class FileTransferViewModel(QObject):
     receive_complete: Signal = Signal(object)    # FileReceiveCompleteDTO
     receive_error: Signal = Signal(str)
 
+    device_ready_changed: Signal = Signal(bool)
+
     def __init__(
             self,
             file_transfer_service: FileTransferService,
@@ -131,8 +133,10 @@ class FileTransferViewModel(QObject):
     def receive_file(self, dest_path: str, file_size: int) -> None:
         """Accept the incoming transfer and save it to *dest_path*.
 
-        Not gated by connectivity — the service handles a stale transport
-        gracefully by emitting :attr:`receive_error`.
+        Emits :attr:`receive_error` immediately when no device is connected so
+        the view always receives feedback — even in the rare race where the
+        device disconnects between the metadata prompt appearing and the user
+        accepting it.
 
         The ``modified_at`` timestamp stored from the preceding
         :attr:`metadata_received` signal is forwarded to the service
@@ -144,6 +148,7 @@ class FileTransferViewModel(QObject):
             file_size: Exact byte count from the accepted metadata.
         """
         if not self.device_connected:
+            self.receive_error.emit("Device disconnected — file transfer cancelled.")
             return
         self._service.receive_file(dest_path, file_size, self._pending_modified_at)
 
@@ -159,15 +164,17 @@ class FileTransferViewModel(QObject):
 
     @Slot()
     def _on_device_connected(self) -> None:
-        # Gate new operations and start the file-transfer service.
+        # Gate new operations, start the file-transfer service, and notify the view.
         self._is_device_connected = True
         self._service.start()
+        self.device_ready_changed.emit(True)
 
     @Slot()
     def _on_device_disconnected(self) -> None:
-        # Drop the connectivity gate and stop the service.
+        # Drop the connectivity gate, stop the service, and notify the view.
         self._is_device_connected = False
         self._service.stop()
+        self.device_ready_changed.emit(False)
 
     # ── Service forwarding slots ──────────────────────────────────────────────
 

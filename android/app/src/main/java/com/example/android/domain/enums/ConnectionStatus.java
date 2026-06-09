@@ -9,6 +9,7 @@ package com.example.android.domain.enums;
  * - CONNECTING: Attempting to establish connection
  * - CONNECTED: Successfully connected and actively communicating
  * - RECONNECTING: Lost connection, automatically attempting to reconnect
+ * - DISCONNECTING: User-initiated disconnect in progress (TauSync frame being sent)
  * - FAILED: Connection failed after retries exhausted
  */
 public enum ConnectionStatus {
@@ -16,6 +17,7 @@ public enum ConnectionStatus {
     CONNECTING("Connecting..."),
     CONNECTED("Connected"),
     RECONNECTING("Reconnecting..."),
+    DISCONNECTING("Disconnecting..."),
     FAILED("Connection Failed");
 
     private final String displayName;
@@ -34,6 +36,10 @@ public enum ConnectionStatus {
 
     public boolean isConnecting() {
         return this == CONNECTING || this == RECONNECTING;
+    }
+
+    public boolean isDisconnecting() {
+        return this == DISCONNECTING;
     }
 }
 

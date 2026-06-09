@@ -23,6 +23,7 @@ import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.domain.enums.ReceiveFileStatus;
 import com.example.android.services.AppNotificationManager;
 import com.example.android.ui.fragments.ActionsFragment;
+import com.example.android.ui.fragments.BackupFragment;
 import com.example.android.ui.fragments.ConnectFragment;
 import com.example.android.viewmodel.FileTransferViewModel;
 import com.example.android.viewmodel.MainViewModel;
@@ -83,9 +84,14 @@ public class MainActivity extends AppCompatActivity {
                     navigateToActions();
                     Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
                     break;
+                case DISCONNECTING:
+                    Toast.makeText(this, "Disconnecting...", Toast.LENGTH_SHORT).show();
+                    break;
                 case FAILED:
                     navigateToConnect();
                     Toast.makeText(this, "Connection failed. Try again.", Toast.LENGTH_LONG).show();
+                    break;
+                default:
                     break;
             }
         });
@@ -146,24 +152,23 @@ public class MainActivity extends AppCompatActivity {
     /**
      * Orchestrates the phone-initiated disconnection sequence.
      *
-     * <p>Sends the TauSync signal to the PC via the service, then clears the
-     * repository state optimistically so the UI responds immediately. Navigation
-     * is driven by the {@code ActionsFragment} LiveData observer — do not call
-     * {@code navigateToConnect()} here, as that would race against the observer.
+     * <p>Sends {@code ACTION_SEND_DISCONNECT} to the service, which posts
+     * {@code DISCONNECTING} immediately and then writes the TauSync frame on a
+     * background thread. When the write completes, the service calls
+     * {@code stopSelf()} → {@code cleanup()} → {@code deviceRepository.disconnect()},
+     * which posts {@code DISCONNECTED} and drives navigation via the LiveData observers.
+     *
+     * <p>Do NOT call {@code viewModel.disconnect()} here — doing so posts
+     * {@code DISCONNECTED} before the frame is sent, causing the UI to navigate away
+     * and the transport to be abandoned mid-flight.
      */
     public void disconnect() {
         Log.d("TauSyncFlow", "Requesting clean disconnect from service...");
-
-        // 1. Tell the service to write the DISCONNECT_FROM_PHONE channel signal and stop itself.
         Intent intent = new Intent(this, ConnectivityService.class);
         intent.setAction("com.example.android.ACTION_SEND_DISCONNECT");
         startService(intent);
-
-        // 2. Optimistic state clear — triggers LiveData update →
-        //    ActionsFragment observer → navigateToConnect() automatically.
-        viewModel.disconnect();
-
-        Toast.makeText(this, "Disconnecting...", Toast.LENGTH_SHORT).show();
+        // Navigation is driven by the service: cleanup() → deviceRepository.disconnect()
+        // → DISCONNECTED posted → ActionsFragment observer → navigateToConnect().
     }
 
     // --- Fragment Navigation ---
@@ -175,6 +180,21 @@ public class MainActivity extends AppCompatActivity {
         if (!(getSupportFragmentManager().findFragmentById(R.id.fragment_container) instanceof ActionsFragment)) {
             replaceFragment(new ActionsFragment());
         }
+    }
+
+    /**
+     * Navigates to the Backup configuration screen.
+     *
+     * <p>Uses addToBackStack so the system/in-screen back button pops BackupFragment
+     * and returns to ActionsFragment instead of exiting the app.
+     * Top-level screens (Connect, Actions) intentionally stay off the back stack.
+     */
+    public void navigateToBackup() {
+        getSupportFragmentManager().beginTransaction()
+                .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out)
+                .replace(R.id.fragment_container, new BackupFragment())
+                .addToBackStack(null)
+                .commitAllowingStateLoss();
     }
 
     /**

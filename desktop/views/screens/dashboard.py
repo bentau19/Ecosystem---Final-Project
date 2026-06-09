@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
 
 import resources_qrc  # noqa: F401
 from app.app_state import app_state
+from dto.device_info import DeviceInfoDTO
 from resources.spacing import Spacing
 from views.widgets.dashboard.dashboard_content import DashboardContent
 from views.widgets.divider import Divider
@@ -95,14 +96,15 @@ class DashboardScreen(QWidget):
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
-    @Slot()
-    def _on_device_infos_updated(self) -> None:
+    @Slot(object)
+    def _on_device_infos_updated(self, infos: list[DeviceInfoDTO]) -> None:
         """Stop the loading overlay only when not in the middle of a disconnect.
 
         A queued ``device_infos_updated`` from the ``showEvent`` fetch could
         arrive after ``device_disconnecting`` starts the logout overlay.  The
         ``_is_disconnecting`` flag blocks that race.
         """
+
         if not self._is_disconnecting:
             self._loading_overlay.stop()
 
@@ -115,19 +117,23 @@ class DashboardScreen(QWidget):
     # ── Qt event overrides ────────────────────────────────────────────────────
 
     def showEvent(self, event: QShowEvent) -> None:
-        """Start the device-info loading overlay whenever the dashboard becomes visible.
+        """Refresh all dashboard data whenever the screen becomes visible.
 
-        Re-triggers :meth:`~viewmodels.device.DeviceViewModel.load_device_info`
-        so that ``device_infos_updated`` is guaranteed to fire *after* the
-        overlay appears — the initial fetch (from ``PhoneDetailsRow.__init__``)
-        may have completed while the screen was still hidden.
+        Re-triggers device-info and tool loads so every widget always reflects
+        current state on each visit — whether it's the first connect or a
+        return after logout/reconnect.
+
+        The device-info overlay stays up until ``device_infos_updated`` fires;
+        tool data re-emits synchronously from the ViewModel's in-memory cache
+        so the grid and header update instantly with no visible flash.
 
         Args:
             event: The show event delivered by Qt.
         """
         super().showEvent(event)
         self._loading_overlay.start("Fetching device info…")
-        app_state.device_viewmodel.load_device_info()
+        app_state.device_viewmodel.load_current_device_info()
+        app_state.tool_viewmodel.load_enabled_tools()
 
     def hideEvent(self, event: QHideEvent) -> None:
         """Reset overlay and disconnect guard when navigation hides this screen.
@@ -139,9 +145,3 @@ class DashboardScreen(QWidget):
         self._is_disconnecting = False
         self._loading_overlay.hide()
 
-
-if __name__ == "__main__":
-    app = QApplication([])
-    window = DashboardScreen()
-    window.show()
-    app.exec()

@@ -139,6 +139,7 @@ class InfoCardColors(ColorsEnum):
     BORDER = Colors.BORDER_DEFAULT  # Border color of the dashboard card
     TITLE = Colors.TEXT_SECONDARY  # Text color for the title of the info card
     BORDER_HOVER = Colors.BORDER_HOVER  # Border color when hovering over the info card
+    ICON_BG = Palette.CYAN_800  # Icon container background tint
 
 
 class ToolCardColors(ColorsEnum):
@@ -202,6 +203,7 @@ class HandlerDialogColors(ColorsEnum):
     TEXT_PRIMARY     = Palette.SLATE_100  # Bold heading text
     TEXT_SECONDARY   = Palette.SLATE_500  # Explanatory body text
     BTN_GRADIENT_END = "#0891b2"          # Try Again gradient end (sky-600)
+    ACCENT           = Palette.CYAN_400   # Icon circle and primary button accent
 
 
 class TopbarColors(ColorsEnum):

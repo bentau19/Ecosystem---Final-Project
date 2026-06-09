@@ -232,7 +232,7 @@ def test_disconnect_device_emits_device_disconnected(qtbot: QtBot) -> None:
     received: list[bool] = []
     svc.device_disconnected.connect(lambda: received.append(True))
 
-    svc._disconnect_device()
+    svc.disconnect_device()
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=1000)
     assert received == [True]
@@ -247,7 +247,57 @@ def test_disconnect_device_calls_tau_disconnect(qtbot: QtBot) -> None:
     mock_tau.disconnect.side_effect = lambda: call_order.append("disconnect")
     svc.device_disconnected.connect(lambda: call_order.append("signal"))
 
-    svc._disconnect_device()
+    svc.disconnect_device()
 
     qtbot.waitUntil(lambda: len(call_order) >= 2, timeout=1000)
     assert call_order == ["disconnect", "signal"]
+
+
+def test_disconnect_device_emits_disconnected_when_tau_already_disconnected(
+        qtbot: QtBot,
+) -> None:
+    """device_disconnected fires even when is_connected is already False (Android crash).
+
+    When Android crashes the .NET layer flips is_connected to False before the
+    desktop user clicks Disconnect.  The old guard `if not tau.is_connected: return`
+    would have silently dropped the call, leaving the UI frozen on 'Connected'.
+    The fix removes that guard so _disconnect_device always emits the signal.
+    """
+    mock_tau = MagicMock()
+    mock_tau.is_connected = False  # simulate post-crash state
+    svc = _make_connectivity(mock_tau)
+
+    received: list[bool] = []
+    svc.device_disconnected.connect(lambda: received.append(True))
+
+    svc.disconnect_device()
+
+    qtbot.waitUntil(lambda: len(received) > 0, timeout=1000)
+    assert received == [True]
+
+
+def test_disconnect_device_emits_disconnected_when_get_peer_waiting_words_raises(
+        qtbot: QtBot,
+) -> None:
+    """device_disconnected fires even when get_peer_waiting_words() raises.
+
+    When Android crashes but TauSync hasn't yet flipped is_connected to False,
+    get_peer_waiting_words() raises RuntimeError on the dead socket.  The old
+    code had no try/except, so the background thread died silently and the UI
+    hung on 'Disconnecting…' forever.  The fix uses try/except/finally to
+    guarantee device_disconnected always emits.
+    """
+    mock_tau = MagicMock()
+    mock_tau.is_connected = True
+    mock_tau.get_peer_waiting_words.side_effect = RuntimeError(
+        "transport is not connected"
+    )
+    svc = _make_connectivity(mock_tau)
+
+    received: list[bool] = []
+    svc.device_disconnected.connect(lambda: received.append(True))
+
+    svc.disconnect_device()
+
+    qtbot.waitUntil(lambda: len(received) > 0, timeout=1000)
+    assert received == [True]

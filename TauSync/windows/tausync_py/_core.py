@@ -91,7 +91,7 @@ def _ensure_clr(dll_path: Optional[str] = None) -> None:
         from System import Array, Byte  # pyright: ignore[reportMissingImports]
         from System.Runtime.InteropServices import GCHandle, GCHandleType  # pyright: ignore[reportMissingImports]
         from TauSync.Implementations.Management import ConnectionManager as _CM  # pyright: ignore[reportMissingImports]
-        from System import Nullable, Int32
+        from System import Nullable, Int32, TimeoutException
 
         _Array = Array
         _Byte = Byte
@@ -692,7 +692,12 @@ class TauSync:
     @property
     def is_connected(self) -> bool:
         """Whether the underlying TCP transport is up."""
-        if not self._manager.IsConnected():
+        if self._disposed:
+            return False
+        try:
+            if not self._manager.IsConnected():
+                return False
+        except Exception:
             return False
         return TauSync._global_role != _ROLE_NONE
 
@@ -765,24 +770,23 @@ class TauSync:
             pass
 
     def disconnect(self) -> None:
-        def disconnect(self) -> None:
-            """Close the TCP transport and reset the process-wide role to ``none``.
+        """Close the TCP transport and reset the process-wide role to ``none``.
 
-            After this call ``is_connected`` returns ``False`` and ``listen()`` /
-            ``connect_to()`` may be called again on the same instance.
+        After this call ``is_connected`` returns ``False`` and ``listen()`` /
+        ``connect_to()`` may be called again on the same instance.
 
-            Safe to call on an already-disconnected transport (no-op).
+        Safe to call on an already-disconnected transport (no-op).
 
-            Raises:
-                RuntimeError: If this instance has been disposed.
-            """
-            self._check_not_disposed()
-            if not self.is_connected:
-                return
-            self._manager.Disconnect()
-            with TauSync._global_role_lock:
-                TauSync._global_role = _ROLE_NONE
-                TauSync._global_target = None
+        Raises:
+            RuntimeError: If this instance has been disposed.
+        """
+        self._check_not_disposed()
+        if not self.is_connected:
+            return
+        self._manager.Disconnect()
+        with TauSync._global_role_lock:
+            TauSync._global_role = _ROLE_NONE
+            TauSync._global_target = None
 
     def new_manager(self) -> "TauSync":
         """Create another ``TauSync`` instance sharing the same singleton socket.

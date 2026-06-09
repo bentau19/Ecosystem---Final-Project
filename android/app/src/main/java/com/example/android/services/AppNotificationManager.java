@@ -25,9 +25,11 @@ public class AppNotificationManager {
     public static final String CHANNEL_ID = "ConnectivityServiceChannel";
     public static final String FILE_TRANSFER_CHANNEL_ID = "FileTransferChannel";
     public static final String SEND_FILE_CHANNEL_ID = "SendFileChannel";
+    public static final String BACKUP_PROGRESS_CHANNEL_ID = "BackupProgressChannel";
     public static final int NOTIFICATION_ID = 1;
     public static final int FILE_TRANSFER_NOTIFICATION_ID = 2;
     public static final int SEND_FILE_NOTIFICATION_ID = 3;
+    public static final int BACKUP_PROGRESS_NOTIFICATION_ID = 4;
     private static final String TAG = "AppNotificationMgr";
 
     private final Context context;
@@ -240,6 +242,69 @@ public class AppNotificationManager {
         }
     }
 
+    // ── Backup transfer progress notifications ────────────────────────────────
+
+    /**
+     * Shows (or updates) the sticky backup progress notification.
+     *
+     * <p>Uses a determinate progress bar because the total number of files is always
+     * known upfront when the backup transfer starts.
+     *
+     * <p>This notification is <b>ongoing</b> (the user cannot swipe it away while
+     * the transfer is in progress).
+     *
+     * @param sent  Number of files successfully transferred so far.
+     * @param total Total number of files in this backup batch.
+     */
+    public void showBackupProgressNotification(int sent, int total) {
+        String contentText = sent + " / " + total + " files";
+
+        Notification notification = new NotificationCompat.Builder(context, BACKUP_PROGRESS_CHANNEL_ID)
+                .setContentTitle(context.getString(R.string.backup_notif_progress_title))
+                .setContentText(contentText)
+                .setSmallIcon(R.drawable.ic_backup)
+                .setProgress(total, sent, false)   // determinate bar — total is always known
+                .setOngoing(true)                  // sticky: user cannot dismiss mid-backup
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(BACKUP_PROGRESS_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Replaces the progress notification with a brief auto-cancelling completion notice.
+     *
+     * @param total Total number of files that were backed up.
+     */
+    public void showBackupCompleteNotification(int total) {
+        String contentText = total + " files sent";
+
+        Notification notification = new NotificationCompat.Builder(context, BACKUP_PROGRESS_CHANNEL_ID)
+                .setContentTitle(context.getString(R.string.backup_notif_complete_title))
+                .setContentText(contentText)
+                .setSmallIcon(R.drawable.ic_backup)
+                .setAutoCancel(true)
+                .setTimeoutAfter(5_000)   // auto-dismiss after 5 seconds
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(BACKUP_PROGRESS_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Dismisses the backup progress / result notification.
+     * Called on transfer failure (error is shown in-app via Toast instead).
+     */
+    public void dismissBackupProgressNotification() {
+        if (notificationManager != null) {
+            notificationManager.cancel(BACKUP_PROGRESS_NOTIFICATION_ID);
+        }
+    }
+
     /**
      * Creates the notification channels required for Android O and above.
      */
@@ -269,10 +334,19 @@ public class AppNotificationManager {
             );
             sendFileChannel.setDescription("Progress of outgoing file transfers to PC");
 
+            // Backup progress channel (low importance — silent sticky progress bar)
+            NotificationChannel backupProgressChannel = new NotificationChannel(
+                    BACKUP_PROGRESS_CHANNEL_ID,
+                    "Backup Progress",
+                    NotificationManager.IMPORTANCE_LOW
+            );
+            backupProgressChannel.setDescription("Progress of backup file transfer to PC");
+
             if (notificationManager != null) {
                 notificationManager.createNotificationChannel(connectivityChannel);
                 notificationManager.createNotificationChannel(fileTransferChannel);
                 notificationManager.createNotificationChannel(sendFileChannel);
+                notificationManager.createNotificationChannel(backupProgressChannel);
             }
         }
     }

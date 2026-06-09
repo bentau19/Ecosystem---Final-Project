@@ -38,13 +38,13 @@ class FileTransferService(QObject):
     """
 
     # ── Send-side signals ─────────────────────────────────────────────────────
-    file_send_complete: Signal = Signal(object)   # FileSendCompleteDTO
+    file_send_complete: Signal = Signal(object)  # FileSendCompleteDTO
     file_send_rejected: Signal = Signal(str)
     file_send_error: Signal = Signal(str)
 
     # ── Receive-side signals ──────────────────────────────────────────────────
-    file_metadata_received: Signal = Signal(object)   # FileMetadataDTO
-    file_receive_complete: Signal = Signal(object)    # FileReceiveCompleteDTO
+    file_metadata_received: Signal = Signal(object)  # FileMetadataDTO
+    file_receive_complete: Signal = Signal(object)  # FileReceiveCompleteDTO
     file_receive_error: Signal = Signal(str)
 
     def __init__(
@@ -61,6 +61,7 @@ class FileTransferService(QObject):
         """
         super().__init__(parent)
         self._connectivity: ConnectivityService = connectivity
+        self._metadata_serializer: FileMetadataSerializer = FileMetadataSerializer()
         self._threads: list[threading.Thread] = []
         self._is_running: threading.Event = threading.Event()
 
@@ -181,7 +182,6 @@ class FileTransferService(QObject):
             self._threads.append(t)
         t.start()
 
-
     def _get_pending_threads(self) -> list[threading.Thread]:
         # Snapshot alive threads under the lock so callers can join without holding it.
         with self._threads_lock:
@@ -198,12 +198,11 @@ class FileTransferService(QObject):
             tau = self._connectivity.tau
 
             # 1. Send metadata so the peer knows the filename and expected size.
-            meta_payload: str = FileMetadataSerializer.serialize(
+            meta_payload: str = self._metadata_serializer.serialize(
                 FileMetadataDTO(name=filename, size=file_size)
             )
             with tau.connect(FileTransferChannels.REGULAR_FILE_METADATA_PC_TO_ANDROID.value) as meta_stream:
                 meta_stream.write_string(meta_payload)
-
 
             # 2. Wait for the receiver's accept/reject token.
             #    TauSync's 30-second handshake timeout is the upper bound.
@@ -229,11 +228,11 @@ class FileTransferService(QObject):
             tau = self._connectivity.tau
             with tau.connect(FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC.value) as meta_stream:
                 raw: str = meta_stream.read_all().decode("utf-8")
-            metadata: FileMetadataDTO = FileMetadataSerializer.deserialize(raw)
+            metadata: FileMetadataDTO = self._metadata_serializer.deserialize(raw)
             self.file_metadata_received.emit(metadata)
         except Exception as exc:
             self.file_receive_error.emit(str(exc))
-            
+
     def _receive_file(self, dest_path: str, file_size: int, modified_at_ms: int) -> None:
         # Steps: send accept token → stream bytes straight to disk → restore mtime.
         try:
@@ -275,14 +274,15 @@ class FileTransferService(QObject):
 
     def _listen_for_file_to_send(self) -> None:
         # Poll the named pipe for incoming file paths from FileHandler.exe and forward them.
-        timeout = datetime.timedelta(seconds=3)
         pipe_name: str = r'\\.\pipe\FileSend'
         with Server(65536, 65536, pipe_name) as server:
             while self._is_running.is_set():
                 try:
+                    timeout = datetime.timedelta(seconds=3)
                     server.wait_for_client(timeout)
-
                     file_path: str = server.read(timeout)
                     self.send_file(file_path)
-                except Exception:
+                except TimeoutError as exc:
                     pass
+                except Exception as exc:
+                    print(f"[FileTransferService] Pipe listener error: {exc}")

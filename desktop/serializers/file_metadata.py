@@ -35,8 +35,7 @@ class FileMetadataSerializer(ISerializer[FileMetadataDTO, str]):
     propagating into domain code.
     """
 
-    @staticmethod
-    def serialize(data: FileMetadataDTO) -> str:
+    def serialize(self, data: FileMetadataDTO) -> str:
         """Convert a :class:`~domain.dto.file_metadata.FileMetadataDTO` to a JSON string.
 
         Args:
@@ -57,8 +56,7 @@ class FileMetadataSerializer(ISerializer[FileMetadataDTO, str]):
         validate(instance=wire, schema=_SCHEMA)
         return json.dumps(wire)
 
-    @staticmethod
-    def deserialize(data: str) -> FileMetadataDTO:
+    def deserialize(self, data: str) -> FileMetadataDTO:
         """Parse a JSON string into a :class:`~domain.dto.file_metadata.FileMetadataDTO`.
 
         ``modified_at`` is optional — legacy senders that omit it produce a DTO

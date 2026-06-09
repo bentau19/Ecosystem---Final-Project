@@ -42,9 +42,8 @@ class PhoneRequestService:
 
         self.operations: dict[str, Callable[[], None]] = {
             FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC.value: file_transfer_service.receive_metadata,
-            SessionChannels.DISCONNECT_FROM_PHONE.value: self._connectivity.disconnect_device,
+            SessionChannels.DISCONNECT_FROM_PHONE.value: self._connectivity.stop,
         }
-        self.start()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -95,15 +94,26 @@ class PhoneRequestService:
     def _listen_to_channels(self) -> None:
         # Block until a device is connected, then dispatch each waiting channel to its handler.
 
-        while not self._connectivity.connected and self._is_running.is_set():
+        while self._is_running.is_set() and not self._connectivity.connected:
             sleep(5)
 
         while self._is_running.is_set():
-            tau = self._connectivity.tau
-            channels = tau.get_peer_waiting_words()
-            # print(f"channels: {channels}")
-            for channel in channels:
-                handler = self.operations.get(channel)
-                if handler is not None:
-                    handler()
-            sleep(10)
+            try:
+                tau = self._connectivity.tau
+                channels = tau.get_peer_waiting_words()
+                for channel in channels:
+                    handler = self.operations.get(channel)
+                    if handler is not None:
+                        handler()
+            except Exception as exc:
+                # get_peer_waiting_words() raises RuntimeError when the peer has
+                # gone away (e.g. Android crash / force-stop).  Trigger the same
+                # teardown path as a graceful phone-initiated disconnect so the UI
+                # navigates back to the login screen automatically.
+                print(
+                    f"[PhoneRequestService] ⚠ Channel poll failed "
+                    f"— peer may have disconnected: {exc}"
+                )
+                self._connectivity.stop()
+                break
+            sleep(5)

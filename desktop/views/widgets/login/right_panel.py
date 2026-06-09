@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWi
 import utils.styles
 from app.theme_manager import theme_manager
 from domain.dto.previous_device import PreviousDeviceDTO
-from resources.colors import Palette, LoginColors, LightLoginColors, Colors, LightColors
+from resources.colors import Palette, LoginColors, LightLoginColors, Colors, LightColors, LightPalette
 from resources.paths import Icons, LoginStyles
 from utils.styles import themed
 from resources.spacing import Spacing
@@ -126,7 +126,7 @@ class RightPanel(QWidget):
 
         # Vertical centering via flanking stretches
         layout.addStretch()
-        layout.addWidget(icon_lbl)
+        layout.addWidget(icon_lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
         layout.addSpacing(Spacing.LG)
         layout.addWidget(title_lbl)
         layout.addSpacing(Spacing.XS)
@@ -186,10 +186,11 @@ class RightPanel(QWidget):
         path = QPainterPath()
         path.addRoundedRect(rect, r, r)
 
-        # background: oklch(1 0 0 / 0.04) — white at ~4 % opacity
+        # background: white at ~4% opacity
         painter.setBrush(QColor(255, 255, 255, 10))
-        # border: 1px solid --line-2
-        painter.setPen(QPen(QColor(Palette.GRAY_640), 1.0))
+        # border: 1px solid — pick from active palette so light mode renders a soft gray
+        border_hex = Palette.GRAY_640 if theme_manager.is_dark else LightPalette.GRAY_640
+        painter.setPen(QPen(QColor(border_hex), 1.0))
         painter.drawPath(path)
 
         # icon centered — SVG stroke carries the --text-2 colour

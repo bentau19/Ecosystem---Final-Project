@@ -31,8 +31,9 @@ from domain.dto.backup_file import BackupFileDTO
 from resources.colors import BackupReviewColors, LightBackupReviewColors
 from resources.paths import BackupStyles
 from resources.spacing import Spacing
+from utils.file_type import IMAGE_EXTS, file_ext, fmt_size
 from utils.styles import load_stylesheet, themed
-from views.widgets.backup.helpers import IMAGE_EXTS, file_ext, fmt_size, load_thumb
+from views.widgets.backup.helpers import load_thumb
 
 # ── Layout constants ──────────────────────────────────────────────────────────
 _DIALOG_MIN_WIDTH:  Final[int] = 580
@@ -430,15 +431,21 @@ if __name__ == "__main__":
 
     # Mix of images and non-images — non-images are silently dropped by the dialog.
     sample_files = [
-        BackupFileDTO("""C:\\Users\\Lavi\\OneDrive - Bar-Ilan University - Students\\Photos\\My Photos\\2022\\2-February\\9725.webp""",
+        BackupFileDTO(r"C:\Users\Public\Pictures\vacation_photo.webp",
                       "vacation_photo.webp",  3_456_000, mtime=1_710_460_800_000),
-        BackupFileDTO("C:/backup/screenshot.png",  "ui_screenshot.png",    2_100_000, mtime=1_745_280_000_000),
-        BackupFileDTO("C:/backup/portrait.heic",   "portrait_2025.heic",   8_200_000, mtime=1_720_656_000_000),
-        BackupFileDTO("C:/backup/banner.webp",     "event_banner.webp",      980_000, mtime=1_733_184_000_000),
-        BackupFileDTO("C:/backup/scan.tif",        "document_scan.tif",   15_700_000, mtime=1_705_708_800_000),
-        BackupFileDTO("C:/backup/icon.ico",        "app_icon.ico",            45_000, mtime=1_694_822_400_000),
+        BackupFileDTO(r"C:\Users\Public\Pictures\ui_screenshot.png",
+                      "ui_screenshot.png",    2_100_000, mtime=1_745_280_000_000),
+        BackupFileDTO(r"C:\Users\Public\Pictures\portrait_2025.heic",
+                      "portrait_2025.heic",   8_200_000, mtime=1_720_656_000_000),
+        BackupFileDTO(r"C:\Users\Public\Pictures\event_banner.webp",
+                      "event_banner.webp",      980_000, mtime=1_733_184_000_000),
+        BackupFileDTO(r"C:\Users\Public\Pictures\document_scan.tif",
+                      "document_scan.tif",   15_700_000, mtime=1_705_708_800_000),
+        BackupFileDTO(r"C:\Users\Public\Pictures\app_icon.ico",
+                      "app_icon.ico",            45_000, mtime=1_694_822_400_000),
         # Non-image — will be filtered out:
-        BackupFileDTO("C:/backup/report.pdf",      "quarterly_report.pdf",   890_000, mtime=1_735_948_800_000),
+        BackupFileDTO(r"C:\Users\Public\Documents\quarterly_report.pdf",
+                      "quarterly_report.pdf",   890_000, mtime=1_735_948_800_000),
     ]
 
     app = QApplication(sys.argv)

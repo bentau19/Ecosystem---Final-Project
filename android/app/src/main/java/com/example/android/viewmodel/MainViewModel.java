@@ -9,6 +9,7 @@ import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
+import com.example.android.domain.usecases.DisconnectDeviceUseCase;
 import com.example.android.domain.usecases.ParseQrDataUseCase;
 import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
 
@@ -20,6 +21,7 @@ import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
 public class MainViewModel extends ViewModel {
     private final RefreshLocalStatsUseCase refreshStats;
     private final ConnectToDeviceUseCase connectToDevice;
+    private final DisconnectDeviceUseCase disconnectDevice;
     private final ParseQrDataUseCase parseQr;
 
     private final DeviceRepository repository;
@@ -28,11 +30,13 @@ public class MainViewModel extends ViewModel {
     public MainViewModel(DeviceRepository repository,
                          RefreshLocalStatsUseCase refreshStats,
                          ConnectToDeviceUseCase connectToDevice,
-                         ParseQrDataUseCase parseQr) {
+                         ParseQrDataUseCase parseQr,
+                         DisconnectDeviceUseCase disconnectDevice) {
         this.repository = repository;
         this.refreshStats = refreshStats;
         this.connectToDevice = connectToDevice;
         this.parseQr = parseQr;
+        this.disconnectDevice = disconnectDevice;
     }
 
     /**
@@ -41,6 +45,7 @@ public class MainViewModel extends ViewModel {
     public LiveData<DeviceConnectionState> getConnectionState() {
         return repository.getConnectionState();
     }
+
     public LiveData<ConnectionStatus> getConnectionStatus() {
         return repository.getConnectionStatus();
     }
@@ -56,6 +61,7 @@ public class MainViewModel extends ViewModel {
 
     /**
      * Processes raw QR data and initiates the connection sequence.
+     *
      * @param qrData The raw string retrieved from the QR scanner.
      * @return true if the connection data was valid and initiated; false otherwise.
      */
@@ -70,12 +76,13 @@ public class MainViewModel extends ViewModel {
      * Commands the repository to terminate the current remote session.
      */
     public void disconnect() {
-        connectToDevice.disconnect();
+        disconnectDevice.execute();
     }
 
 
     /**
      * Fetches the latest storage statistics from the repository.
+     *
      * @return DeviceStorageStats containing formatted status and usage percentage.
      */
     public DeviceStorageStats getStorageStats() {

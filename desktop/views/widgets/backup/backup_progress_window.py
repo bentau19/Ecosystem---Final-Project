@@ -51,9 +51,8 @@ from resources.colors import (
 from resources.paths import BackupStyles, Icons
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet, themed
-from views.widgets.backup.helpers import (
-    IMAGE_EXTS, file_emoji, file_ext, fmt_size, load_thumb,
-)
+from utils.file_type import IMAGE_EXTS, file_emoji, file_ext, fmt_size
+from views.widgets.backup.helpers import load_thumb
 from views.widgets.bar import Bar
 
 if TYPE_CHECKING:
@@ -690,15 +689,15 @@ if __name__ == "__main__":
 
     sample_items = [
         BackupFileDTO(
-            r"C:\Users\Lavi\OneDrive - Bar-Ilan University - Students\Photos\My Photos\2022\2-February\9725.webp",
+            r"C:\Users\Public\Pictures\vacation_2022.webp",
             "vacation_2022.webp", 3_456_000,
         ),
-        BackupFileDTO("C:/phone/dcim/portrait.heic",   "portrait.heic",    8_200_000),
-        BackupFileDTO("C:/phone/dcim/family_video.mp4","family_video.mp4", 54_000_000),
-        BackupFileDTO("C:/phone/dcim/night_shot.jpg",  "night_shot.jpg",   2_100_000),
-        BackupFileDTO("C:/phone/docs/quarterly_report.pdf", "quarterly_report.pdf", 890_000),
-        BackupFileDTO("C:/phone/music/favourite_track.mp3", "favourite_track.mp3",  5_400_000),
-        BackupFileDTO("C:/phone/archives/photos_2024.zip",  "photos_2024.zip",     120_000_000),
+        BackupFileDTO(r"C:\Users\Public\Pictures\portrait.heic",   "portrait.heic",    8_200_000),
+        BackupFileDTO(r"C:\Users\Public\Pictures\family_video.mp4","family_video.mp4", 54_000_000),
+        BackupFileDTO(r"C:\Users\Public\Pictures\night_shot.jpg",  "night_shot.jpg",   2_100_000),
+        BackupFileDTO(r"C:\Users\Public\Documents\quarterly_report.pdf", "quarterly_report.pdf", 890_000),
+        BackupFileDTO(r"C:\Users\Public\Music\favourite_track.mp3", "favourite_track.mp3",  5_400_000),
+        BackupFileDTO(r"C:\Users\Public\Documents\photos_2024.zip",  "photos_2024.zip",     120_000_000),
     ]
 
     app = QApplication(sys.argv)

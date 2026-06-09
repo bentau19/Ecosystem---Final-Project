@@ -81,8 +81,14 @@ class DeviceViewModel(QObject):
         self._device_info_service.device_fetched.connect(self._on_device_fetched)
         self._device_info_service.all_devices_fetched.connect(self._on_all_devices_fetched)
 
-        # Start both services so DB reads (fetch_device_by_id / fetch_all_devices)
-        # are available immediately at app startup, before any device connects.
+        # Start connectivity immediately so it listens before any device connects.
+        # DeviceInfoService also starts at launch — its DB read methods
+        # (fetch_all_devices, fetch_device_by_id) are needed by the login screen
+        # before a connection exists.  The network path (fetch_device_info) is
+        # self-guarded by tau.is_connected and is safe to call on a live service.
+        # All other services (FileTransferService, PhoneRequestService) start only
+        # in _on_device_connected and stop in _on_device_disconnected.
+
         self._connectivity_service.start()
         self._device_info_service.start()
 
@@ -94,7 +100,7 @@ class DeviceViewModel(QObject):
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def load_device_info(self) -> None:
+    def load_current_device_info(self) -> None:
         """Request the current device from the service on a background thread.
 
         The result arrives asynchronously via :attr:`device_infos_updated`
@@ -105,6 +111,7 @@ class DeviceViewModel(QObject):
             device_infos_updated: Asynchronously, with ``list[DeviceInfoDTO]``
                 if the current device is found in the repository.
         """
+
         self._device_info_service.fetch_device_by_id(self._current_device_connected_id)
 
     def load_devices(self) -> None:
@@ -145,13 +152,13 @@ class DeviceViewModel(QObject):
     def disconnect_device(self) -> None:
         """Disconnect the currently connected device via the connectivity service.
 
-        Emits :attr:`device_disconnecting` immediately, then delegates to
-        :meth:`~services.connectivity.ConnectivityService.stop` which runs
-        the tear-down on a background thread — keeping the main thread free so
-        Qt can repaint the loading overlay before the disconnect completes.
+        Delegates to :meth:`~services.connectivity.ConnectivityService.disconnect_device`
+        which emits ``device_disconnecting`` before any teardown begins.  The
+        forwarding wire in ``__init__`` propagates that signal to this
+        ViewModel's own ``device_disconnecting`` — no direct emit here to avoid
+        the signal firing twice on the PC-initiated path.
         """
-        self.device_disconnecting.emit()
-        self._connectivity_service.disconnect()
+        self._connectivity_service.stop()
 
     # ── Private helpers ────────────────────────────────────────────────────────
 
@@ -197,9 +204,14 @@ class DeviceViewModel(QObject):
 
     @Slot()
     def _on_device_disconnected(self) -> None:
-        # _disconnect_device() recycles its thread as the next listener inline —
-        # no explicit connectivity_service.start() needed here.
+        # stop() joins any lingering network threads from the previous session.
+        # start() immediately re-enables the service for DB reads — fetch_all_devices
+        # and fetch_device_by_id are needed by the login screen before the next
+        # connection exists. Both calls are async and serialise on _lifecycle_lock,
+        # so the stop-then-start sequence is race-safe.
         self._device_info_service.stop()
+        self._device_info_service.start()
+        self._connectivity_service.start()
         self.device_disconnected.emit()
 
     # ── Conversion ────────────────────────────────────────────────────────────

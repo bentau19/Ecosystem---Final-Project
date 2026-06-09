@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * TauSyncTransportManager - Concrete implementation of TransportManager for TauSync.
- *
+ * <p>
  * Responsibilities:
  * ✓ Manages TauSync connection lifecycle
  * ✓ Implements automatic reconnection with exponential backoff

@@ -67,7 +67,7 @@ def test_load_device_info_calls_fetch_device_by_id_with_current_id(
     view_model: DeviceViewModel,
     mock_device_info_service: MagicMock,
 ) -> None:
-    view_model.load_device_info()
+    view_model.load_current_device_info()
 
     mock_device_info_service.fetch_device_by_id.assert_called_with(
         view_model._current_device_connected_id

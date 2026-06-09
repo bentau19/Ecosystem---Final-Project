@@ -4,6 +4,7 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
+import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.util.Log;
 
@@ -36,7 +37,7 @@ import java.util.concurrent.TimeoutException;
  *   5. Update SendFileRepository: COMPLETED / REJECTED / FAILED.
  *
  * JSON wire format (matches desktop FileMetadataSerializer):
- *   {"file_name": "photo.jpg", "file_size": 4194304}
+ *   {"file_name": "photo.jpg", "file_size": 4194304, "modified_at": 1700000000000}
  */
 public class SendFileUseCase {
 
@@ -76,17 +77,23 @@ public class SendFileUseCase {
             // even if an exception is thrown mid-cursor, preventing memory leaks.
             String fileName;
             long fileSize;
+            long fileModifiedAt; // Unix epoch ms; 0 = not available
 
             try (Cursor cursor = resolver.query(uri, null, null, null, null)) {
                 if (cursor == null || !cursor.moveToFirst()) {
                     throw new IOException("Cannot read file metadata from URI: " + uri);
                 }
 
-                int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-                int sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE);
+                int nameIndex         = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                int sizeIndex         = cursor.getColumnIndex(OpenableColumns.SIZE);
+                // DATE_MODIFIED is in seconds since epoch — multiply by 1000 for ms wire format.
+                int dateModifiedIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_MODIFIED);
 
-                fileName = (nameIndex >= 0) ? cursor.getString(nameIndex) : null;
-                fileSize = (sizeIndex >= 0) ? cursor.getLong(sizeIndex) : -1L;
+                fileName       = (nameIndex >= 0) ? cursor.getString(nameIndex) : null;
+                fileSize       = (sizeIndex >= 0) ? cursor.getLong(sizeIndex) : -1L;
+                fileModifiedAt = (dateModifiedIndex >= 0 && !cursor.isNull(dateModifiedIndex))
+                        ? cursor.getLong(dateModifiedIndex) * 1000L
+                        : 0L;
             }
 
             if (fileName == null || fileName.isEmpty()) {
@@ -104,6 +111,7 @@ public class SendFileUseCase {
             JSONObject json = new JSONObject();
             json.put("file_name", fileName);
             json.put("file_size", fileSize);
+            json.put("modified_at", fileModifiedAt);
             String metadataPayload = json.toString();
 
             // ── Step 3: Send metadata to PC ───────────────────────────────────────

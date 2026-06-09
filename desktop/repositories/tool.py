@@ -51,25 +51,24 @@ class ToolRepository(
         """
         super().__init__(parent)
         self._serializer = ToolSerializer()
-        # self._db_path = Path(os.environ.get("APPDATA")) / "SyncDose" / "app.db"
-        # self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        # self._db_path.touch(exist_ok=True)
-        self._db_path = Path(__file__).parent.parent / "data" / "app.db"
+        self._db_path = Path(os.environ["APPDATA"]) / "SyncDose" / "app.db"
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._db_path.touch(exist_ok=True)
         self._configure_db()
 
     def _configure_db(self) -> None:
-        # Create the tools table if absent; seed default rows when the table is empty.
+        # Create the tools table if absent; always ensure seed tools exist via
+        # INSERT OR IGNORE so the file-sending tool is present even on existing
+        # installs that pre-date the seed list (user edits are never overwritten).
         with sqlite3.connect(self._db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("DROP TABLE IF EXISTS tools")
             cursor.execute(
                 "CREATE TABLE IF NOT EXISTS tools "
                 "(title TEXT PRIMARY KEY, description TEXT,"
                 " icon_path TEXT, is_enabled BOOLEAN)"
             )
-            cursor.execute("SELECT COUNT(*) FROM tools")
             cursor.executemany(
-                "INSERT OR REPLACE INTO tools (title, description, icon_path, is_enabled) "
+                "INSERT OR IGNORE INTO tools (title, description, icon_path, is_enabled) "
                 "VALUES (?, ?, ?, ?)",
                 _SEED_TOOLS,
             )
