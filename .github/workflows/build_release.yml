@@ -45,8 +45,8 @@ jobs:
 
       - name: Build EXEs
         run: |
-          pyinstaller desktop/installer/Package/specs/file_handler.spec
-          pyinstaller desktop/installer/Package/specs/main_app.spec
+          pyinstaller desktop/installer/Package/specs/main_app.spec --distpath desktop/installer/Package/dist/SyncDose
+          pyinstaller desktop/installer/Package/specs/file_handler.spec --distpath desktop/installer/Package/dist/FileHandler
 
       - name: Build installer
         run: dotnet build desktop/installer/Bundle/ -c Release
