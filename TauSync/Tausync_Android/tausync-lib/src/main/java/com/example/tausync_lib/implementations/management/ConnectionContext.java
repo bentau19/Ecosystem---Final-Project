@@ -85,6 +85,10 @@ public final class ConnectionContext {
         if (wifiTransport.isConnected()) {
             throw new IllegalStateException("Transport already connected.");
         }
+        // Clear any routing/discovery state left over from a previous session before
+        // re-establishing, so stale handlers and pending REQs are not replayed on the
+        // new session's frames. Mirrors the C# ConnectionContext.InitializeTransports.
+        reset();
         wifiTransport.connect(targetId).get();
     }
 

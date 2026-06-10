@@ -1,35 +1,76 @@
-"""
-Image classifier for ML-based content detection (detector.py stage 3).
-
-Architecture
-------------
-Frozen backbone  : MobileNetV3-Large pretrained on ImageNet (features only).
-Trainable head   : two Conv2d layers → AdaptiveAvgPool2d → Linear classifier.
-
-Only the two custom CNN layers and the linear head are updated during
-training; the backbone weights stay static throughout.
-"""
 import random
 import sys
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torchvision.models as models
+from PIL import Image
 from torch.nn.functional import softmax
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
-from PIL import Image
 
 from image_classification_dataset import ImageClassificationDataset
 
+# Module-level device selection so every model instance and tensor in this
+# file shares one target device; printed once at import time for diagnostics.
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"using device: {device.type}")
 
+# Confidence threshold above which a "remove" verdict is acted on automatically.
+_REMOVE_THRESHOLD: float = 0.95
+# Probability above which the model's argmax favours "remove" at all.
+_REVIEW_THRESHOLD: float = 0.5
+
+
+class ClassificationVerdict(Enum):
+    """Three-way outcome of :func:`classify_image` / :meth:`Classifier.classify`.
+
+    The underlying model is binary (label ``0`` = "filter"/unwanted, label
+    ``1`` = "keep" — matching the alphabetical class ordering
+    ``filter < keep`` produced by
+    :class:`~image_classification_dataset.ImageClassificationDataset`).
+    :func:`classify_image` turns the raw ``pr(remove)`` probability into one
+    of the three values below.
+
+    Attributes:
+        ACCEPTED: ``pr(remove) <= 0.5`` — confidently wanted. The file passed
+            all screening stages and should be saved.
+        REJECTED: ``pr(remove) > 0.95`` — confidently unwanted. The file
+            should be discarded (exact duplicate, or confidently flagged by
+            the ML classifier).
+        NEEDS_REVIEW: ``0.5 < pr(remove) <= 0.95`` — the model's argmax
+            already says "remove", but it isn't confident enough to act
+            automatically. The caller should ask the user whether to keep or
+            discard the file.
+    """
+
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    NEEDS_REVIEW = "needs_review"
+
+
+@dataclass
+class ClassificationResult:
+    """Outcome of a single image classification.
+
+    Attributes:
+        verdict: The three-way :class:`ClassificationVerdict`.
+        confidence: Raw ``pr(remove)`` probability reported by the model.
+    """
+
+    verdict: ClassificationVerdict
+    confidence: float
+
 
 class ImageClassifier(nn.Module):
-    """
-    MobileNetV3-Large feature extractor with two trainable CNN layers on top.
+    """MobileNetV3-Large feature extractor with two trainable CNN layers on top.
+
+    Frozen backbone: MobileNetV3-Large pretrained on ImageNet (features only).
+    Trainable head: two ``Conv2d`` layers → ``AdaptiveAvgPool2d`` → ``Linear``
+    classifier.
 
     The pretrained ``features`` backbone is fully frozen. All gradient
     updates during training flow only through ``custom_cnn`` and
@@ -96,23 +137,21 @@ def train_model(
         val_loader: DataLoader,
         epochs: int = 10,
 ) -> None:
-    """
-    Train the classifier's unfrozen layers (custom_cnn + classifier head).
+    """Train the classifier's unfrozen layers (custom_cnn + classifier head).
 
     The pretrained MobileNetV3 backbone is never updated — only parameters
     with ``requires_grad=True`` are passed to the optimizer.
 
     Args:
-        model:      The ImageClassifier instance to train.
+        model: The ImageClassifier instance to train.
         train_loader: DataLoader yielding ``(images, labels)`` batches.
-                    Images must be pre-processed with MobileNet_V3_Large_Weights
-                    transforms (224×224, normalized).
-        val_loader:  DataLoader yielding ``(images, labels)`` batches.
-                    Images must be pre-processed with MobileNet_V3_Large_Weights
-                    transforms (224×224, normalized).
-        epochs:     Number of full passes over the dataset (default: 10).
+            Images must be pre-processed with MobileNet_V3_Large_Weights
+            transforms (224×224, normalized).
+        val_loader: DataLoader yielding ``(images, labels)`` batches.
+            Images must be pre-processed with MobileNet_V3_Large_Weights
+            transforms (224×224, normalized).
+        epochs: Number of full passes over the dataset (default: 10).
     """
-
     criterion = nn.CrossEntropyLoss()
     trainable_params = filter(lambda p: p.requires_grad, model.parameters())
     optimizer = torch.optim.Adam(trainable_params)
@@ -148,7 +187,17 @@ def train_model(
             f"Epoch [{epoch + 1}/{epochs}]  loss: {avg_loss:.4f}  val_loss: {avg_val_loss:.4f}  val_acc: {val_acc:.1f}%")
 
 
-def test(image_model: ImageClassifier):
+def test(image_model: ImageClassifier) -> None:
+    """Evaluate a trained model against the held-out ``dataset/test`` split.
+
+    Loads every image from ``dataset/test/keep`` (label 1) and
+    ``dataset/test/filter`` (label 0), shuffles them, and runs inference one
+    image at a time. Prints overall accuracy and the false-negative count
+    (filter-worthy images predicted as "keep").
+
+    Args:
+        image_model: The trained :class:`ImageClassifier` to evaluate.
+    """
     print("-------------------------Test Start---------------------")
 
     correct = 0
@@ -189,7 +238,23 @@ def test(image_model: ImageClassifier):
     print("-------------------------Test Finished---------------------")
 
 
-def is_wanted(img: Path, model_path: Path = Path(__file__).parent / "model.pth"):
+def classify_image(
+        img: Path,
+        model_path: Path = Path(__file__).parent / "model.pth",
+) -> ClassificationResult:
+    """Classify *img* and return a three-way :class:`ClassificationResult`.
+
+    Args:
+        img: Path to the image file to classify.
+        model_path: Path to the trained model weights (``.pth``).
+
+    Returns:
+        A :class:`ClassificationResult` describing the verdict
+        (:attr:`ClassificationVerdict.ACCEPTED`,
+        :attr:`ClassificationVerdict.REJECTED`, or
+        :attr:`ClassificationVerdict.NEEDS_REVIEW`) and the raw
+        ``pr(remove)`` confidence.
+    """
     image_model = ImageClassifier()
     image_model.load_state_dict(torch.load(str(model_path)))
 
@@ -200,15 +265,30 @@ def is_wanted(img: Path, model_path: Path = Path(__file__).parent / "model.pth")
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225])
     ])
-    img = Image.open(img).convert('RGB')
-    img_tensor = transform(img)
+    image = Image.open(img).convert('RGB')
+    img_tensor = transform(image)
 
     with torch.no_grad():
         output = softmax(image_model(img_tensor.unsqueeze(0)), dim=1)
-        return 0 if output[0][0] > 0.95 else 1
+        confidence = float(output[0][0])
+
+    if confidence > _REMOVE_THRESHOLD:
+        verdict = ClassificationResult(ClassificationVerdict.REJECTED, confidence)
+    elif confidence > _REVIEW_THRESHOLD:
+        verdict = ClassificationResult(ClassificationVerdict.NEEDS_REVIEW, confidence)
+    else:
+        verdict = ClassificationResult(ClassificationVerdict.ACCEPTED, confidence)
+    return verdict
 
 
-def main(argc: int, argv: list[str]):
+def main() -> None:
+    """Train, evaluate, and save the image classifier model.
+
+    Builds an :class:`ImageClassifier`, trains it on
+    :class:`~image_classification_dataset.ImageClassificationDataset` with
+    augmentation transforms, evaluates it via :func:`test`, and saves the
+    resulting weights to ``model.pth``.
+    """
     image_model = ImageClassifier()
 
     transform = transforms.Compose([
@@ -244,4 +324,4 @@ def main(argc: int, argv: list[str]):
 
 
 if __name__ == "__main__":
-    main(len(sys.argv), sys.argv)
+    main()

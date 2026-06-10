@@ -14,6 +14,7 @@ import android.os.storage.StorageVolume;
 import android.provider.MediaStore;
 import android.util.Log;
 
+import androidx.annotation.NonNull;
 import androidx.documentfile.provider.DocumentFile;
 
 import com.example.android.domain.entities.BackupFileEntry;
@@ -46,6 +47,86 @@ import java.util.Set;
 public class BackupDataSource {
 
     private static final String TAG = "BackupDataSource";
+
+    // ── File-path folder scan (no SAF — used by custom FolderPickerFragment) ──
+
+    /**
+     * Recursively enumerates every file under {@code folder} using the {@link File} API.
+     *
+     * <p>This method has <b>no SAF restrictions</b> — it can scan Downloads, DCIM root,
+     * storage root, and any other directory the app holds permission to read.  It is
+     * the companion to {@link #scanFolder} for {@code file://} URIs returned by
+     * {@link com.example.android.ui.fragments.FolderPickerFragment}.
+     *
+     * <p>Includes <b>all file types</b> (not just media), since user-chosen folders
+     * like Downloads may contain PDFs, APKs, ZIPs, etc.
+     *
+     * <p>Results are sorted alphabetically by {@code displayPath}.
+     *
+     * @param folder The directory to scan.  Must be readable by the process.
+     * @return Sorted list of {@link BackupFileEntry} objects; empty if the folder
+     * is empty or unreadable.
+     */
+    public List<BackupFileEntry> scanFolderByPath(@NonNull File folder) {
+        Log.d(TAG, "scanFolderByPath: starting recursive scan of " + folder.getAbsolutePath());
+        List<BackupFileEntry> results = new ArrayList<>();
+
+        if (!folder.isDirectory() || !folder.canRead()) {
+            Log.w(TAG, "scanFolderByPath: not a readable directory — " + folder);
+            return results;
+        }
+
+        walkAllFilesTree(folder, folder, results);
+
+        results.sort(Comparator.comparing(BackupFileEntry::getDisplayPath));
+        Log.d(TAG, "scanFolderByPath: found " + results.size() + " files");
+        return results;
+    }
+
+    /**
+     * Recursively walks {@code dir} using {@link File} API and appends <b>every</b>
+     * file it finds to {@code out} — no extension filter.
+     *
+     * <p>Used for user-selected folder scans where the caller chose a specific
+     * directory and expects all its contents, not just media.
+     *
+     * @param dir        Current directory being walked.
+     * @param rootFolder The top-level folder the user originally selected.
+     *                   Used to compute the relative path of each file so the
+     *                   desktop can reconstruct the original folder structure.
+     * @param out        Accumulator list.
+     */
+    private void walkAllFilesTree(@NonNull File dir,
+                                  @NonNull File rootFolder,
+                                  @NonNull List<BackupFileEntry> out) {
+        if (!dir.isDirectory() || !dir.canRead()) return;
+
+        File[] children = dir.listFiles();
+        if (children == null) return;
+
+        final String rootAbs = rootFolder.getAbsolutePath();
+
+        for (File child : children) {
+            if (child.isDirectory()) {
+                walkAllFilesTree(child, rootFolder, out);
+            } else if (child.isFile()) {
+                String absPath  = child.getAbsolutePath();
+                long sizeBytes  = child.length();
+                long mtimeMs    = child.lastModified();
+                String sourceUri = android.net.Uri.fromFile(child).toString();
+
+                // Compute relative path within the chosen root folder so the desktop
+                // can mirror the directory structure under its destination.
+                // e.g. root="/Downloads", file="/Downloads/work/report.pdf"
+                //      → relPath = "work/report.pdf"
+                String relPath = absPath.startsWith(rootAbs + "/")
+                        ? absPath.substring(rootAbs.length() + 1)
+                        : child.getName(); // fallback: just the filename
+
+                out.add(new BackupFileEntry(absPath, sizeBytes, mtimeMs, sourceUri, relPath));
+            }
+        }
+    }
 
     // ── SAF folder scan ───────────────────────────────────────────────────────
 
@@ -82,7 +163,7 @@ public class BackupDataSource {
                 ? "/" + rootDisplayName
                 : "";
 
-        walkDocumentTree(context, root, rootPrefix, results);
+        walkDocumentTree(context, root, rootPrefix, "", results);
 
         results.sort(Comparator.comparing(BackupFileEntry::getDisplayPath));
         Log.d(TAG, "scanFolder: found " + results.size() + " files");
@@ -92,14 +173,19 @@ public class BackupDataSource {
     /**
      * Recursively visits {@code dir} and appends every file it finds to {@code out}.
      *
-     * @param context    Application context.
-     * @param dir        Current directory node.
-     * @param pathPrefix Display path of this directory (e.g. {@code /DCIM/Camera}).
-     * @param out        Accumulator list — entries are appended in discovery order.
+     * @param context     Application context.
+     * @param dir         Current directory node.
+     * @param pathPrefix  Display path of this directory (e.g. {@code /DCIM/Camera}).
+     * @param relPrefix   Relative path accumulated so far within the root folder
+     *                    (e.g. {@code "Camera/2024"}). Empty string at the root level.
+     *                    Used to build each file's {@code relPath} so the desktop can
+     *                    mirror the directory structure under its destination.
+     * @param out         Accumulator list — entries are appended in discovery order.
      */
     private void walkDocumentTree(Context context,
                                   DocumentFile dir,
                                   String pathPrefix,
+                                  String relPrefix,
                                   List<BackupFileEntry> out) {
         DocumentFile[] children = dir.listFiles();
         if (children == null) return;
@@ -107,20 +193,30 @@ public class BackupDataSource {
         for (DocumentFile child : children) {
             if (child.isDirectory()) {
                 String childName = child.getName();
-                String childPath = pathPrefix + "/"
-                        + (childName != null ? childName : "");
-                walkDocumentTree(context, child, childPath, out);
+                if (childName == null) childName = "";
+                String childPath     = pathPrefix + "/" + childName;
+                String childRelPrefix = relPrefix.isEmpty()
+                        ? childName
+                        : relPrefix + "/" + childName;
+                walkDocumentTree(context, child, childPath, childRelPrefix, out);
 
             } else if (child.isFile()) {
                 String fileName = child.getName();
                 if (fileName == null || fileName.isEmpty()) continue;
 
                 String displayPath = pathPrefix + "/" + fileName;
-                long sizeBytes = child.length();
-                long mtimeMs = child.lastModified();  // already in ms
-                String sourceUri = child.getUri().toString();
+                long sizeBytes     = child.length();
+                long mtimeMs       = child.lastModified();  // already in ms
+                String sourceUri   = child.getUri().toString();
 
-                out.add(new BackupFileEntry(displayPath, sizeBytes, mtimeMs, sourceUri));
+                // relPath mirrors the structure under the root folder so the desktop
+                // can recreate subdirectories.
+                // e.g. relPrefix="2024", fileName="photo.jpg" → relPath="2024/photo.jpg"
+                String relPath = relPrefix.isEmpty()
+                        ? fileName
+                        : relPrefix + "/" + fileName;
+
+                out.add(new BackupFileEntry(displayPath, sizeBytes, mtimeMs, sourceUri, relPath));
             }
         }
     }
@@ -341,6 +437,167 @@ public class BackupDataSource {
 
                 out.add(new BackupFileEntry(absPath, sizeBytes, mtimeMs, sourceUri));
             }
+        }
+    }
+
+    // ── Post-transfer cleanup ─────────────────────────────────────────────────
+
+    /**
+     * Deletes the on-device source file referenced by {@code entry.getSourceUri()}.
+     *
+     * <p>Called by {@link com.example.android.domain.usecases.BackupTransferUseCase}
+     * only after the PC has confirmed it received and saved the file successfully
+     * (i.e. {@link com.example.android.enums.BackupFileResult#SUCCESS} on the
+     * corresponding {@code backup_file_result_*} channel) and the user enabled
+     * "Delete originals after backup".
+     *
+     * <p>Handles both URI shapes produced by the scan paths:
+     * <ul>
+     *   <li>{@code content://} — MediaStore entries ({@link #queryMediaStore}) and SAF
+     *       document URIs ({@link #walkDocumentTree}). Deleted via
+     *       {@link ContentResolver#delete(Uri, String, String[])}, which Android routes
+     *       to the owning provider's {@code delete()} (MediaStore or DocumentsProvider)
+     *       — both support single-document deletion this way.</li>
+     *   <li>{@code file://} — entries from {@link #walkFileTree} / {@link #walkAllFilesTree}.
+     *       Deleted directly via {@link File#delete()}.</li>
+     * </ul>
+     *
+     * <p>Never throws — any failure is logged and {@code false} is returned so the
+     * caller can log a warning without aborting the transfer session.
+     *
+     * @param context Application context — used for {@link ContentResolver} access.
+     * @param entry   The file entry whose {@code sourceUri} should be deleted.
+     * @return {@code true} if the file was deleted; {@code false} otherwise.
+     */
+    public boolean deleteSourceFile(@NonNull Context context, @NonNull BackupFileEntry entry) {
+        String sourceUriStr = entry.getSourceUri();
+        if (sourceUriStr == null || sourceUriStr.isEmpty()) {
+            Log.w(TAG, "deleteSourceFile: empty sourceUri for " + entry.getDisplayPath());
+            return false;
+        }
+
+        try {
+            Uri uri = Uri.parse(sourceUriStr);
+            String scheme = uri.getScheme();
+
+            if ("file".equals(scheme)) {
+                String path = uri.getPath();
+                if (path == null) {
+                    Log.w(TAG, "deleteSourceFile: file:// URI with null path — " + sourceUriStr);
+                    return false;
+                }
+                boolean deleted = new File(path).delete();
+                if (!deleted) {
+                    Log.w(TAG, "deleteSourceFile: File.delete() failed for " + path);
+                }
+                return deleted;
+            }
+
+            // content:// — MediaStore or SAF document URI
+            ContentResolver resolver = context.getContentResolver();
+            int rows = resolver.delete(uri, null, null);
+            if (rows <= 0) {
+                Log.w(TAG, "deleteSourceFile: ContentResolver.delete() removed 0 rows for "
+                        + sourceUriStr);
+            }
+            return rows > 0;
+
+        } catch (Exception e) {
+            Log.e(TAG, "deleteSourceFile: failed for " + entry.getDisplayPath()
+                    + " (" + sourceUriStr + ") — " + e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * Removes now-empty ancestor directories left behind after {@link #deleteSourceFile}
+     * removed {@code entry}'s file, walking upward until a non-empty directory or the
+     * original backup root is reached.
+     *
+     * <p>Called by {@link com.example.android.domain.usecases.BackupTransferUseCase}
+     * immediately after a successful {@link #deleteSourceFile} call, so no orphan empty
+     * folders are left under a folder-mode backup's chosen root.
+     *
+     * <p><b>Scope</b> — only acts when both are true:
+     * <ul>
+     *   <li>{@code entry.getRelPath() != null} — i.e. a folder-mode scan
+     *       ({@link #scanFolderByPath} / {@link #walkAllFilesTree}) that recorded the
+     *       file's path relative to the chosen root. All-media scans
+     *       ({@link #scanAllMedia}, {@code relPath == null}) are skipped — walking up
+     *       from those could reach shared system directories (e.g. {@code DCIM/Camera}).</li>
+     *   <li>{@code entry.getSourceUri()} has scheme {@code "file"} — SAF
+     *       ({@code content://}) folder scans ({@link #scanFolder}) are skipped because
+     *       {@code DocumentFile.fromSingleUri()} cannot walk to a parent directory.</li>
+     * </ul>
+     *
+     * <p><b>Root boundary</b> — for in-scope entries, {@code displayPath} is the absolute
+     * filesystem path and always ends with {@code relPath} (set by
+     * {@link #walkAllFilesTree}), so the backup root is recovered by stripping the
+     * trailing {@code relPath} (and separator) from {@code displayPath}. The root
+     * directory itself is never deleted, and the walk never proceeds above it.
+     *
+     * <p>Never throws — every outcome is logged via {@code Log.d}/{@code Log.w}.
+     *
+     * @param entry The just-deleted file's entry.
+     */
+    public void deleteEmptyParentFolders(@NonNull BackupFileEntry entry) {
+        String relPath = entry.getRelPath();
+        if (relPath == null || relPath.isEmpty()) {
+            Log.d(TAG, "deleteEmptyParentFolders: skipping (no relPath) — "
+                    + entry.getDisplayPath());
+            return;
+        }
+
+        String sourceUriStr = entry.getSourceUri();
+        Uri uri;
+        try {
+            uri = Uri.parse(sourceUriStr);
+        } catch (Exception e) {
+            Log.w(TAG, "deleteEmptyParentFolders: invalid sourceUri " + sourceUriStr);
+            return;
+        }
+        if (!"file".equals(uri.getScheme())) {
+            Log.d(TAG, "deleteEmptyParentFolders: skipping non-file URI — " + sourceUriStr);
+            return;
+        }
+
+        String displayPath = entry.getDisplayPath();
+        if (displayPath == null || !displayPath.endsWith(relPath)) {
+            Log.w(TAG, "deleteEmptyParentFolders: displayPath does not end with relPath — "
+                    + "displayPath=" + displayPath + ", relPath=" + relPath);
+            return;
+        }
+
+        String rootPath = displayPath.substring(0, displayPath.length() - relPath.length());
+        if (rootPath.endsWith("/")) {
+            rootPath = rootPath.substring(0, rootPath.length() - 1);
+        }
+        if (rootPath.isEmpty()) {
+            Log.w(TAG, "deleteEmptyParentFolders: derived empty root for displayPath="
+                    + displayPath);
+            return;
+        }
+        File root = new File(rootPath);
+        String rootAbs = root.getAbsolutePath();
+
+        File dir = new File(displayPath).getParentFile();
+        while (dir != null
+                && !dir.getAbsolutePath().equals(rootAbs)
+                && dir.getAbsolutePath().startsWith(rootAbs + File.separator)) {
+
+            String[] children = dir.list();
+            if (children == null || children.length > 0) {
+                // Non-empty (or unreadable) — stop walking up.
+                break;
+            }
+
+            File parent = dir.getParentFile();
+            boolean deleted = dir.delete();
+            Log.d(TAG, "deleteEmptyParentFolders: "
+                    + (deleted ? "removed empty folder " : "failed to remove ") + dir);
+            if (!deleted) break;
+
+            dir = parent;
         }
     }
 

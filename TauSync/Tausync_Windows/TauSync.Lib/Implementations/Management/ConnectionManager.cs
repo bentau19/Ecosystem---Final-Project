@@ -57,8 +57,10 @@ namespace TauSync.Implementations.Management
             if (_disposed || !IsConnected()) {
                     return;
             }
-            _wifiTransport.Disconnect();
-
+            _wifiTransport!.Disconnect();
+            // Tear down routing/discovery state when the session ends so it cannot leak
+            // into a later reconnect (matches the Reset() done on InitializeTransports).
+            ConnectionContext.Instance.Reset();
         }
 
         /// <inheritdoc />
@@ -143,7 +145,11 @@ namespace TauSync.Implementations.Management
             timeoutCts.Token.Register(() => attempt.ResponseTcs.TrySetException(new TimeoutException("Handshake timeout.")));
 
             Task<Stream> streamFromOwnRequest = WaitForOkAndBuildStreamAsync(attempt.ResponseTcs.Task, ctx, attempt.LocalId, attempt.BackStream);
-            Task<Stream> streamFromPeerRequest = channel.Reader.ReadAsync(CancellationToken.None).AsTask();
+            // The peer path must honour the handshake timeout too: without the token it would
+            // wait on the channel forever if the peer never sends a matching REQ. This is the
+            // primary path for the TCP-server side (preferOwnPath == false), so an untimed read
+            // here means Connect() could hang indefinitely despite the caller's timeout.
+            Task<Stream> streamFromPeerRequest = ReadPeerStreamAsync(channel, timeoutCts.Token);
 
             bool preferOwnPath = !ctx.IsTransportServerMode;
 
@@ -169,6 +175,23 @@ namespace TauSync.Implementations.Management
             catch
             {
                 return await streamFromOwnRequest.ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Awaits the peer-initiated stream from the word channel, honouring the handshake
+        /// timeout. A cancelled read (timeout) is surfaced as <see cref="TimeoutException"/>
+        /// so both race paths fail with the same exception type.
+        /// </summary>
+        private static async Task<Stream> ReadPeerStreamAsync(Channel<Stream> channel, CancellationToken ct)
+        {
+            try
+            {
+                return await channel.Reader.ReadAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new TimeoutException("Handshake timeout.");
             }
         }
 

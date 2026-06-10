@@ -11,8 +11,7 @@ from views.widgets.navigation.item import NavigationItem
 
 
 class NavigationContainer(QWidget):
-    """
-    A QWidget that contains the application's navigation items.
+    """A QWidget that contains the application's navigation items.
 
     The container displays a section label and multiple navigation
     items, managing which item is currently active.
@@ -22,7 +21,7 @@ class NavigationContainer(QWidget):
         """Initialize the navigation container.
 
         Args:
-            parent (Optional[QWidget]): Parent widget, defaults to None.
+            parent: Optional parent widget. Defaults to ``None``.
         """
         super().__init__(parent)
 

@@ -261,7 +261,7 @@ public class TauSyncTransportManager implements TransportManager {
         if (tauSync != null && status == TransportStatus.CONNECTED) {
             String data = NetworkHandler.readFromChannel(tauSync, channel);
             Log.v(TAG, "Read from channel [" + channel + "]: " + data);
-            return data != null ? data : "";
+            return data;
         }
         throw new IllegalStateException("Cannot read from channel [" + channel + "]: Not connected");
     }
@@ -329,6 +329,52 @@ public class TauSyncTransportManager implements TransportManager {
             }
             out.flush();
             Log.d(TAG, "Streamed " + totalBytes + " bytes in " + chunkCount + " chunks to [" + channel + "]");
+        }
+    }
+
+    /**
+     * Opens a single TauSync channel, writes UTF-8 metadata + {@code '\n'}, then
+     * streams all bytes from {@code inputStream} before closing the channel.
+     *
+     * <p>A single {@code tauSync.connect(channel)} is used for both the metadata write
+     * and the binary stream, avoiding the 2-second ID-recycling grace period that would
+     * result from two consecutive {@code connect()} calls on the same channel name.
+     *
+     * <p>The PC reads up to the first {@code '\n'} to obtain the JSON metadata, then
+     * treats the remainder of the stream as raw file bytes.
+     */
+    @Override
+    public void writeMetadataThenStreamToChannel(String channel,
+                                                 String metadata,
+                                                 java.io.InputStream inputStream) throws Exception {
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException(
+                    "Cannot write to channel [" + channel + "]: Not connected");
+        }
+
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
+                     tauSync.connect(channel)) {
+            java.io.OutputStream out = stream.getOutputStream();
+
+            // ── 1. Metadata line ──────────────────────────────────────────────
+            byte[] metaBytes = (metadata + "\n")
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            out.write(metaBytes);
+
+            // ── 2. Raw file bytes ─────────────────────────────────────────────
+            byte[] buf = new byte[FILE_CHUNK_SIZE];
+            int n;
+            long totalBytes = 0;
+            int chunkCount = 0;
+            while ((n = inputStream.read(buf, 0, buf.length)) > 0) {
+                out.write(buf, 0, n);
+                totalBytes += n;
+                chunkCount++;
+            }
+            out.flush();
+            Log.d(TAG, "writeMetadataThenStreamToChannel [" + channel + "]: meta="
+                    + metaBytes.length + "B + data=" + totalBytes
+                    + "B in " + chunkCount + " chunks");
         }
     }
 

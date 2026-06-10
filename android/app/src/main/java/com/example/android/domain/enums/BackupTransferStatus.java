@@ -22,8 +22,14 @@ public enum BackupTransferStatus {
     /** Files are currently being sent to the PC one by one. */
     SENDING,
 
+    /** Transfer suspended by the user; can be resumed. */
+    PAUSED,
+
     /** All files sent successfully. */
     COMPLETED,
+
+    /** Transfer was intentionally stopped by the user (phone notification or PC cancel). */
+    STOPPED,
 
     /** Transfer failed due to a network error, PC rejection, or I/O error. */
     FAILED

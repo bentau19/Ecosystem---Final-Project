@@ -1,13 +1,8 @@
-"""
-Device-info service.
-
-Reads device metadata from TauSync named channels on a background thread
-and emits a fully-populated DeviceEntity so the ViewModel can persist and
-display it without touching the network layer directly.
-"""
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
@@ -16,6 +11,8 @@ from domain.entities.device_info import DeviceEntity
 from domain.enums.device_info_channels import DeviceInfoChannels
 from repositories.device import DeviceRepository
 from services.connectivity import ConnectivityService
+# Imported for its side effect of binding the `network` submodule onto the
+# `utils` package object so `utils.network.*` below resolves correctly.
 from utils import network
 
 
@@ -27,23 +24,32 @@ class DeviceInfoService(QObject):
     repository (to guarantee UUID uniqueness when the remote device has no
     previously assigned ID).
 
-    All channel reads run on a background :class:`threading.Thread` via the
-    ``@threaded`` decorator so the UI thread is never blocked. PySide6's queued
+    All channel reads run on a background :class:`threading.Thread` spawned
+    via :meth:`_spawn` so the UI thread is never blocked. PySide6's queued
     connection mechanism ensures ``Signal.emit()`` from that thread is safe.
 
     Signals:
         device_info_ready (Signal[object]): Emitted with a fully-populated
             :class:`~entities.device_info.DeviceEntity` once all channel reads
             complete successfully.
+        device_saved (Signal[object]): Emitted with the
+            :class:`~domain.entities.device_info.DeviceEntity` after
+            :meth:`save` writes it to the repository.
         read_error (Signal[str]): Emitted with the exception message string if
             any channel read raises an exception.
+        device_fetched (Signal[object]): Emitted with the
+            :class:`~domain.entities.device_info.DeviceEntity` matching a
+            :meth:`fetch_device_by_id` lookup, or ``None`` if not found.
+        all_devices_fetched (Signal[list]): Emitted with
+            ``list[DeviceEntity]`` when :meth:`fetch_all_devices` completes.
     """
 
-    device_info_ready = Signal(object)
-    device_saved = Signal(object)
-    read_error = Signal(str)
-    device_fetched = Signal(object)  # DeviceEntity | None
-    all_devices_fetched = Signal(list)  # list[DeviceEntity]
+    device_info_ready: Signal = Signal(object)
+    device_saved: Signal = Signal(object)
+    read_error: Signal = Signal(str)
+    device_fetched: Signal = Signal(object)  # DeviceEntity | None
+    all_devices_fetched: Signal = Signal(list)  # list[DeviceEntity]
+    _CHANNEL_TIMEOUT: int = 30  # seconds to wait for each device-info channel
 
     def __init__(
             self,
@@ -67,11 +73,9 @@ class DeviceInfoService(QObject):
         self._connectivity: ConnectivityService = connectivity
         self._device_repository: DeviceRepository = repository
 
-        self._threads: list[threading.Thread] = []
-
+        self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
         self._lifecycle_lock: threading.Lock = threading.Lock()
         self._is_running: threading.Event = threading.Event()
-        self._threads_lock: threading.Lock = threading.Lock()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -147,33 +151,27 @@ class DeviceInfoService(QObject):
 
     # ── Private helpers ────────────────────────────────────────────────────────
 
-    def _spawn(self, target, *args) -> None:
-        # Reject new spawns during teardown to avoid work after _is_running is cleared.
+    def _spawn(self, target: Callable[..., None], *args: Any) -> None:
+        # Reject new submissions during teardown.
         if not self._is_running.is_set():
             return
-        t = threading.Thread(target=target, args=args, daemon=True)
-        with self._threads_lock:
-            self._threads.append(t)
-        t.start()
+        self._executor.submit(target, *args)
 
     def _start(self) -> None:
         # Guard against double-start with the lifecycle lock.
         with self._lifecycle_lock:
             if self._is_running.is_set():
                 return
+            self._executor = ThreadPoolExecutor()
             self._is_running.set()
 
     def _stop(self) -> None:
-        # Join every worker except the calling thread to avoid a deadlock.
+        # Clear the running flag then wait for all submitted work to finish.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            pending_threads: list[threading.Thread] = self._get_pending_threads()
-            for t in pending_threads:
-                if t == threading.current_thread():
-                    continue
-                t.join()
+        self._executor.shutdown(wait=True, cancel_futures=True)
 
     def _save(self, entity: DeviceEntity) -> None:
         # Persist entity via repository, then emit both the saved signal and
@@ -192,13 +190,6 @@ class DeviceInfoService(QObject):
         # Retrieve the full device list and emit it for the ViewModel to consume.
         devices = self._device_repository.get_all()
         self.all_devices_fetched.emit(devices)
-
-    def _get_pending_threads(self) -> list[threading.Thread]:
-        # Snapshot alive threads under the lock so callers can join without holding it.
-        with self._threads_lock:
-            return [t for t in self._threads if t.is_alive()]
-
-    _CHANNEL_TIMEOUT: int = 30  # seconds to wait for each device-info channel
 
     def _get_device_info(self) -> None:
         # Read all device channels in parallel, build the entity, persist, and emit.

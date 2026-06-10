@@ -8,21 +8,19 @@ import androidx.lifecycle.LiveData;
 import androidx.lifecycle.ViewModel;
 
 import com.example.android.domain.entities.BackupFileEntry;
+import com.example.android.domain.entities.BackupOptions;
 import com.example.android.domain.enums.BackupScanStatus;
-import com.example.android.domain.enums.BackupTransferStatus;
 import com.example.android.domain.usecases.ScanBackupFilesUseCase;
 import com.example.android.repositories.BackupRepository;
-
-import java.util.List;
 
 /**
  * ViewModel for the backup feature.
  *
  * <p>Responsibilities:
  * <ul>
- *   <li>Exposes scan status and scanned file list as LiveData for
- *       {@link com.example.android.ui.fragments.BackupFragment} to observe.</li>
- *   <li>Translates user actions (Start Backup) into {@link BackupRepository} calls.</li>
+ *   <li>Translates the user's Start Backup tap into a {@link BackupRepository} scan
+ *       request — the repository owns the scan→transfer handoff and all progress
+ *       state from this point on (see {@link BackupRepository#onScanComplete}).</li>
  *   <li>Owns the background thread that runs {@link ScanBackupFilesUseCase}.</li>
  * </ul>
  *
@@ -53,43 +51,15 @@ public class BackupViewModel extends ViewModel {
                 executeScanOnBackgroundThread(mode, folderUri));
     }
 
-    // ── Scan observables ──────────────────────────────────────────────────────
+    // ── Observables (for Fragment) ────────────────────────────────────────────
 
     /**
-     * @return Current scan lifecycle state; observe in Fragment to drive progress UI.
+     * Forwards the repository's scan-lifecycle LiveData so {@link
+     * com.example.android.ui.fragments.BackupFragment} can observe it without
+     * holding a direct reference to the repository.
      */
     public LiveData<BackupScanStatus> getScanStatus() {
         return repository.getScanStatus();
-    }
-
-    /**
-     * @return The list of scanned files; only populated when status is {@code READY}.
-     */
-    public LiveData<List<BackupFileEntry>> getScannedFiles() {
-        return repository.getScannedFiles();
-    }
-
-    // ── Transfer observables ──────────────────────────────────────────────────
-
-    /**
-     * @return Current backup transfer lifecycle state; observe to drive in-app progress UI.
-     */
-    public LiveData<BackupTransferStatus> getTransferStatus() {
-        return repository.getTransferStatus();
-    }
-
-    /**
-     * @return Number of files successfully sent so far in the current batch.
-     */
-    public LiveData<Integer> getTransferSent() {
-        return repository.getTransferSent();
-    }
-
-    /**
-     * @return Total number of files in the current backup batch.
-     */
-    public LiveData<Integer> getTransferTotal() {
-        return repository.getTransferTotal();
     }
 
     // ── User actions ──────────────────────────────────────────────────────────
@@ -98,51 +68,22 @@ public class BackupViewModel extends ViewModel {
      * Initiates a backup scan for the given mode.
      *
      * <p>Transitions the repository to SCANNING, then spawns a background thread
-     * to run {@link ScanBackupFilesUseCase}.  Results are posted back via LiveData.
+     * to run {@link ScanBackupFilesUseCase}.  When the scan completes, the
+     * repository itself auto-triggers the transfer phase using {@code options}
+     * (see {@link BackupRepository#onScanComplete}) — the Fragment that called
+     * this method has typically already returned to the main screen by then.
      *
      * @param mode      {@link ScanBackupFilesUseCase#MODE_ALL_MEDIA} or
      *                  {@link ScanBackupFilesUseCase#MODE_FOLDER}.
      * @param folderUri SAF tree URI — required when {@code mode == MODE_FOLDER};
      *                  pass {@code null} for {@code MODE_ALL_MEDIA}.
+     * @param options   User-configured backup options, forwarded to the transfer
+     *                  phase once the scan finishes.
      */
-    public void startScan(String mode, @Nullable Uri folderUri) {
-        Log.d(TAG, "startScan: mode=" + mode);
-        repository.requestScan(mode, folderUri);
+    public void startScan(String mode, @Nullable Uri folderUri, BackupOptions options) {
+        Log.d(TAG, "startScan: mode=" + mode + " options=" + options);
+        repository.requestScan(mode, folderUri, options);
         // requestScan fires actionListener → executeScanOnBackgroundThread
-    }
-
-    /**
-     * Starts transferring the scanned file list to the connected PC.
-     *
-     * <p>Must be called after the scan reaches {@link BackupScanStatus#READY}.
-     * Delegates to {@link BackupRepository#requestTransfer}, which fires the
-     * {@code TransferActionListener} registered by {@code ConnectivityService}.
-     * Progress is reported back via {@link #getTransferSent()} / {@link #getTransferTotal()}.
-     */
-    public void startTransfer() {
-        List<BackupFileEntry> files = repository.getScannedFiles().getValue();
-        if (files == null || files.isEmpty()) {
-            Log.w(TAG, "startTransfer: no scanned files available");
-            return;
-        }
-        Log.d(TAG, "startTransfer: " + files.size() + " files");
-        repository.requestTransfer(files);
-    }
-
-    /**
-     * Resets scan repository to IDLE — call after the Fragment has acknowledged the
-     * terminal scan state (READY / FAILED) and is ready for the next scan.
-     */
-    public void reset() {
-        repository.reset();
-    }
-
-    /**
-     * Resets transfer repository to IDLE — call after the Fragment has acknowledged
-     * COMPLETED or FAILED.
-     */
-    public void resetTransfer() {
-        repository.resetTransfer();
     }
 
     // ── Private ───────────────────────────────────────────────────────────────

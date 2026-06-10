@@ -1,0 +1,147 @@
+/* ── Backup confidence review dialog ───────────────────────────────────────
+   Tokens resolved via BackupClassificationReviewColors / LightBackupClassificationReviewColors:
+     {{BACKGROUND}}      — dialog body surface
+     {{BORDER}}          — dialog border + dividers
+     {{TEXT_PRIMARY}}    — heading / filename text
+     {{TEXT_SECONDARY}}  — subtitle / meta text
+     {{KEEP_BG}}         — Keep button active background
+     {{KEEP_BORDER}}     — Keep button border
+     {{KEEP_TEXT}}       — Keep button text
+     {{KEEP_ALL_BG}}     — Keep All button hover/pressed background
+     {{KEEP_ALL_BORDER}} — Keep All button border
+     {{KEEP_ALL_TEXT}}   — Keep All button text
+     {{REMOVE_BG}}       — Remove button active background
+     {{REMOVE_BORDER}}   — Remove button border
+     {{REMOVE_TEXT}}     — Remove button text
+     {{ICON_BG}}         — thumbnail-fallback circle background
+     {{ICON_BORDER}}     — thumbnail-fallback circle border
+     {{ICON_TEXT}}       — thumbnail-fallback text
+     {{WARNING_TEXT}}    — "needs review" confidence badge text
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Dialog body */
+QDialog#BackupClassificationReviewDialog {
+    background-color: {{BACKGROUND}};
+    border: 1px solid {{BORDER}};
+    border-radius: 12px;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────────── */
+
+QWidget#ReviewHeader {
+    background-color: {{BACKGROUND}};
+}
+
+QLabel#HeaderIcon {
+    background-color: {{ICON_BG}};
+    border: 1px solid {{ICON_BORDER}};
+    border-radius: 20px;
+    color: {{ICON_TEXT}};
+    font-size: 20px;
+    font-weight: 700;
+}
+
+QLabel#HeaderTitle {
+    color: {{TEXT_PRIMARY}};
+    font-size: 16px;
+    font-weight: 600;
+    background: transparent;
+}
+
+QLabel#HeaderSubtitle {
+    color: {{WARNING_TEXT}};
+    font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+}
+
+/* ── Dividers ─────────────────────────────────────────────────────────────── */
+
+QFrame#ReviewDivider {
+    background-color: {{BORDER}};
+    border: none;
+}
+
+/* ── Preview ──────────────────────────────────────────────────────────────── */
+
+QLabel#FileThumb {
+    background: transparent;
+    border: none;
+}
+
+QLabel#FileThumbFallback {
+    background-color: {{ICON_BG}};
+    border: 1px solid {{ICON_BORDER}};
+    border-radius: 8px;
+    color: {{ICON_TEXT}};
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+QLabel#FileName {
+    color: {{TEXT_PRIMARY}};
+    font-size: 14px;
+    font-weight: 600;
+    background: transparent;
+}
+
+QLabel#FileMeta {
+    color: {{TEXT_SECONDARY}};
+    font-size: 12px;
+    background: transparent;
+}
+
+/* ── Footer ───────────────────────────────────────────────────────────────── */
+
+QPushButton#KeepButton,
+QPushButton#KeepAllButton,
+QPushButton#RemoveButton {
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    outline: none;
+    padding: 0px 16px;
+}
+
+QPushButton#KeepButton {
+    background-color: {{KEEP_BG}};
+    border: 1px solid {{KEEP_BORDER}};
+    color: {{KEEP_TEXT}};
+}
+
+QPushButton#KeepButton:hover {
+    border-color: {{KEEP_TEXT}};
+}
+
+QPushButton#KeepButton:pressed {
+    background-color: {{KEEP_BG}};
+}
+
+QPushButton#KeepAllButton {
+    background-color: transparent;
+    border: 1px solid {{KEEP_ALL_BORDER}};
+    color: {{KEEP_ALL_TEXT}};
+}
+
+QPushButton#KeepAllButton:hover {
+    background-color: {{KEEP_ALL_BG}};
+}
+
+QPushButton#KeepAllButton:pressed {
+    background-color: {{KEEP_ALL_BG}};
+}
+
+QPushButton#RemoveButton {
+    background-color: transparent;
+    border: 1px solid {{REMOVE_BORDER}};
+    color: {{REMOVE_TEXT}};
+}
+
+QPushButton#RemoveButton:hover {
+    background-color: {{REMOVE_BG}};
+}
+
+QPushButton#RemoveButton:pressed {
+    background-color: {{REMOVE_BG}};
+}

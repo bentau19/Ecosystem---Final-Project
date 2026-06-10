@@ -68,7 +68,27 @@ namespace TauSync.Implementations.Management
                 throw new InvalidOperationException("Transport already connected.");
             if (_wifiTransport == null)
                 throw new InvalidOperationException("Not initialized.");
-            await _wifiTransport.Connect(targetId, timeoutSeconds).ConfigureAwait(false);     
+            // Clear any routing/discovery state left over from a previous session before
+            // re-establishing. Without this, stale handlers, pending REQs, and recycled IDs
+            // from the prior connection get replayed onto the new session's frames.
+            Reset();
+            await _wifiTransport.Connect(targetId, timeoutSeconds).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Clears all routing, target, service, and discovery state accumulated during a session,
+        /// and resets the ID counter. Called before re-establishing a connection so that stale
+        /// handlers and pending discovery frames from a previous session are not replayed on the
+        /// new session. Mirrors the Java <c>ConnectionContext.reset()</c>.
+        /// </summary>
+        public void Reset()
+        {
+            _routingMap.Clear();
+            _targetMap.Clear();
+            _serviceRegistry.Clear();
+            _pendingDiscoveryByWord.Clear();
+            _releasedIds.Clear();
+            Interlocked.Exchange(ref _nextCorrelationId, MinId);
         }
 
         public ITransport? GetWifiTransport() => _wifiTransport as ITransport;

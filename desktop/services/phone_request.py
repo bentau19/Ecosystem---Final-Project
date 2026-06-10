@@ -1,14 +1,11 @@
-"""
-Phone request service.
-
-Dispatches incoming TauSync channel requests to registered operation
-handlers on a background thread.
-"""
 import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from time import sleep
-from typing import Callable
+from typing import Any
 
 from services.connectivity import ConnectivityService
+from services.file_transfer import FileTransferService
 from domain.enums.file_transfer_channels import FileTransferChannels
 from domain.enums.session_channels import SessionChannels
 
@@ -25,7 +22,11 @@ class PhoneRequestService:
             callers before :meth:`start` is invoked.
     """
 
-    def __init__(self, connectivity_service: ConnectivityService, file_transfer_service) -> None:
+    def __init__(
+            self,
+            connectivity_service: ConnectivityService,
+            file_transfer_service: FileTransferService,
+    ) -> None:
         """Initialize the service with the shared connectivity service.
 
         Args:
@@ -33,12 +34,15 @@ class PhoneRequestService:
                 :class:`~services.connectivity.ConnectivityService` instance.
                 ``connectivity_service.tau`` is read at call-time so reconnects
                 are handled transparently.
+            file_transfer_service: The application's shared
+                :class:`~services.file_transfer.FileTransferService` instance,
+                whose :meth:`~services.file_transfer.FileTransferService.receive_metadata`
+                is registered as the handler for incoming file-transfer requests.
         """
         self._connectivity: ConnectivityService = connectivity_service
-        self._threads: list[threading.Thread] = []
+        self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
         self._is_running: threading.Event = threading.Event()
         self._lifecycle_lock: threading.Lock = threading.Lock()
-        self._threads_lock: threading.Lock = threading.Lock()
 
         self.operations: dict[str, Callable[[], None]] = {
             FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC.value: file_transfer_service.receive_metadata,
@@ -60,36 +64,25 @@ class PhoneRequestService:
         with self._lifecycle_lock:
             if self._is_running.is_set():
                 return
+            self._executor = ThreadPoolExecutor()
             self._is_running.set()
             self._spawn(self._listen_to_channels)
 
     def _stop(self) -> None:
-        # Join every worker except the calling thread to avoid a deadlock.
+        # Clear the running flag then wait for all submitted work to finish.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            pending_threads: list[threading.Thread] = self._get_pending_threads()
-            for t in pending_threads:
-                if t == threading.current_thread():
-                    continue
-                t.join()
+        self._executor.shutdown(wait=True, cancel_futures=True)
 
     # ── Private lifecycle ──────────────────────────────────────────────────────
 
-    def _spawn(self, target, *args) -> None:
-        # Reject new spawns during teardown to avoid work after _is_running is cleared.
+    def _spawn(self, target: Callable[..., None], *args: Any) -> None:
+        # Reject new submissions during teardown.
         if not self._is_running.is_set():
             return
-        t = threading.Thread(target=target, args=args, daemon=True)
-        with self._threads_lock:
-            self._threads.append(t)
-        t.start()
-
-    def _get_pending_threads(self) -> list[threading.Thread]:
-        # Snapshot alive threads under the lock so callers can join without holding it.
-        with self._threads_lock:
-            return [t for t in self._threads if t.is_alive()]
+        self._executor.submit(target, *args)
 
     def _listen_to_channels(self) -> None:
         # Block until a device is connected, then dispatch each waiting channel to its handler.

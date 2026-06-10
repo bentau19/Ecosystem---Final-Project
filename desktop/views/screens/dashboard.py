@@ -84,7 +84,7 @@ class DashboardScreen(QWidget):
         root_layout.addWidget(right_panel)
 
     def _connect_signals(self) -> None:
-        """Wire device ViewModel signals to the loading overlay."""
+        # Wire device ViewModel signals to the loading overlay.
         vm = app_state.device_viewmodel
         # Stop the device-info overlay once fresh data arrives — guarded so a
         # stale queued update cannot kill the "Disconnecting…" overlay.
@@ -98,19 +98,16 @@ class DashboardScreen(QWidget):
 
     @Slot(object)
     def _on_device_infos_updated(self, infos: list[DeviceInfoDTO]) -> None:
-        """Stop the loading overlay only when not in the middle of a disconnect.
-
-        A queued ``device_infos_updated`` from the ``showEvent`` fetch could
-        arrive after ``device_disconnecting`` starts the logout overlay.  The
-        ``_is_disconnecting`` flag blocks that race.
-        """
-
+        # Stop the loading overlay only when not in the middle of a disconnect.
+        # A queued device_infos_updated from the showEvent fetch could arrive
+        # after device_disconnecting starts the logout overlay; the
+        # _is_disconnecting flag blocks that race.
         if not self._is_disconnecting:
             self._loading_overlay.stop()
 
     @Slot()
     def _on_device_disconnecting(self) -> None:
-        """Activate the logout overlay and arm the disconnect guard."""
+        # Activate the logout overlay and arm the disconnect guard.
         self._is_disconnecting = True
         self._loading_overlay.start("Disconnecting…")
 

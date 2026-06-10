@@ -244,6 +244,32 @@ public class AppNotificationManager {
 
     // ── Backup transfer progress notifications ────────────────────────────────
 
+    /** Action: pause the in-progress backup transfer (sent to {@code ConnectivityService}). */
+    public static final String ACTION_BACKUP_PAUSE = "com.example.android.ACTION_BACKUP_PAUSE";
+
+    /** Action: resume a paused backup transfer (sent to {@code ConnectivityService}). */
+    public static final String ACTION_BACKUP_RESUME = "com.example.android.ACTION_BACKUP_RESUME";
+
+    /** Action: stop the backup transfer immediately, no confirmation (sent to {@code ConnectivityService}). */
+    public static final String ACTION_BACKUP_STOP = "com.example.android.ACTION_BACKUP_STOP";
+
+    /**
+     * Builds a {@link PendingIntent} that starts {@code ConnectivityService} with the
+     * given action — used for the Pause/Resume/Stop notification action buttons.
+     *
+     * @param action      One of {@link #ACTION_BACKUP_PAUSE}, {@link #ACTION_BACKUP_RESUME},
+     *                    {@link #ACTION_BACKUP_STOP}.
+     * @param requestCode Distinct request code so the three PendingIntents don't collide.
+     */
+    private PendingIntent buildBackupControlPendingIntent(String action, int requestCode) {
+        Intent intent = new Intent(context, ConnectivityService.class);
+        intent.setAction(action);
+        return PendingIntent.getService(
+                context, requestCode, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+    }
+
     /**
      * Shows (or updates) the sticky backup progress notification.
      *
@@ -251,7 +277,7 @@ public class AppNotificationManager {
      * known upfront when the backup transfer starts.
      *
      * <p>This notification is <b>ongoing</b> (the user cannot swipe it away while
-     * the transfer is in progress).
+     * the transfer is in progress). Includes Pause and Stop actions.
      *
      * @param sent  Number of files successfully transferred so far.
      * @param total Total number of files in this backup batch.
@@ -266,6 +292,8 @@ public class AppNotificationManager {
                 .setProgress(total, sent, false)   // determinate bar — total is always known
                 .setOngoing(true)                  // sticky: user cannot dismiss mid-backup
                 .setPriority(NotificationCompat.PRIORITY_LOW)
+                .addAction(0, "Pause", buildBackupControlPendingIntent(ACTION_BACKUP_PAUSE, 10))
+                .addAction(0, "Stop", buildBackupControlPendingIntent(ACTION_BACKUP_STOP, 11))
                 .build();
 
         if (notificationManager != null) {
@@ -274,19 +302,56 @@ public class AppNotificationManager {
     }
 
     /**
-     * Replaces the progress notification with a brief auto-cancelling completion notice.
+     * Shows (or updates) the sticky backup notification while the transfer is paused.
      *
-     * @param total Total number of files that were backed up.
+     * <p>Same progress bar as {@link #showBackupProgressNotification(int, int)} but the
+     * primary action reads "Resume" instead of "Pause"; Stop is still available.
+     *
+     * @param sent  Number of files successfully transferred so far.
+     * @param total Total number of files in this backup batch.
      */
-    public void showBackupCompleteNotification(int total) {
-        String contentText = total + " files sent";
+    public void showBackupPausedNotification(int sent, int total) {
+        String contentText = sent + " / " + total + " files — Paused";
+
+        Notification notification = new NotificationCompat.Builder(context, BACKUP_PROGRESS_CHANNEL_ID)
+                .setContentTitle(context.getString(R.string.backup_notif_progress_title))
+                .setContentText(contentText)
+                .setSmallIcon(R.drawable.ic_backup)
+                .setProgress(total, sent, false)
+                .setOngoing(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .addAction(0, "Resume", buildBackupControlPendingIntent(ACTION_BACKUP_RESUME, 12))
+                .addAction(0, "Stop", buildBackupControlPendingIntent(ACTION_BACKUP_STOP, 11))
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(BACKUP_PROGRESS_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Replaces the sticky progress notification with a brief auto-cancelling
+     * one-time completion summary — "Backup completed / Backup successful: X items"
+     * and, if any files errored, "... Had an error with: Y files".
+     *
+     * <p>This is the only in-app feedback the user gets on success, since
+     * {@code BackupFragment} returns to the dashboard immediately after the
+     * transfer is kicked off.
+     *
+     * @param succeeded Number of files backed up without a reported error.
+     * @param failed    Number of files the PC reported as transfer failures
+     *                  (see {@link com.example.android.repositories.BackupRepository#getFailedCount()}).
+     */
+    public void showBackupCompleteNotification(int succeeded, int failed) {
+        String contentText = (failed > 0)
+                ? context.getString(R.string.backup_notif_complete_with_errors_format, succeeded, failed)
+                : context.getString(R.string.backup_notif_complete_text_format, succeeded);
 
         Notification notification = new NotificationCompat.Builder(context, BACKUP_PROGRESS_CHANNEL_ID)
                 .setContentTitle(context.getString(R.string.backup_notif_complete_title))
                 .setContentText(contentText)
                 .setSmallIcon(R.drawable.ic_backup)
-                .setAutoCancel(true)
-                .setTimeoutAfter(5_000)   // auto-dismiss after 5 seconds
+                .setAutoCancel(true)      // tap to dismiss
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .build();
 
@@ -296,8 +361,66 @@ public class AppNotificationManager {
     }
 
     /**
-     * Dismisses the backup progress / result notification.
-     * Called on transfer failure (error is shown in-app via Toast instead).
+     * Replaces the sticky progress notification with a brief auto-cancelling
+     * "Backup failed" notice. Used for both transfer failures (network/IO error
+     * mid-transfer) and scan failures (could not enumerate files) — the only
+     * feedback available since {@code BackupFragment} is no longer on screen.
+     */
+    public void showBackupFailedNotification() {
+        Notification notification = new NotificationCompat.Builder(context, BACKUP_PROGRESS_CHANNEL_ID)
+                .setContentTitle(context.getString(R.string.backup_notif_failed_title))
+                .setContentText(context.getString(R.string.backup_notif_failed_text))
+                .setSmallIcon(R.drawable.ic_backup)
+                .setAutoCancel(true)      // tap to dismiss
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(BACKUP_PROGRESS_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Replaces the sticky progress notification with a persistent
+     * "Backup failed" notice, specifically for scan-phase failures (could not
+     * enumerate files — e.g. missing storage permissions).
+     */
+    public void showBackupScanFailedNotification() {
+        Notification notification = new NotificationCompat.Builder(context, BACKUP_PROGRESS_CHANNEL_ID)
+                .setContentTitle(context.getString(R.string.backup_notif_failed_title))
+                .setContentText(context.getString(R.string.backup_notif_scan_failed_text))
+                .setSmallIcon(R.drawable.ic_backup)
+                .setAutoCancel(true)      // tap to dismiss
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(BACKUP_PROGRESS_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Replaces the sticky progress notification with a persistent
+     * "Backup stopped" notice — shown when the user stops the transfer via the
+     * progress notification's Stop action.
+     */
+    public void showBackupStoppedNotification() {
+        Notification notification = new NotificationCompat.Builder(context, BACKUP_PROGRESS_CHANNEL_ID)
+                .setContentTitle(context.getString(R.string.backup_notif_stopped_title))
+                .setContentText(context.getString(R.string.backup_notif_stopped_text))
+                .setSmallIcon(R.drawable.ic_backup)
+                .setAutoCancel(true)      // tap to dismiss
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(BACKUP_PROGRESS_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Dismisses the backup progress / result notification outright (no replacement
+     * notice). Reserved for cases where no further user feedback is appropriate.
      */
     public void dismissBackupProgressNotification() {
         if (notificationManager != null) {

@@ -32,9 +32,8 @@ class Topbar(QWidget):
         """Initialize the Topbar.
 
         Args:
-            topbar_height (int): Height of the topbar. Defaults to 72.
-            parent (Optional[QWidget], optional): Optional parent widget.
-                                                  Defaults to None.
+            topbar_height: Height of the topbar in pixels. Defaults to 72.
+            parent: Optional parent widget, defaults to ``None``.
         """
         super().__init__(parent)
 
@@ -129,6 +128,8 @@ class Topbar(QWidget):
         navigation_manager.go_to_screen(Screen.LOGIN)
 
     @Slot(object)
-    def _update_device_info(self, infos: list[DeviceInfoDTO]):
+    def _update_device_info(self, infos: list[DeviceInfoDTO]) -> None:
+        # The name card is always first in the list returned by
+        # DeviceViewModel._to_device_info_dtos.
         name: DeviceNameDTO = infos[0]
         self._subtitle_label.setText(f"{name.name}")

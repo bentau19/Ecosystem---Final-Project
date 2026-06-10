@@ -34,6 +34,22 @@ public interface ChannelHandler {
     void onPeerRequest();
 
     /**
+     * Called with the exact peer channel name that triggered dispatch.
+     *
+     * <p>Used by prefix-matched handlers (e.g. {@code BackupReceivedChannelHandler}
+     * registered under {@code "backup_file_result_"}) that need the full channel name
+     * to extract a dynamic suffix (e.g. the slot index).
+     *
+     * <p>Default implementation delegates to {@link #onPeerRequest()} so all existing
+     * handlers require <b>zero changes</b>.
+     *
+     * @param channel The exact channel name as returned by {@code getPeerWaitingWords()}.
+     */
+    default void onPeerRequest(String channel) {
+        onPeerRequest();
+    }
+
+    /**
      * Called when the handler should clean up resources.
      * This is called during service shutdown.
      */

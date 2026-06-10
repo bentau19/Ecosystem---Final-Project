@@ -9,18 +9,8 @@ from resources.colors import ColorsEnum, Colors
 def _replace_colors_placeholders(
         qss: str, color_class: type[ColorsEnum]
 ) -> str:
-    """Replace ``{{NAME}}`` color placeholders in a QSS string with design-token values.
-
-    Iterates over every member of *color_class* and substitutes the double-brace
-    placeholder ``{{NAME}}`` with its corresponding enum value string.
-
-    Args:
-        qss: The raw QSS text containing ``{{NAME}}`` placeholders.
-        color_class: An enum class whose members map placeholder names to color values.
-
-    Returns:
-        The QSS string with all recognized placeholders replaced by their values.
-    """
+    # Replace each `{{NAME}}` placeholder in `qss` with the matching member's
+    # value from `color_class`, iterating over every enum member.
     for name, color in color_class.__members__.items():
         qss = qss.replace(f"{{{{{name}}}}}", color.value)
     return qss

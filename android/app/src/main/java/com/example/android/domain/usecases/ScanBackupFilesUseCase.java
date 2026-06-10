@@ -4,6 +4,8 @@ import android.content.Context;
 import android.net.Uri;
 import android.util.Log;
 
+import java.io.File;
+
 import com.example.android.data.datasource.BackupDataSource;
 import com.example.android.domain.entities.BackupFileEntry;
 
@@ -31,7 +33,20 @@ public class ScanBackupFilesUseCase {
     /** Backup mode constant — backs up every photo and video via MediaStore. */
     public static final String MODE_ALL_MEDIA = "all_media";
 
-    /** Backup mode constant — scans files under a user-selected SAF folder tree. */
+    /**
+     * Backup mode constant — scans files under a user-selected folder.
+     *
+     * <p>Accepts two URI schemes in {@link #execute}:
+     * <ul>
+     *   <li>{@code file://} — returned by {@link
+     *       com.example.android.ui.fragments.FolderPickerFragment}; routed to
+     *       {@link com.example.android.data.datasource.BackupDataSource#scanFolderByPath}
+     *       (File API, no SAF restrictions — Downloads selectable).</li>
+     *   <li>{@code content://} — returned by {@link android.content.Intent#ACTION_OPEN_DOCUMENT_TREE}
+     *       (SAF fallback); routed to
+     *       {@link com.example.android.data.datasource.BackupDataSource#scanFolder}.</li>
+     * </ul>
+     */
     public static final String MODE_FOLDER = "folder";
 
     private final BackupDataSource dataSource;
@@ -74,7 +89,17 @@ public class ScanBackupFilesUseCase {
                     throw new IllegalArgumentException(
                             "folderUri must not be null when mode is MODE_FOLDER");
                 }
-                files = dataSource.scanFolder(context, folderUri);
+
+                if ("file".equals(folderUri.getScheme())) {
+                    // file:// URI from the custom FolderPickerFragment — use File API.
+                    // This path has no SAF restrictions (Downloads, root, etc. all work).
+                    File folder = new File(folderUri.getPath());
+                    Log.d(TAG, "execute: MODE_FOLDER via File API — " + folder.getAbsolutePath());
+                    files = dataSource.scanFolderByPath(folder);
+                } else {
+                    // content:// SAF URI from ACTION_OPEN_DOCUMENT_TREE fallback.
+                    files = dataSource.scanFolder(context, folderUri);
+                }
 
             } else if (MODE_ALL_MEDIA.equals(mode)) {
                 files = dataSource.scanAllMedia(context);

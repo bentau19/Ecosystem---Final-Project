@@ -1,10 +1,26 @@
-"""SyncDose application entry point.
-
-Bootstraps QApplication, defers all QObject-dependent imports until after
-the application instance exists, then shows the main window.
-"""
+# SyncDose application entry point.
+#
+# Bootstraps QApplication, defers all QObject-dependent imports until after
+# the application instance exists, then shows the main window.
 
 import sys
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# FileDetection path injection
+# ---------------------------------------------------------------------------
+# BackupService imports is_corrupt, check_for_duplicates, and is_wanted from
+# the FileDetection/ module that lives at the project root (one level above
+# this desktop/ directory).  Adding it to sys.path here — before any deferred
+# imports — ensures those bare-module imports resolve at app startup rather
+# than silently failing mid-backup.
+#
+# The insert is intentionally idempotent (guards against double-registration
+# if this block is somehow executed twice).
+_FILE_DETECTION_DIR: Path = Path(__file__).resolve().parent.parent / "FileDetection"
+if str(_FILE_DETECTION_DIR) not in sys.path:
+    sys.path.insert(0, str(_FILE_DETECTION_DIR))
+# ---------------------------------------------------------------------------
 
 from PySide6.QtWidgets import QApplication
 

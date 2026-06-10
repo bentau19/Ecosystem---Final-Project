@@ -271,7 +271,8 @@
     <!-- ── Start Backup CTA ───────────────────────────────────────────────── -->
     <!--
         Pinned to the bottom. Disabled (alpha=0.4) until the user picks a mode.
-        Enabled in BackupFragment.selectMode().
+        Enabled in BackupFragment.selectMode(). Hidden (GONE) while
+        cardTransferControls is visible — the two are mutually exclusive.
     -->
     <androidx.appcompat.widget.AppCompatButton
         android:id="@+id/btnStart"

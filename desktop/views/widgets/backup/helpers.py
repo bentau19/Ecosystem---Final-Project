@@ -1,11 +1,3 @@
-"""
-Qt-bound display helpers for the backup widgets.
-
-Contains thumbnail loading and rounded-pixmap utilities that require PySide6.
-Pure file-type helpers (extension sets, classifiers, formatters) live in
-:mod:`utils.file_type` so they can be imported by any layer without creating
-a cross-layer dependency.
-"""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QRectF, QSize
@@ -27,9 +19,22 @@ from utils.file_type import (  # noqa: F401
 )
 
 # ── Thumbnail helpers ──────────────────────────────────────────────────────────
+# Qt-bound display helpers for the backup widgets: thumbnail loading and
+# rounded-pixmap utilities that require PySide6. Pure file-type helpers
+# (extension sets, classifiers, formatters) live in utils.file_type so they
+# can be imported by any layer without creating a cross-layer dependency.
 
 def make_rounded_pixmap(pixmap: QPixmap, radius: int) -> QPixmap:
-    """Clip *pixmap* to a rounded rectangle, preserving transparency."""
+    """Clip *pixmap* to a rounded rectangle, preserving transparency.
+
+    Args:
+        pixmap: Source pixmap to clip.
+        radius: Corner radius, in pixels.
+
+    Returns:
+        A new pixmap the same size as *pixmap*, with its corners clipped to
+        a rounded rectangle and the rest filled transparently.
+    """
     result = QPixmap(pixmap.size())
     result.fill(Qt.GlobalColor.transparent)
     painter = QPainter(result)
@@ -46,7 +51,14 @@ def load_thumb(path: str, size: int) -> QPixmap | None:
     """Load an image at *size* × *size* resolution with centre-crop.
 
     Uses :class:`QImageReader` scaled-size hint for memory efficiency.
-    Returns ``None`` if the file is missing, corrupt, or an unsupported format.
+
+    Args:
+        path: Filesystem path to the image file.
+        size: Target width and height, in pixels, of the square thumbnail.
+
+    Returns:
+        A square, rounded-corner thumbnail pixmap, or ``None`` if the file is
+        missing, corrupt, or an unsupported format.
     """
     reader = QImageReader(path)
     reader.setAutoTransform(True)

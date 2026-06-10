@@ -1,10 +1,4 @@
-"""
-Unit tests for similar_photos.py.
-
-Covers: dhash, hamming_distance, _UnionFind, group_by_hash,
-        find_similar_groups, pick_best, deduplicate_to_best, save_best_photos,
-        SimilarPhotoAccumulator (including seed_entries).
-"""
+"""Unit tests for similar_photos.py — _dhash() and _hamming_distance()."""
 
 from pathlib import Path
 

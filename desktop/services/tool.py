@@ -1,10 +1,7 @@
-"""
-Tool service.
-
-Wraps the tool repository and re-emits its mutation signals as
-service-level signals so viewmodels never import from repositories/.
-"""
 import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
@@ -56,10 +53,9 @@ class ToolService(QObject):
         self._repository.entity_saved.connect(self.tool_added)
         self._repository.entity_deleted.connect(self.tool_deleted)
 
-        self._threads: list[threading.Thread] = []
+        self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
         self._is_running: threading.Event = threading.Event()
         self._lifecycle_lock: threading.Lock = threading.Lock()
-        self._threads_lock: threading.Lock = threading.Lock()
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -95,33 +91,22 @@ class ToolService(QObject):
         with self._lifecycle_lock:
             if self._is_running.is_set():
                 return
+            self._executor = ThreadPoolExecutor()
             self._is_running.set()
 
     def _stop(self) -> None:
-        # Join every worker except the calling thread to avoid a deadlock.
+        # Clear the running flag then wait for all submitted work to finish.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            pending_threads: list[threading.Thread] = self._get_pending_threads()
-            for t in pending_threads:
-                if t == threading.current_thread():
-                    continue
-                t.join()
+        self._executor.shutdown(wait=True, cancel_futures=True)
 
-    def _spawn(self, target, *args) -> None:
-        # Reject new spawns during teardown to avoid work after _is_running is cleared.
+    def _spawn(self, target: Callable[..., None], *args: Any) -> None:
+        # Reject new submissions during teardown.
         if not self._is_running.is_set():
             return
-        t = threading.Thread(target=target, args=args, daemon=True)
-        with self._threads_lock:
-            self._threads.append(t)
-        t.start()
-
-    def _get_pending_threads(self) -> list[threading.Thread]:
-        # Snapshot alive threads under the lock so callers can join without holding it.
-        with self._threads_lock:
-            return [t for t in self._threads if t.is_alive()]
+        self._executor.submit(target, *args)
 
     def _fetch_all_enabled(self) -> None:
         # Retrieve enabled tools from the repository and emit the result.

@@ -1,19 +1,3 @@
-"""
-Backup file review dialog.
-
-Presents a scrollable list of backup image files and lets the user tag each one
-as "keep" or "delete" before applying the batch decision.
-
-Usage::
-
-    from domain.dto.backup_file import BackupFileDTO
-    from views.widgets.backup.backup_review_dialog import BackupReviewDialog
-
-    files = [BackupFileDTO(path="C:/...", name="photo.jpg", size_bytes=3_000_000, mtime=1_700_000_000_000)]
-    dlg = BackupReviewDialog(files, parent=self)
-    if dlg.exec() == QDialog.DialogCode.Accepted:
-        decisions = dlg.get_decisions()   # {"C:/.../photo.jpg": "keep"}
-"""
 from __future__ import annotations
 
 import sys
@@ -73,12 +57,20 @@ class _BackupFileRow(QFrame):
 
     @property
     def decision(self) -> str:
-        """Current decision: ``"pending"``, ``"keep"``, or ``"delete"``."""
+        """Get the current decision for this row.
+
+        Returns:
+            ``"pending"``, ``"keep"``, or ``"delete"``.
+        """
         return self._decision
 
     @property
     def file_path(self) -> str:
-        """Absolute path of the represented backup file."""
+        """Get the absolute path of the represented backup file.
+
+        Returns:
+            The backup file's absolute filesystem path.
+        """
         return self._file.path
 
     # ── UI construction ───────────────────────────────────────────────────────
@@ -98,7 +90,7 @@ class _BackupFileRow(QFrame):
         self._delete_btn:  QPushButton = self._create_delete_button()
 
     def _create_thumb_label(self) -> QLabel:
-        """Load the image thumbnail; fall back to a cyan "IMG" circle if unreadable."""
+        # Load the image thumbnail; fall back to a cyan "IMG" circle if unreadable.
         lbl = QLabel()
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setFixedSize(_THUMB_SIZE, _THUMB_SIZE)
@@ -171,7 +163,7 @@ class _BackupFileRow(QFrame):
         pass
 
     def _refresh_decision_style(self) -> None:
-        """Re-polish the row and buttons so QSS dynamic-property selectors update."""
+        # Re-polish the row and buttons so QSS dynamic-property selectors update.
         self.setProperty("decision", self._decision)
         self.style().unpolish(self)
         self.style().polish(self)
@@ -217,6 +209,16 @@ class BackupReviewDialog(QDialog):
     Non-image files are silently filtered out on construction.  Files still in
     ``"pending"`` state (no button clicked) are **omitted** from
     :meth:`get_decisions`.
+
+    Usage::
+
+        from domain.dto.backup_file import BackupFileDTO
+        from views.widgets.backup.backup_review_dialog import BackupReviewDialog
+
+        files = [BackupFileDTO(path="C:/...", name="photo.jpg", size_bytes=3_000_000, mtime=1_700_000_000_000)]
+        dlg = BackupReviewDialog(files, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            decisions = dlg.get_decisions()   # {"C:/.../photo.jpg": "keep"}
 
     Args:
         files: List of :class:`~domain.dto.backup_file.BackupFileDTO` descriptors
@@ -276,7 +278,7 @@ class BackupReviewDialog(QDialog):
         self._apply_btn:     QPushButton = self._create_apply_button()
 
     def _create_header(self) -> QWidget:
-        """Build the icon + title + subtitle header bar."""
+        # Build the icon + title + subtitle header bar.
         container = QWidget()
         container.setObjectName("BackupReviewHeader")
 
@@ -308,7 +310,7 @@ class BackupReviewDialog(QDialog):
         return container
 
     def _create_scroll_area(self) -> QScrollArea:
-        """Build the scrollable file list, creating one _BackupFileRow per file."""
+        # Build the scrollable file list, creating one _BackupFileRow per file.
         content = QWidget()
         content.setObjectName("ScrollContent")
 

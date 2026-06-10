@@ -13,8 +13,10 @@ import androidx.lifecycle.Lifecycle;
 import androidx.lifecycle.Observer;
 import androidx.lifecycle.ProcessLifecycleOwner;
 
+import com.example.android.data.datasource.BackupDataSource;
 import com.example.android.data.datasource.SystemDataSource;
 import com.example.android.domain.entities.RemoteDeviceInfo;
+import com.example.android.domain.entities.BackupOptions;
 import com.example.android.domain.enums.BackupTransferStatus;
 import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.domain.enums.SendFileStatus;
@@ -23,6 +25,8 @@ import com.example.android.enums.Channel;
 import com.example.android.enums.DeviceInfoChannels;
 import com.example.android.enums.FileTransferChannels;
 import com.example.android.enums.SessionChannels;
+import com.example.android.enums.BackupChannels;
+import com.example.android.network.handlers.BackupControlChannelHandler;
 import com.example.android.network.handlers.ChannelHandlerRegistry;
 import com.example.android.network.handlers.DeviceInfoChannelHandler;
 import com.example.android.domain.usecases.BackupTransferUseCase;
@@ -70,6 +74,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     // Observer for backup transfer progress notifications — kept for removal in onDestroy
     private Observer<BackupTransferStatus> backupTransferStatusObserver;
 
+    // Observer for the per-file sent counter — drives the progress notification ticker.
+    // Kept as a field so it can be removed in onDestroy; without this it leaks one
+    // observer per ConnectivityService instance across reconnects.
+    private Observer<Integer> transferSentObserver;
+
+    // Observer for backup scan failures — kept for removal in onDestroy
+    private Observer<com.example.android.domain.enums.BackupScanStatus> backupScanStatusObserver;
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -101,7 +113,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         respondToFileTransferUseCase = new RespondToFileTransferUseCase(transportManager);
         receiveFileUseCase = new ReceiveFileUseCase(transportManager, ReceiveFileRepository.getInstance(), this);
         sendFileUseCase = new SendFileUseCase(transportManager, SendFileRepository.getInstance(), this);
-        backupTransferUseCase = new BackupTransferUseCase(transportManager, BackupRepository.getInstance(), this);
+        backupTransferUseCase = new BackupTransferUseCase(
+                transportManager, BackupRepository.getInstance(), this, new BackupDataSource(),
+                handlerRegistry);
 
         registerChannelHandlers();
         registerFileTransferActionListener();
@@ -110,6 +124,8 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         registerSendFileStatusObserver();
         registerBackupTransferActionListener();
         registerBackupTransferProgressObserver();
+        registerBackupScanStatusObserver();
+        registerBackupControlActionListener();
 
         Log.d(TAG, "Service initialization complete");
     }
@@ -143,6 +159,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         handlerRegistry.registerHandler(
                 FileTransferChannels.REGULAR_FILE_DATA_PC_TO_ANDROID.getValue(),
                 new FileDataChannelHandler(receiveFileUseCase, ReceiveFileRepository.getInstance())
+        );
+
+        // BACKUP_CONTROL_FROM_PC — PC-initiated pause/resume/stop during an active backup session.
+        // Registered once at startup; the UseCase's public methods guard against being called
+        // outside an active session, so stray commands when no transfer is running are safe no-ops.
+        handlerRegistry.registerHandler(
+                BackupChannels.BACKUP_CONTROL_FROM_PC.getValue(),
+                new BackupControlChannelHandler(transportManager, backupTransferUseCase)
         );
 
         // All other device telemetry data types are registered inline as Getters using generic Lambda functional interfaces
@@ -179,6 +203,30 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             // background thread fires. The final DISCONNECTED post comes from cleanup().
             deviceRepository.updateConnectionStatus(ConnectionStatus.DISCONNECTING);
             sendDisconnectToPC();
+            return START_NOT_STICKY;
+        }
+
+        // Backup transfer control actions from the sticky progress notification —
+        // fire immediately, no confirmation, and don't disturb the connection lifecycle.
+        if (intent != null && AppNotificationManager.ACTION_BACKUP_PAUSE.equals(intent.getAction())) {
+            Log.d(TAG, "Received backup pause action");
+            if (backupTransferUseCase != null) {
+                backupTransferUseCase.pauseTransfer();
+            }
+            return START_NOT_STICKY;
+        }
+        if (intent != null && AppNotificationManager.ACTION_BACKUP_RESUME.equals(intent.getAction())) {
+            Log.d(TAG, "Received backup resume action");
+            if (backupTransferUseCase != null) {
+                backupTransferUseCase.resumeTransfer();
+            }
+            return START_NOT_STICKY;
+        }
+        if (intent != null && AppNotificationManager.ACTION_BACKUP_STOP.equals(intent.getAction())) {
+            Log.d(TAG, "Received backup stop action");
+            if (backupTransferUseCase != null) {
+                backupTransferUseCase.stopTransfer();
+            }
             return START_NOT_STICKY;
         }
 
@@ -250,6 +298,12 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         if (backupTransferStatusObserver != null) {
             BackupRepository.getInstance().getTransferStatus().removeObserver(backupTransferStatusObserver);
         }
+        if (transferSentObserver != null) {
+            BackupRepository.getInstance().getTransferSent().removeObserver(transferSentObserver);
+        }
+        if (backupScanStatusObserver != null) {
+            BackupRepository.getInstance().getScanStatus().removeObserver(backupScanStatusObserver);
+        }
         cleanup();
         super.onDestroy();
     }
@@ -273,6 +327,12 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // Reset file transfer repositories so stale status isn't shown after reconnect
         ReceiveFileRepository.getInstance().reset();
         SendFileRepository.getInstance().reset();
+
+        // Reset backup repository — clears any in-flight scan (scanActiveForTransfer=false)
+        // so a scan that completes after reconnect does NOT auto-send the manifest on the
+        // new connection session. Also clears stale transfer progress counters/status.
+        BackupRepository.getInstance().reset();
+        BackupRepository.getInstance().resetTransfer();
 
         // Remove the foreground notification so it doesn't stay in the status bar
         Log.d(TAG, "Removing foreground notification");
@@ -521,10 +581,10 @@ public class ConnectivityService extends Service implements TransportManager.Tra
      * Mirrors {@link #registerSendFileActionListener} exactly.
      */
     private void registerBackupTransferActionListener() {
-        BackupRepository.getInstance().setTransferActionListener(files -> {
+        BackupRepository.getInstance().setTransferActionListener((files, options) -> {
             new Thread(() -> {
                 try {
-                    backupTransferUseCase.execute(files);
+                    backupTransferUseCase.execute(files, options);
                 } catch (Exception e) {
                     Log.e(TAG, "Unexpected error in BackupTransferThread: " + e.getMessage());
                     BackupRepository.getInstance().onTransferFailed();
@@ -555,15 +615,39 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                     notificationManager.showBackupProgressNotification(s, t);
                     break;
                 }
-                case COMPLETED: {
+                case PAUSED: {
+                    Integer sent  = repo.getTransferSent().getValue();
                     Integer total = repo.getTransferTotal().getValue();
+                    int s = (sent  != null) ? sent  : 0;
                     int t = (total != null) ? total : 0;
-                    notificationManager.showBackupCompleteNotification(t);
+                    notificationManager.showBackupPausedNotification(s, t);
                     break;
                 }
+                case COMPLETED: {
+                    Integer total  = repo.getTransferTotal().getValue();
+                    Integer failed = repo.getFailedCount().getValue();
+                    int t = (total  != null) ? total  : 0;
+                    int f = (failed != null) ? failed : 0;
+                    int succeeded = Math.max(0, t - f);
+                    // One-time success/error summary — replaces the sticky progress
+                    // notification (same BACKUP_PROGRESS_NOTIFICATION_ID).
+                    notificationManager.showBackupCompleteNotification(succeeded, f);
+                    // BackupFragment is no longer on screen to acknowledge this state —
+                    // reset the repository here so the next backup starts cleanly.
+                    repo.resetTransfer();
+                    break;
+                }
+                case STOPPED:
+                    // BackupFragment is gone — replace the sticky notification with a
+                    // brief "Backup stopped" notice instead of dismissing silently.
+                    notificationManager.showBackupStoppedNotification();
+                    repo.resetTransfer();
+                    break;
                 case FAILED:
-                    // Dismiss silently — BackupFragment will show an in-app error Toast
-                    notificationManager.dismissBackupProgressNotification();
+                    // BackupFragment is gone — replace the sticky notification with a
+                    // brief "Backup failed" notice instead of dismissing silently.
+                    notificationManager.showBackupFailedNotification();
+                    repo.resetTransfer();
                     break;
                 case IDLE:
                 default:
@@ -572,16 +656,80 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         };
         repo.getTransferStatus().observeForever(backupTransferStatusObserver);
 
-        // Also observe transferSent so the notification counter ticks on every file
-        repo.getTransferSent().observeForever(sent -> {
+        // Also observe transferSent so the notification counter ticks on every file.
+        // Skip the final tick (sent == total): the COMPLETED transition that follows
+        // immediately after replaces this notification with the one-time success/error
+        // summary, so rendering "X / X files" here would only flicker or get stuck.
+        // Stored in transferSentObserver so it is removed in onDestroy — without this
+        // each service instance leaks one anonymous observer per reconnect.
+        transferSentObserver = sent -> {
+            Integer total = repo.getTransferTotal().getValue();
+            int s = (sent  != null) ? sent  : 0;
+            int t = (total != null) ? total : 0;
             if (BackupTransferStatus.SENDING.equals(
-                    repo.getTransferStatus().getValue())) {
-                Integer total = repo.getTransferTotal().getValue();
-                int s = (sent  != null) ? sent  : 0;
-                int t = (total != null) ? total : 0;
+                    repo.getTransferStatus().getValue()) && s < t) {
                 notificationManager.showBackupProgressNotification(s, t);
             }
-        });
+        };
+        repo.getTransferSent().observeForever(transferSentObserver);
+    }
+
+    /**
+     * Observes {@link BackupRepository#getScanStatus()} for the lifetime of this
+     * service so that scan failures (e.g. permission errors while enumerating
+     * files) surface to the user even though {@code BackupFragment} has already
+     * returned to the dashboard by the time the scan finishes.
+     *
+     * <p>Mirrors {@link #registerBackupTransferProgressObserver} — must be called
+     * on the main thread (onCreate runs on main thread) because
+     * {@code LiveData.observeForever} requires it.
+     */
+    private void registerBackupScanStatusObserver() {
+        BackupRepository repo = BackupRepository.getInstance();
+        backupScanStatusObserver = status -> {
+            if (status == null) return;
+
+            if (status == com.example.android.domain.enums.BackupScanStatus.FAILED) {
+                notificationManager.showBackupScanFailedNotification();
+                repo.reset();
+            }
+        };
+        repo.getScanStatus().observeForever(backupScanStatusObserver);
+    }
+
+    /**
+     * Registers ConnectivityService as the {@link BackupRepository.ControlActionListener}.
+     *
+     * <p>{@code BackupTransferUseCase} is only accessible here (in the service), so
+     * pause/resume/stop requests originating from the in-app UI (BackupViewModel) or
+     * from the sticky notification actions are routed through this listener to reach
+     * the running use case on its background thread.
+     */
+    private void registerBackupControlActionListener() {
+        BackupRepository.getInstance().setControlActionListener(
+                new BackupRepository.ControlActionListener() {
+                    @Override
+                    public void onPauseRequested() {
+                        if (backupTransferUseCase != null) {
+                            backupTransferUseCase.pauseTransfer();
+                        }
+                    }
+
+                    @Override
+                    public void onResumeRequested() {
+                        if (backupTransferUseCase != null) {
+                            backupTransferUseCase.resumeTransfer();
+                        }
+                    }
+
+                    @Override
+                    public void onStopRequested() {
+                        if (backupTransferUseCase != null) {
+                            backupTransferUseCase.stopTransfer();
+                        }
+                    }
+                }
+        );
     }
 
     /**

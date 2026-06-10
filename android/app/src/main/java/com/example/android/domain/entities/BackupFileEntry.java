@@ -61,11 +61,51 @@ public class BackupFileEntry {
      */
     private final String sourceUri;
 
-    public BackupFileEntry(String displayPath, long sizeBytes, long mtimeMs, String sourceUri) {
+    /**
+     * Optional relative path of this file within its chosen root folder.
+     *
+     * <p>Populated only for {@code MODE_FOLDER} backups (both the SAF and File-API
+     * scan paths). Sent to the desktop inside the per-slot JSON header as
+     * {@code "rel_path"} so the PC can reconstruct the original folder structure
+     * under the user-chosen destination directory.
+     *
+     * <p>Examples:
+     * <ul>
+     *   <li>Root = {@code /Downloads}, file = {@code /Downloads/work/report.pdf}
+     *       → {@code relPath = "work/report.pdf"}</li>
+     *   <li>File directly in root → {@code relPath = "report.pdf"}</li>
+     * </ul>
+     *
+     * <p>{@code null} for {@code MODE_ALL_MEDIA} entries — the desktop saves those
+     * files flat and falls back to {@code meta["name"]} (the bare filename).
+     */
+    private final String relPath;
+
+    /**
+     * Full constructor used by folder-scan paths that carry relative-path info.
+     *
+     * @param displayPath Human-readable absolute/reconstructed path.
+     * @param sizeBytes   File size in bytes.
+     * @param mtimeMs     Last-modified time in milliseconds since epoch.
+     * @param sourceUri   Android URI string for opening an InputStream.
+     * @param relPath     Relative path within the chosen root folder, or {@code null}.
+     */
+    public BackupFileEntry(String displayPath, long sizeBytes, long mtimeMs,
+                           String sourceUri, String relPath) {
         this.displayPath = displayPath;
         this.sizeBytes   = sizeBytes;
         this.mtimeMs     = mtimeMs;
         this.sourceUri   = sourceUri;
+        this.relPath     = relPath;
+    }
+
+    /**
+     * Convenience constructor for scan paths that do not carry relative-path info
+     * (e.g. {@code scanAllMedia}, {@code queryMediaStore}).
+     * Sets {@code relPath} to {@code null}.
+     */
+    public BackupFileEntry(String displayPath, long sizeBytes, long mtimeMs, String sourceUri) {
+        this(displayPath, sizeBytes, mtimeMs, sourceUri, null);
     }
 
     public String getDisplayPath() { return displayPath; }
@@ -73,9 +113,17 @@ public class BackupFileEntry {
     public long   getMtimeMs()     { return mtimeMs;     }
     public String getSourceUri()   { return sourceUri;   }
 
+    /**
+     * Returns the relative path of this file within its chosen root folder, or
+     * {@code null} when the entry came from an all-media scan (no folder context).
+     */
+    public String getRelPath()     { return relPath;     }
+
     @Override
     public String toString() {
         return "BackupFileEntry{path='" + displayPath + "', size=" + sizeBytes
-                + ", mtime=" + mtimeMs + '}';
+                + ", mtime=" + mtimeMs
+                + (relPath != null ? ", relPath='" + relPath + "'" : "")
+                + '}';
     }
 }

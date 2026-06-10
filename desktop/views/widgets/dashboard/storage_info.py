@@ -25,15 +25,14 @@ class StorageInfo(QFrame):
         """Initialize the StorageInfo widget.
 
         Args:
-            total_space (int): The total available storage space.
-            used_space (int): The amount of storage space currently used.
-            parent (QWidget, optional): The parent widget. Defaults to None.
+            total_space: The total available storage space, in gigabytes.
+            used_space: The amount of storage space currently used, in gigabytes.
+            parent: Optional parent widget. Defaults to ``None``.
         """
         super().__init__(parent)
 
         self._available_space: int = total_space
         self._used_space: int = used_space
-
 
         self._percentage: int = int((self._used_space / self._available_space) * 100)
 

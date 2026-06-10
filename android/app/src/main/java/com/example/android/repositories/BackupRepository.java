@@ -7,6 +7,7 @@ import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
 import com.example.android.domain.entities.BackupFileEntry;
+import com.example.android.domain.entities.BackupOptions;
 import com.example.android.domain.enums.BackupScanStatus;
 import com.example.android.domain.enums.BackupTransferStatus;
 
@@ -61,6 +62,10 @@ public class BackupRepository {
     private final MutableLiveData<Integer> transferTotal =
             new MutableLiveData<>(0);
 
+    /** Number of files the PC reported as transfer failures ({@code "fail"}) so far. */
+    private final MutableLiveData<Integer> failedCount =
+            new MutableLiveData<>(0);
+
     // ── Action listeners ──────────────────────────────────────────────────────
 
     /**
@@ -85,13 +90,50 @@ public class BackupRepository {
         /**
          * Scan finished — begin sending files to the PC on a background thread.
          *
-         * @param files Non-empty list of files to transfer.
+         * @param files   Non-empty list of files to transfer.
+         * @param options User-configured backup options (e.g. {@code classify_images}).
          */
-        void onTransferRequested(List<BackupFileEntry> files);
+        void onTransferRequested(List<BackupFileEntry> files, BackupOptions options);
+    }
+
+    /**
+     * Implemented by {@code ConnectivityService} (where {@code BackupTransferUseCase}
+     * is accessible).  Routes pause / resume / stop requests from the ViewModel or
+     * Fragment to the running UseCase on its background thread.
+     */
+    public interface ControlActionListener {
+        void onPauseRequested();
+        void onResumeRequested();
+        void onStopRequested();
     }
 
     private ScanActionListener actionListener;
     private TransferActionListener transferActionListener;
+    private ControlActionListener controlActionListener;
+
+    /**
+     * Options captured when {@link #requestScan} is called, consumed by
+     * {@link #onScanComplete} to auto-trigger {@link #requestTransfer}. Since the
+     * Fragment that started the scan may already be gone (immediate return-to-main
+     * UX), the repository — not the UI — owns this handoff.
+     */
+    private BackupOptions pendingOptions = new BackupOptions(true);
+
+    /**
+     * Guard flag that prevents a stale scan from auto-triggering a transfer on a
+     * new connection session.
+     *
+     * <p>Set to {@code true} in {@link #requestScan} (user explicitly started a
+     * backup).  Cleared to {@code false} in {@link #reset} (called by
+     * {@code ConnectivityService.cleanup()} on disconnect).
+     *
+     * <p>If the connection drops while a scan is in-flight, the scan thread keeps
+     * running (pure local I/O). When it eventually calls {@link #onScanComplete},
+     * this flag is already {@code false} — the result is discarded instead of
+     * being forwarded to a brand-new connection session's
+     * {@link TransferActionListener}.
+     */
+    private volatile boolean scanActiveForTransfer = false;
 
     // ── Singleton ─────────────────────────────────────────────────────────────
 
@@ -121,6 +163,15 @@ public class BackupRepository {
      */
     public void setTransferActionListener(TransferActionListener listener) {
         this.transferActionListener = listener;
+    }
+
+    /**
+     * Registered by {@code ConnectivityService} (where {@code BackupTransferUseCase}
+     * is accessible) so pause / resume / stop requests from the UI can reach the
+     * running UseCase.
+     */
+    public void setControlActionListener(ControlActionListener listener) {
+        this.controlActionListener = listener;
     }
 
     // ── Observers (for ViewModel / Fragment / ConnectivityService) ────────────
@@ -162,6 +213,14 @@ public class BackupRepository {
         return transferTotal;
     }
 
+    /**
+     * @return LiveData with the count of files the PC reported as transfer
+     * failures ({@code "fail"}) so far in the current batch.
+     */
+    public LiveData<Integer> getFailedCount() {
+        return failedCount;
+    }
+
     // ── UI → Repository (called by Fragment / BackupViewModel) ───────────────
 
     /**
@@ -169,9 +228,13 @@ public class BackupRepository {
      *
      * @param mode      Backup mode constant from {@link com.example.android.domain.usecases.ScanBackupFilesUseCase}.
      * @param folderUri SAF tree URI; must be non-null when {@code mode == "folder"}.
+     * @param options   User-configured backup options — stashed for {@link #onScanComplete}
+     *                  to forward to {@link #requestTransfer} once the scan finishes.
      */
-    public void requestScan(String mode, Uri folderUri) {
-        Log.d(TAG, "requestScan: mode=" + mode);
+    public void requestScan(String mode, Uri folderUri, BackupOptions options) {
+        Log.d(TAG, "requestScan: mode=" + mode + " options=" + options);
+        this.pendingOptions = (options != null) ? options : new BackupOptions(true);
+        this.scanActiveForTransfer = true;   // arm: user explicitly started this scan
         scanStatus.postValue(BackupScanStatus.SCANNING);
 
         if (actionListener != null) {
@@ -186,12 +249,36 @@ public class BackupRepository {
 
     /**
      * Called by {@link com.example.android.viewmodel.BackupViewModel} when the scan
-     * succeeded.  SCANNING → READY.
+     * succeeded.
+     *
+     * <p>The Fragment that initiated the scan has already returned to the main
+     * screen (immediate return-to-main UX), so this method — not the UI — drives
+     * the handoff to the transfer phase: a non-empty result immediately calls
+     * {@link #requestTransfer} using the {@link #pendingOptions} captured in
+     * {@link #requestScan}. {@code scanStatus} returns straight to {@code IDLE}
+     * since no UI observes the {@code READY} state anymore.
      */
     public void onScanComplete(List<BackupFileEntry> files) {
         Log.d(TAG, "onScanComplete: " + files.size() + " files");
         scannedFiles.postValue(files);
-        scanStatus.postValue(BackupScanStatus.READY);
+        scanStatus.postValue(BackupScanStatus.IDLE);
+
+        // Guard: if reset() was called while the scan was in-flight (e.g. the
+        // connection dropped mid-scan), do NOT forward to requestTransfer().
+        // The scan result belongs to a connection session that no longer exists.
+        if (!scanActiveForTransfer) {
+            Log.w(TAG, "onScanComplete: scan was invalidated (connection dropped) — discarding result");
+            return;
+        }
+        scanActiveForTransfer = false; // consume: one scan → one transfer
+
+        if (files.isEmpty()) {
+            Log.w(TAG, "onScanComplete: no files found — nothing to back up");
+            scanStatus.postValue(BackupScanStatus.EMPTY);
+            return;
+        }
+
+        requestTransfer(files, pendingOptions);
     }
 
     /**
@@ -206,9 +293,16 @@ public class BackupRepository {
 
     /**
      * Resets to IDLE after the UI has acknowledged a terminal state
-     * (READY / FAILED).  Ready for the next scan.
+     * (READY / FAILED), or when the connection is dropped by
+     * {@code ConnectivityService.cleanup()}.
+     *
+     * <p>Clears {@link #scanActiveForTransfer} so any scan that is still running
+     * in the background (pure local I/O, unaffected by network) will discard its
+     * result in {@link #onScanComplete} rather than auto-triggering a transfer on
+     * the next connection session.
      */
     public void reset() {
+        scanActiveForTransfer = false;   // invalidate any in-flight scan
         scannedFiles.postValue(Collections.emptyList());
         scanStatus.postValue(BackupScanStatus.IDLE);
     }
@@ -220,20 +314,21 @@ public class BackupRepository {
      * transfer action listener so {@code ConnectivityService} can start the
      * background UseCase.
      *
-     * @param files Non-empty scanned file list ready to send.
+     * @param files   Non-empty scanned file list ready to send.
+     * @param options User-configured backup options (e.g. {@code classify_images}).
      */
-    public void requestTransfer(List<BackupFileEntry> files) {
+    public void requestTransfer(List<BackupFileEntry> files, BackupOptions options) {
         if (files == null || files.isEmpty()) {
             Log.w(TAG, "requestTransfer called with empty list — ignoring");
             return;
         }
-        Log.d(TAG, "requestTransfer: " + files.size() + " files");
+        Log.d(TAG, "requestTransfer: " + files.size() + " files, options=" + options);
         transferSent.postValue(0);
         transferTotal.postValue(files.size());
         transferStatus.postValue(BackupTransferStatus.SENDING);
 
         if (transferActionListener != null) {
-            transferActionListener.onTransferRequested(files);
+            transferActionListener.onTransferRequested(files, options);
         } else {
             Log.w(TAG, "No TransferActionListener — is ConnectivityService running?");
             transferStatus.postValue(BackupTransferStatus.FAILED);
@@ -257,6 +352,31 @@ public class BackupRepository {
     }
 
     /**
+     * Called by {@code BackupTransferUseCase} when the PC sends a per-file transfer
+     * result on the {@code backup_file_result_{i}} channel.
+     *
+     * <p>A result of {@code success=false} means a transport/IO problem occurred while
+     * the PC was receiving or saving the file — distinct from PC-local content-screening
+     * rejections (corrupt/duplicate/filtered), which are still reported as
+     * {@code success=true} since the transfer itself completed.
+     *
+     * @param index   1-based index of the reported file.
+     * @param total   Total files in this backup batch.
+     * @param success {@code true} when the PC reported
+     *                {@link com.example.android.enums.BackupFileResult#SUCCESS};
+     *                {@code false} when it reported
+     *                {@link com.example.android.enums.BackupFileResult#FAILURE}.
+     */
+    public void onFileResult(int index, int total, boolean success) {
+        Log.d(TAG, "onFileResult: " + index + "/" + total
+                + " — " + (success ? "succ" : "fail"));
+        if (!success) {
+            Integer current = failedCount.getValue();
+            failedCount.postValue((current == null ? 0 : current) + 1);
+        }
+    }
+
+    /**
      * Called by {@code BackupTransferUseCase} when all files have been processed.
      * SENDING → COMPLETED.
      */
@@ -275,12 +395,69 @@ public class BackupRepository {
     }
 
     /**
+     * Called by {@code BackupTransferUseCase} when the user pauses the transfer.
+     * SENDING → PAUSED.
+     */
+    public void onTransferPaused() {
+        Log.d(TAG, "onTransferPaused");
+        transferStatus.postValue(BackupTransferStatus.PAUSED);
+    }
+
+    /**
+     * Called by {@code BackupTransferUseCase} when the user resumes after a pause.
+     * PAUSED → SENDING.
+     */
+    public void onTransferResumed() {
+        Log.d(TAG, "onTransferResumed");
+        transferStatus.postValue(BackupTransferStatus.SENDING);
+    }
+
+    /**
+     * Called by {@code BackupTransferUseCase} when the user intentionally stops the
+     * transfer (via notification action or PC cancel).  (any state) → STOPPED.
+     */
+    public void onTransferStopped() {
+        Log.d(TAG, "onTransferStopped");
+        transferStatus.postValue(BackupTransferStatus.STOPPED);
+    }
+
+    // ── Control: UI → Repository (pause / resume / stop) ─────────────────────
+
+    /** Routes a pause request to the registered {@link ControlActionListener}. */
+    public void requestPause() {
+        if (controlActionListener != null) {
+            controlActionListener.onPauseRequested();
+        } else {
+            Log.w(TAG, "requestPause: no ControlActionListener registered");
+        }
+    }
+
+    /** Routes a resume request to the registered {@link ControlActionListener}. */
+    public void requestResume() {
+        if (controlActionListener != null) {
+            controlActionListener.onResumeRequested();
+        } else {
+            Log.w(TAG, "requestResume: no ControlActionListener registered");
+        }
+    }
+
+    /** Routes a stop request to the registered {@link ControlActionListener}. */
+    public void requestStop() {
+        if (controlActionListener != null) {
+            controlActionListener.onStopRequested();
+        } else {
+            Log.w(TAG, "requestStop: no ControlActionListener registered");
+        }
+    }
+
+    /**
      * Resets the transfer phase to IDLE — call after the UI has acknowledged
-     * COMPLETED or FAILED.  Ready for a new backup run.
+     * COMPLETED, STOPPED, or FAILED.  Ready for a new backup run.
      */
     public void resetTransfer() {
         transferSent.postValue(0);
         transferTotal.postValue(0);
+        failedCount.postValue(0);
         transferStatus.postValue(BackupTransferStatus.IDLE);
     }
 }

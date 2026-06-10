@@ -712,7 +712,7 @@ class TauSync:
             self,
             word: str,
             chunk_size: int = 65536,
-            timeout_seconds: int | None = None,
+            timeout_seconds: int | None = 60,
     ) -> TauSyncStream:
         """Open a named duplex stream (meeting-word handshake).
 

@@ -3,3 +3,5 @@ pytest-qt>=4.4.0
 qrcode>= 7.4.2
 pillow >= 12.2.0
 jsonschema>= 4.17.3
+xxhash >= 3.7.0
+numpy >= 1.24.0

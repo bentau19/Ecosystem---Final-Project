@@ -10,6 +10,8 @@ from resources.colors import Palette, Colors, LightColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet, themed
+from viewmodels.file_transfer import FileTransferViewModel
+from viewmodels.tool import ToolViewModel
 from views.widgets.dashboard.tool_card import ToolCard
 
 # Title of the file-send tool — used to dispatch the click handler.
@@ -40,8 +42,8 @@ class ToolsGrid(QWidget):
 
         self._active_tools: list[ToolCard] = []
 
-        self._tool_view_model = app_state.tool_viewmodel
-        self._file_transfer_viewmodel = app_state.file_transfer_viewmodel
+        self._tool_view_model: ToolViewModel = app_state.tool_viewmodel
+        self._file_transfer_viewmodel: FileTransferViewModel = app_state.file_transfer_viewmodel
         self._main_layout: FlowLayout
 
         self._setup_ui()

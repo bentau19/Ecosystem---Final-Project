@@ -4,8 +4,10 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -18,20 +20,23 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.CheckBox;
 import android.widget.ImageView;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+
+import java.io.File;
 import androidx.appcompat.widget.AppCompatButton;
 import androidx.core.content.ContextCompat;
 import androidx.documentfile.provider.DocumentFile;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
+import com.example.android.domain.enums.BackupScanStatus;
+
 import com.example.android.R;
-import com.example.android.domain.enums.BackupTransferStatus;
+import com.example.android.domain.entities.BackupOptions;
 import com.example.android.domain.usecases.ScanBackupFilesUseCase;
 import com.example.android.viewmodel.BackupViewModel;
 import com.example.android.viewmodel.BackupViewModelFactory;
@@ -48,10 +53,15 @@ import com.example.android.viewmodel.BackupViewModelFactory;
  *
  * <p>Folder-mode flow:
  * <ol>
- *   <li>User taps the "Backup Folder Files" card → {@link #REQ_PICK_FOLDER} launched.</li>
- *   <li>User picks a folder in the system UI → {@link #onActivityResult} stores the URI,
- *       updates the card subtitle, and enables the Start button.</li>
- *   <li>User cancels → card stays highlighted but Start remains disabled.</li>
+ *   <li>User taps the "Backup Folder Files" card → {@link #launchFolderPicker()} invoked.</li>
+ *   <li><b>API 30+ with MANAGE_EXTERNAL_STORAGE</b> (or API 24–29 with READ_EXTERNAL_STORAGE):
+ *       {@link FolderPickerFragment} opens — a custom File-API browser with no SAF
+ *       restrictions.  Downloads, DCIM root, and other top-level directories are selectable.</li>
+ *   <li><b>API 30+ without MANAGE_EXTERNAL_STORAGE</b>: a dialog offers to grant the
+ *       permission first; the user can skip to the system SAF picker (Downloads unavailable).</li>
+ *   <li>On folder confirmed → {@code selectedFolderUri} is set to a {@code file://} URI,
+ *       the card subtitle updates, and the Start button is enabled.</li>
+ *   <li>User cancels → card resets to unselected state if no prior selection existed.</li>
  * </ol>
  *
  * <p>All-media flow:
@@ -67,7 +77,17 @@ import com.example.android.viewmodel.BackupViewModelFactory;
  *   <li>Delete originals after backup</li>
  * </ul>
  *
- * <p>Navigation back to {@link ActionsFragment} is handled by the system back-stack.
+ * <p><b>Start &amp; return-to-main flow:</b> tapping Start Backup hands the scan off to
+ * {@link BackupViewModel#startScan} and immediately pops this fragment off the back
+ * stack, returning to {@link ActionsFragment}. There is no in-app progress UI — the
+ * scan→transfer handoff is owned by {@code BackupRepository} (auto-triggers the
+ * transfer once the scan completes) and all progress / pause / resume / stop /
+ * completion feedback is delivered exclusively via the sticky
+ * {@code BackupProgressChannel} notification (see {@code AppNotificationManager}
+ * and {@code ConnectivityService}).
+ *
+ * <p>Navigation back to {@link ActionsFragment} is handled by the system back-stack
+ * (popped programmatically on Start, or by the user via the back button beforehand).
  */
 public class BackupFragment extends Fragment {
 
@@ -88,11 +108,26 @@ public class BackupFragment extends Fragment {
     /** Request code for the MANAGE_EXTERNAL_STORAGE system settings screen (API 30+). */
     private static final int REQ_ALL_FILES_ACCESS = 1003;
 
+    /**
+     * Separate request code used when the user opens the All Files Access settings
+     * specifically to enable the custom folder picker (not the all-media scan flow).
+     * Keeps the two return paths distinct in {@link #onActivityResult}.
+     */
+    private static final int REQ_ALL_FILES_ACCESS_FOR_PICKER = 1004;
+
     // ── State ─────────────────────────────────────────────────────────────────
     @Nullable
     private String selectedMode = null;
     @Nullable
     private Uri selectedFolderUri = null;
+
+    /**
+     * Set to {@code true} just before {@link BackupViewModel#startScan} is called,
+     * cleared when the scan-status observer handles a terminal state (IDLE/EMPTY/FAILED).
+     * Guards the IDLE-observer branch so we can distinguish "scan completed with files"
+     * from the initial IDLE state the repository starts in.
+     */
+    private boolean scanInProgress = false;
 
     // ── ViewModel ─────────────────────────────────────────────────────────────
     private BackupViewModel backupViewModel;
@@ -106,19 +141,7 @@ public class BackupFragment extends Fragment {
     private CheckBox cbNoJunk;
     private CheckBox cbDeleteAfter;
     private AppCompatButton btnStart;
-//    private ImageView btnBack;
-    /**
-     * Shown while SCANNING; hidden otherwise. Null when the layout doesn't include it yet.
-     */
-    @Nullable
-    private ProgressBar pbScanning;
-
-    /**
-     * Shows "Sending X / Y files…" during the backup transfer phase.
-     * Null when the layout doesn't include it yet (gracefully absent).
-     */
-    @Nullable
-    private TextView tvTransferProgress;
+private View btnBack;
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -128,10 +151,17 @@ public class BackupFragment extends Fragment {
                              Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_backup, container, false);
         bindViews(view);
-        initViewModel();
         setupClickListeners();
-        observeViewModel();
         return view;
+    }
+
+    @Override
+    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+        initViewModel();
+        // Observe scan lifecycle — drives loading state, error dialogs, and navigation.
+        backupViewModel.getScanStatus().observe(getViewLifecycleOwner(),
+                this::onScanStatusChanged);
     }
 
     // ── ViewModel init ────────────────────────────────────────────────────────
@@ -154,116 +184,17 @@ public class BackupFragment extends Fragment {
         cbNoJunk = root.findViewById(R.id.cbNoJunk);
         cbDeleteAfter = root.findViewById(R.id.cbDeleteAfter);
         btnStart = root.findViewById(R.id.btnStart);
-
-        // pbScanning / tvTransferProgress are optional in the layout — gracefully absent if not added yet
-        pbScanning = null;
-        tvTransferProgress = null;
-
+        btnBack  = root.findViewById(R.id.btnBack);
     }
 
     // ── Click listeners ───────────────────────────────────────────────────────
 
     private void setupClickListeners() {
+        btnBack.setOnClickListener(v ->
+                requireActivity().getSupportFragmentManager().popBackStack());
         cardAllMedia.setOnClickListener(v -> selectMode(MODE_ALL_MEDIA));
         cardFolder.setOnClickListener(v -> selectMode(MODE_FOLDER));
         btnStart.setOnClickListener(v -> onStartBackup());
-    }
-
-    // ── ViewModel observers ───────────────────────────────────────────────────
-
-    private void observeViewModel() {
-        // ── Scan status ───────────────────────────────────────────────────────
-        backupViewModel.getScanStatus().observe(getViewLifecycleOwner(), status -> {
-            if (status == null) return;
-            Log.d(TAG, "Scan status → " + status);
-
-            switch (status) {
-                case SCANNING:
-                    // Disable UI while scanning to prevent double-taps
-                    btnStart.setEnabled(false);
-                    btnStart.setAlpha(0.4f);
-                    if (pbScanning != null) pbScanning.setVisibility(View.VISIBLE);
-                    break;
-
-                case READY:
-                    if (pbScanning != null) pbScanning.setVisibility(View.GONE);
-                    // Scan finished — immediately begin the backup transfer.
-                    // The scan result list is in the ViewModel; startTransfer() reads it.
-                    int count = 0;
-                    if (backupViewModel.getScannedFiles().getValue() != null) {
-                        count = backupViewModel.getScannedFiles().getValue().size();
-                    }
-                    Log.d(TAG, "Scan complete: " + count + " files — starting transfer");
-                    backupViewModel.reset();          // clear scan state
-                    backupViewModel.startTransfer();  // hand off to transfer phase
-                    break;
-
-                case FAILED:
-                    if (pbScanning != null) pbScanning.setVisibility(View.GONE);
-                    restoreStartButton();
-                    Toast.makeText(requireContext(),
-                            "Scan failed — check permissions and try again",
-                            Toast.LENGTH_LONG).show();
-                    backupViewModel.reset();
-                    break;
-
-                case IDLE:
-                default:
-                    if (pbScanning != null) pbScanning.setVisibility(View.GONE);
-                    break;
-            }
-        });
-
-        // ── Transfer status ───────────────────────────────────────────────────
-        backupViewModel.getTransferStatus().observe(getViewLifecycleOwner(), status -> {
-            if (status == null) return;
-            Log.d(TAG, "Transfer status → " + status);
-
-            switch (status) {
-                case SENDING:
-                    // Keep Start button disabled while transfer is in progress.
-                    // In-app progress text is driven by getTransferSent() observer below.
-                    btnStart.setEnabled(false);
-                    btnStart.setAlpha(0.4f);
-                    if (tvTransferProgress != null) tvTransferProgress.setVisibility(View.VISIBLE);
-                    break;
-
-                case COMPLETED: {
-                    if (tvTransferProgress != null) tvTransferProgress.setVisibility(View.GONE);
-                    restoreStartButton();
-                    Integer total = backupViewModel.getTransferTotal().getValue();
-                    int t = (total != null) ? total : 0;
-                    Toast.makeText(requireContext(),
-                            "Backup complete! " + t + " files sent",
-                            Toast.LENGTH_LONG).show();
-                    backupViewModel.resetTransfer();
-                    break;
-                }
-
-                case FAILED:
-                    if (tvTransferProgress != null) tvTransferProgress.setVisibility(View.GONE);
-                    restoreStartButton();
-                    Toast.makeText(requireContext(),
-                            "Backup transfer failed — check your connection",
-                            Toast.LENGTH_LONG).show();
-                    backupViewModel.resetTransfer();
-                    break;
-
-                case IDLE:
-                default:
-                    if (tvTransferProgress != null) tvTransferProgress.setVisibility(View.GONE);
-                    break;
-            }
-        });
-
-        // ── Transfer progress counter — updates the in-app "X / Y files" text ──
-        backupViewModel.getTransferSent().observe(getViewLifecycleOwner(), sent -> {
-            if (tvTransferProgress == null) return;
-            Integer total = backupViewModel.getTransferTotal().getValue();
-            int s = (sent  != null) ? sent  : 0;
-            int t = (total != null) ? total : 0;
-            tvTransferProgress.setText("Sending " + s + " / " + t + " files…");
-        });
     }
 
     // ── Selection logic ───────────────────────────────────────────────────────
@@ -312,56 +243,151 @@ public class BackupFragment extends Fragment {
     // ── Folder picker launch ──────────────────────────────────────────────────
 
     /**
-     * Shows an explanatory dialog about Android's folder-picker restrictions, then
-     * launches {@link Intent#ACTION_OPEN_DOCUMENT_TREE} with an {@code EXTRA_INITIAL_URI}
-     * hint so the picker opens inside external media (DCIM area) rather than at the
-     * blocked storage root.
+     * Entry point when the user selects "Backup Folder Files".
      *
-     * <p>Android 11+ (API 30+) prevents the user from selecting certain top-level
-     * directories — the storage root, Downloads, and SD card root — via
-     * {@code ACTION_OPEN_DOCUMENT_TREE}. Attempting to confirm such a directory causes
-     * Android to display its own "Can't use this folder for privacy reasons" system
-     * dialog. This pre-warning sets expectations before the picker opens.
-     *
-     * <p>If the user cancels this dialog (before the picker even opens), the folder card
-     * is de-selected and {@code selectedMode} is reset to {@code null} so the fragment
-     * stays in a consistent state.
+     * <p>Decision tree:
+     * <ul>
+     *   <li><b>API 30+ with {@code MANAGE_EXTERNAL_STORAGE}</b>: opens the custom
+     *       {@link FolderPickerFragment} — no SAF restrictions, Downloads selectable.</li>
+     *   <li><b>API 30+ without {@code MANAGE_EXTERNAL_STORAGE}</b>: shows a dialog
+     *       offering to grant access; user can grant (→ settings → return → custom picker)
+     *       or skip (→ SAF picker with original restrictions).</li>
+     *   <li><b>API 24–29 with {@code READ_EXTERNAL_STORAGE}</b>: opens the custom picker
+     *       directly — scoped storage restrictions do not apply on these API levels.</li>
+     *   <li><b>API 24–29 without {@code READ_EXTERNAL_STORAGE}</b>: falls back to the SAF
+     *       picker (the permission check is lenient on older API levels).</li>
+     * </ul>
      */
     private void launchFolderPicker() {
-        new AlertDialog.Builder(requireContext())
-                .setTitle("Choose a Specific Subfolder")
-                .setMessage(
-                        "Android restricts access to the root of your storage and the "
-                        + "Downloads folder.\n\n"
-                        + "Please pick a specific subfolder instead — for example:\n"
-                        + "  • DCIM/Camera\n"
-                        + "  • Pictures/WhatsApp\n"
-                        + "  • Movies/Telegram\n\n"
-                        + "If you see \"Can't use this folder\", navigate into a subfolder "
-                        + "and try again.")
-                .setPositiveButton("Choose Folder", (d, w) -> {
-                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-                    // API 26+: hint the picker to open inside external media so the user
-                    // starts in a valid location rather than the blocked storage root.
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI,
-                                MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
-                    }
-                    startActivityForResult(intent, REQ_PICK_FOLDER);
-                })
-                .setNegativeButton("Cancel", (d, w) -> {
-                    // User bailed before opening the picker — reset card state so the
-                    // fragment is consistent (no mode selected, no card highlighted).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // ── API 30+: check MANAGE_EXTERNAL_STORAGE ────────────────────────
+            if (Environment.isExternalStorageManager()) {
+                openCustomPicker();
+            } else {
+                showGrantStorageAccessDialog();
+            }
+        } else {
+            // ── API 24–29: READ_EXTERNAL_STORAGE gives full File API access ───
+            boolean hasReadStorage = ContextCompat.checkSelfPermission(
+                    requireContext(), Manifest.permission.READ_EXTERNAL_STORAGE)
+                    == PackageManager.PERMISSION_GRANTED;
+            if (hasReadStorage) {
+                openCustomPicker();
+            } else {
+                // Permission not held yet — fall back to the SAF picker which works
+                // without READ_EXTERNAL_STORAGE (SAF uses its own URI grants).
+                openSafPicker();
+            }
+        }
+    }
+
+    /**
+     * Shows the in-app {@link FolderPickerFragment} — a {@link
+     * com.google.android.material.bottomsheet.BottomSheetDialogFragment} that uses
+     * the {@link File} API.  No SAF restrictions apply, so the user can pick
+     * Downloads, DCIM root, storage root, or any other readable directory.
+     */
+    private void openCustomPicker() {
+        FolderPickerFragment picker = FolderPickerFragment.newInstance(
+                Environment.getExternalStorageDirectory());
+        picker.setCallback(new FolderPickerFragment.FolderSelectedCallback() {
+            @Override
+            public void onFolderSelected(@NonNull File folder) {
+                // file:// URI — ScanBackupFilesUseCase detects the scheme and routes
+                // to BackupDataSource.scanFolderByPath() instead of scanFolder().
+                selectedFolderUri = Uri.fromFile(folder);
+                tvFolderSubtitle.setText(
+                        getString(R.string.backup_folder_selected_prefix) + folder.getName());
+                btnStart.setEnabled(true);
+                btnStart.setAlpha(1.0f);
+            }
+
+            @Override
+            public void onPickerCancelled() {
+                // Reset folder card only if no folder was previously confirmed.
+                if (selectedFolderUri == null) {
                     selectedMode = null;
                     cardFolder.setBackgroundResource(R.drawable.backup_card_default);
                     dotFolder.setVisibility(View.GONE);
-                    if (selectedFolderUri == null) {
-                        btnStart.setEnabled(false);
-                        btnStart.setAlpha(0.4f);
-                    }
-                })
-                .setCancelable(false)
+                    btnStart.setEnabled(false);
+                    btnStart.setAlpha(0.4f);
+                }
+            }
+        });
+        picker.show(getChildFragmentManager(), "folder_picker");
+    }
+
+    /**
+     * Shown on API 30+ when {@code MANAGE_EXTERNAL_STORAGE} is not yet granted.
+     * Gives the user two options:
+     * <ul>
+     *   <li><b>Grant Access</b>: opens the system All Files Access settings screen.
+     *       On return, if the permission was granted the custom picker opens; if not,
+     *       the SAF picker is shown as a fallback.</li>
+     *   <li><b>Skip</b>: opens the SAF picker immediately (Downloads will be
+     *       unavailable due to Android OS restriction).</li>
+     * </ul>
+     */
+    private void showGrantStorageAccessDialog() {
+        new AlertDialog.Builder(requireContext())
+                .setTitle(R.string.folder_picker_grant_title)
+                .setMessage(R.string.folder_picker_grant_msg)
+                .setPositiveButton(R.string.folder_picker_grant_positive,
+                        (d, w) -> openAllFilesAccessSettingsForPicker())
+                .setNegativeButton(R.string.folder_picker_grant_negative,
+                        (d, w) -> openSafPicker())
+                .setOnCancelListener(d -> resetFolderCardIfNoSelection())
+                .setCancelable(true)
                 .show();
+    }
+
+    /**
+     * Opens the system All Files Access settings screen so the user can grant
+     * {@code MANAGE_EXTERNAL_STORAGE}.  Uses {@link #REQ_ALL_FILES_ACCESS_FOR_PICKER}
+     * so that {@link #onActivityResult} knows to open the custom picker on return
+     * (rather than starting the scan, which is what {@link #REQ_ALL_FILES_ACCESS} does).
+     */
+    private void openAllFilesAccessSettingsForPicker() {
+        try {
+            Intent intent = new Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:" + requireContext().getPackageName()));
+            startActivityForResult(intent, REQ_ALL_FILES_ACCESS_FOR_PICKER);
+        } catch (Exception e) {
+            Log.w(TAG, "Per-app all-files screen unavailable, opening generic screen");
+            startActivityForResult(
+                    new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
+                    REQ_ALL_FILES_ACCESS_FOR_PICKER);
+        }
+    }
+
+    /**
+     * Opens {@link Intent#ACTION_OPEN_DOCUMENT_TREE} — the system SAF picker.
+     *
+     * <p>Used as a fallback when {@code MANAGE_EXTERNAL_STORAGE} is not granted.
+     * On API 30+, the user will NOT be able to select Downloads or other top-level
+     * restricted directories (Android OS limitation).
+     */
+    private void openSafPicker() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        // API 26+: hint the picker to open inside external media so the user
+        // starts in a valid location rather than the blocked storage root.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI,
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+        }
+        startActivityForResult(intent, REQ_PICK_FOLDER);
+    }
+
+    /** Resets the folder card to unselected state if no folder was confirmed yet. */
+    private void resetFolderCardIfNoSelection() {
+        if (selectedFolderUri == null) {
+            selectedMode = null;
+            cardFolder.setBackgroundResource(R.drawable.backup_card_default);
+            dotFolder.setVisibility(View.GONE);
+            btnStart.setEnabled(false);
+            btnStart.setAlpha(0.4f);
+        }
     }
 
     // ── Folder picker result ──────────────────────────────────────────────────
@@ -370,7 +396,7 @@ public class BackupFragment extends Fragment {
     public void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
-        // ── All-files access settings returned ────────────────────────────────
+        // ── All-files access settings returned (all-media scan path) ─────────
         if (requestCode == REQ_ALL_FILES_ACCESS) {
             // The settings screen doesn't return a meaningful resultCode — check the
             // actual permission state instead. Either way, proceed with the scan
@@ -382,6 +408,22 @@ public class BackupFragment extends Fragment {
                 Log.d(TAG, "All Files Access not granted — scan proceeds without Android/data/");
             }
             startScan();
+            return;
+        }
+
+        // ── All-files access settings returned (folder picker path) ──────────
+        if (requestCode == REQ_ALL_FILES_ACCESS_FOR_PICKER) {
+            // Returned from settings after the user tapped "Grant Access" in
+            // showGrantStorageAccessDialog().  If permission was granted, open the
+            // custom picker; otherwise fall back to the SAF picker.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                    && Environment.isExternalStorageManager()) {
+                Log.d(TAG, "All Files Access granted — opening custom folder picker");
+                openCustomPicker();
+            } else {
+                Log.d(TAG, "All Files Access not granted — falling back to SAF picker");
+                openSafPicker();
+            }
             return;
         }
 
@@ -570,30 +612,211 @@ public class BackupFragment extends Fragment {
 
     /**
      * Passes the current configuration to the ViewModel and triggers the scan.
-     * The ViewModel spawns a background thread; results arrive via LiveData.
+     *
+     * <p>Unlike the previous "fire-and-forget" approach, the Fragment now stays
+     * alive and observes {@link BackupViewModel#getScanStatus()} until a terminal
+     * state arrives:
+     * <ul>
+     *   <li>{@link BackupScanStatus#IDLE} (after a successful scan with files) →
+     *       toast + popBackStack.</li>
+     *   <li>{@link BackupScanStatus#EMPTY} → mode-specific error dialog; user
+     *       stays on BackupFragment to pick a different source.</li>
+     *   <li>{@link BackupScanStatus#FAILED} → generic error dialog.</li>
+     * </ul>
+     *
+     * <p>The scan→transfer handoff and all progress/completion feedback from this
+     * point on are owned by {@code BackupRepository} and {@code ConnectivityService}
+     * (sticky {@code BackupProgressChannel} notification).
      */
     private void startScan() {
-        boolean noJunk = cbNoJunk.isChecked();
-        boolean deleteAfter = cbDeleteAfter.isChecked();
+        // "Don't classify junk files" checked → classify_images = false
+        boolean classifyImages = !cbNoJunk.isChecked();
+        boolean deleteAfter    = cbDeleteAfter.isChecked();
+        int     parallelSlots  = computeParallelSlots();
         Log.d(TAG, "startScan: mode=" + selectedMode
-                + " noJunk=" + noJunk + " deleteAfter=" + deleteAfter);
-        // noJunk / deleteAfter are options for a later phase (manifest + transfer).
-        // For now they are logged and will be passed through once the BackupOptions
-        // entity is wired end-to-end.
-        backupViewModel.startScan(selectedMode, selectedFolderUri);
+                + " classifyImages=" + classifyImages
+                + " deleteAfter=" + deleteAfter
+                + " parallelSlots=" + parallelSlots);
+        BackupOptions options = new BackupOptions(classifyImages, parallelSlots, deleteAfter);
+
+        // Arm the observer guard before dispatching — the background thread may
+        // complete and post a new status before the next UI frame.
+        scanInProgress = true;
+        backupViewModel.startScan(selectedMode, selectedFolderUri, options);
+        // Navigation + toast are now handled in onScanStatusChanged().
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Scan status observer ──────────────────────────────────────────────────
 
     /**
-     * Re-enables the Start button after a terminal scan state.
+     * Reacts to every scan lifecycle transition posted by {@link BackupRepository}.
+     *
+     * <p>Only the states that matter to this Fragment are handled:
+     * <ul>
+     *   <li>{@link BackupScanStatus#SCANNING} — disables UI while the background
+     *       thread is running.</li>
+     *   <li>{@link BackupScanStatus#IDLE} — if {@link #scanInProgress} is set, the
+     *       scan just completed with files (&gt; 0); navigate away.</li>
+     *   <li>{@link BackupScanStatus#EMPTY} — zero files found; show a mode-specific
+     *       dialog and let the user change their selection.</li>
+     *   <li>{@link BackupScanStatus#FAILED} — scan threw an exception; show a
+     *       generic error dialog.</li>
+     * </ul>
      */
-    private void restoreStartButton() {
-        // Only re-enable if a valid mode is still selected
-        boolean canStart = selectedMode != null
-                && (MODE_ALL_MEDIA.equals(selectedMode)
-                || (MODE_FOLDER.equals(selectedMode) && selectedFolderUri != null));
-        btnStart.setEnabled(canStart);
-        btnStart.setAlpha(canStart ? 1.0f : 0.4f);
+    private void onScanStatusChanged(BackupScanStatus status) {
+        if (status == null) return;
+        switch (status) {
+            case SCANNING:
+                setScanningUiState(true);
+                break;
+
+            case IDLE:
+                // IDLE is the initial state AND the post-success state.
+                // Only act when we armed the flag in startScan().
+                if (scanInProgress) {
+                    scanInProgress = false;
+                    setScanningUiState(false);
+                    // Scan completed with files — transfer is already dispatched by the
+                    // repository.  Show toast and return to the main screen.
+                    Toast.makeText(requireContext(),
+                            R.string.backup_started_toast, Toast.LENGTH_LONG).show();
+                    requireActivity().getSupportFragmentManager().popBackStack();
+                }
+                break;
+
+            case EMPTY:
+                scanInProgress = false;
+                setScanningUiState(false);
+                showEmptyFilesDialog();
+                break;
+
+            case FAILED:
+                scanInProgress = false;
+                setScanningUiState(false);
+                showScanFailedDialog();
+                break;
+
+            default:
+                break;
+        }
     }
+
+    /**
+     * Toggles the "scanning in progress" UI state on the Start button and the
+     * mode-selection cards.
+     *
+     * @param scanning {@code true} while a scan is running; {@code false} otherwise.
+     */
+    private void setScanningUiState(boolean scanning) {
+        btnStart.setEnabled(!scanning);
+        btnStart.setAlpha(scanning ? 0.6f : 1.0f);
+        btnStart.setText(scanning ? R.string.backup_scanning : R.string.backup_start);
+        // Prevent mode changes mid-scan
+        cardAllMedia.setClickable(!scanning);
+        cardFolder.setClickable(!scanning);
+    }
+
+    /**
+     * Shows an AlertDialog whose message depends on the current backup mode:
+     * <ul>
+     *   <li>{@link #MODE_ALL_MEDIA} → "No photos or videos were found…"</li>
+     *   <li>{@link #MODE_FOLDER}    → "No files were found in the selected folder."</li>
+     * </ul>
+     * The user dismisses the dialog and remains on BackupFragment to pick a
+     * different source.
+     */
+    private void showEmptyFilesDialog() {
+        if (!isAdded()) return;
+        boolean isAllMedia = MODE_ALL_MEDIA.equals(selectedMode);
+        new AlertDialog.Builder(requireContext())
+                .setTitle(R.string.backup_error_no_files_title)
+                .setMessage(isAllMedia
+                        ? R.string.backup_error_no_media
+                        : R.string.backup_error_no_folder_files)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
+    /**
+     * Shows a generic "scan failed" dialog (e.g. I/O error or missing permissions).
+     */
+    private void showScanFailedDialog() {
+        if (!isAdded()) return;
+        new AlertDialog.Builder(requireContext())
+                .setTitle(R.string.backup_error_scan_failed_title)
+                .setMessage(R.string.backup_error_scan_failed_msg)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
+    // ── Parallel-slot auto-selection ──────────────────────────────────────────
+
+    /**
+     * Computes the optimal number of concurrent TauSync backup slots for this device.
+     *
+     * <p>Balancing factors:
+     * <ul>
+     *   <li><b>CPU cores</b> — {@link Runtime#availableProcessors()} gives the number
+     *       of hardware threads available.  We use half the cores as a base so Android's
+     *       background tasks and UI remain responsive during the backup.</li>
+     *   <li><b>Battery level</b> — sending files concurrently puts extra load on the
+     *       radio and CPU.  We throttle aggressively at low charge to prevent the phone
+     *       dying mid-backup.  The live battery sticky broadcast is read once at scan
+     *       time; no listener is registered.</li>
+     *   <li><b>Practical ceiling of 4</b> — beyond 4 concurrent slots, WiFi bandwidth
+     *       (typically the real bottleneck) is already saturated and adding threads only
+     *       increases contention on the TauSync socket without improving throughput.</li>
+     * </ul>
+     *
+     * <p>Thresholds:
+     * <pre>
+     *   battery &lt; 20 %  → 1 thread   (power-saver, strictly sequential)
+     *   battery &lt; 40 %  → ≤ 2 threads (moderate throughput)
+     *   battery ≥ 40 %  → min(cores/2, 4)  (full speed)
+     * </pre>
+     *
+     * @return Number of parallel slots, always ≥ 1.
+     */
+    private int computeParallelSlots() {
+        // ── CPU core count ────────────────────────────────────────────────────
+        int cores = Runtime.getRuntime().availableProcessors();
+        // Base: half the physical cores, min 1, max 4.
+        // Rationale: storage I/O saturates before CPU; >4 threads adds contention.
+        int base  = Math.max(1, Math.min(cores / 2, 4));
+
+        // ── Battery level ─────────────────────────────────────────────────────
+        int batteryPct = getCurrentBatteryPercent();
+        Log.d(TAG, "computeParallelSlots: cores=" + cores
+                + " base=" + base + " battery=" + batteryPct + "%");
+
+        if (batteryPct < 20) return 1;               // power-saver
+        if (batteryPct < 40) return Math.min(base, 2); // conservative
+        return base;                                  // full speed
+    }
+
+    /**
+     * Returns the current battery charge level as a percentage (0–100).
+     *
+     * <p>Reads the sticky {@link Intent#ACTION_BATTERY_CHANGED} broadcast synchronously —
+     * no listener registration needed.  Returns 100 on any error so that a failure to
+     * read battery state never causes us to throttle unnecessarily.
+     *
+     * @return Battery percentage 0–100, or 100 on error.
+     */
+    private int getCurrentBatteryPercent() {
+        try {
+            Intent batteryStatus = requireContext().registerReceiver(
+                    null,
+                    new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (batteryStatus == null) return 100;
+            int level = batteryStatus.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int scale = batteryStatus.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+            if (level < 0 || scale <= 0) return 100;
+            return (int) ((level / (float) scale) * 100);
+        } catch (Exception e) {
+            Log.w(TAG, "getCurrentBatteryPercent: could not read battery — defaulting to 100%");
+            return 100;
+        }
+    }
+
 }

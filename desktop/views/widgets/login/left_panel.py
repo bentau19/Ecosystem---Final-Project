@@ -18,8 +18,7 @@ from views.widgets.logo_widget import Logo, LogoNameLabel
 
 
 class LeftPanel(QWidget):
-    """
-    Left panel of the login screen.
+    """Left panel of the login screen.
 
     Displays the application logo, a live QR code encoding the host's
     local IP address, scan instructions, a refresh button, and a

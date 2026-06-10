@@ -1,16 +1,15 @@
-"""
-Device connectivity service.
-
-Manages the TauSync TCP connection lifecycle on a background thread,
-emitting Qt signals when a device connects or disconnects.
-"""
 import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
 import utils
 from domain.enums.session_channels import SessionChannels
 from tausync_py import TauSync
+# Imported for its side effect of binding the `network` submodule onto the
+# `utils` package object so `utils.network.*` below resolves correctly.
 from utils import network
 
 
@@ -41,10 +40,10 @@ class ConnectivityService(QObject):
             the connection attempt fails.
     """
 
-    device_connected = Signal()
-    device_disconnecting = Signal()
-    device_disconnected = Signal()
-    connection_error = Signal(str)
+    device_connected: Signal = Signal()
+    device_disconnecting: Signal = Signal()
+    device_disconnected: Signal = Signal()
+    connection_error: Signal = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         """Initialize the service and inject the device repository.
@@ -59,11 +58,10 @@ class ConnectivityService(QObject):
         """
         super().__init__(parent)
         self._tau: TauSync = TauSync()
-        self._threads: list[threading.Thread] = []
-        self._is_running = threading.Event()
+        self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
+        self._is_running: threading.Event = threading.Event()
 
-        self._lifecycle_lock = threading.Lock()
-        self._threads_lock = threading.Lock()
+        self._lifecycle_lock: threading.Lock = threading.Lock()
 
     # ── Public read-only access to the transport ──────────────────────────────
 
@@ -106,35 +104,30 @@ class ConnectivityService(QObject):
     # ── Private Functions ───────────────────────────────────────────────────
 
     def _start(self) -> None:
-        # Guard against double-start; replace the transport so reconnects get a fresh TauSync.
+        # Guard against double-start; replace both the transport and executor so
+        # reconnects get a fresh TauSync and a clean thread pool.
         with self._lifecycle_lock:
             if self._is_running.is_set():
                 return
+            self._executor = ThreadPoolExecutor()
             self._is_running.set()
             self._tau = TauSync()
         self._spawn(self._listen)
 
     def _stop(self) -> None:
-        # Join every worker thread except the one calling _stop (which is itself a thread).
+        # Clear the running flag, disconnect, then wait for all submitted work to finish.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
             self._disconnect_device()
-            pending_threads: list[threading.Thread] = self._get_pending_threads()
-            for t in pending_threads:
-                if t == threading.current_thread():
-                    continue
-                t.join()
+        self._executor.shutdown(wait=True, cancel_futures=True)
 
-    def _spawn(self, target, *args):
-        # All thread creation must go through here so teardown can join every worker.
+    def _spawn(self, target: Callable[..., None], *args: Any) -> None:
+        # Reject new submissions during teardown.
         if not self._is_running.is_set():
-            return  # reject new spawns during teardown
-        t = threading.Thread(target=target, args=args, daemon=True)
-        with self._threads_lock:
-            self._threads.append(t)
-        t.start()
+            return
+        self._executor.submit(target, *args)
 
     def disconnect_device(self) -> None:
         """Close the TauSync transport and emit ``device_disconnected``.
@@ -211,7 +204,3 @@ class ConnectivityService(QObject):
                 print(exc)
                 self.connection_error.emit(str(exc))
 
-    def _get_pending_threads(self) -> list[threading.Thread]:
-        # Snapshot alive threads under the lock so callers can join without holding it.
-        with self._threads_lock:
-            return [t for t in self._threads if t.is_alive()]

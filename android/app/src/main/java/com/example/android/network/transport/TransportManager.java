@@ -111,6 +111,29 @@ public interface TransportManager {
     void streamInputStreamToChannel(String channel, java.io.InputStream inputStream) throws Exception;
 
     /**
+     * Opens a single TauSync channel, writes a UTF-8 metadata string followed by a
+     * newline delimiter ({@code '\n'}), then streams all bytes from {@code inputStream}.
+     * Closes the channel after the stream is exhausted.
+     *
+     * <p>Used by the backup slot protocol so the PC can read the per-file metadata
+     * ({@code file_name}, {@code file_size}, {@code modified_at}) before receiving the
+     * raw file bytes — all in one {@code tauSync.connect()}, avoiding the 2-second
+     * ID-recycling grace period that would occur if metadata and bytes were sent in
+     * two separate channel connections.
+     *
+     * <p>The {@code '\n'} delimiter is safe because well-formed JSON never contains a
+     * bare newline character.
+     *
+     * @param channel     Channel name (e.g. {@code "backup_slot_0"})
+     * @param metadata    UTF-8 JSON string; must not contain a bare {@code '\n'}
+     * @param inputStream Source of raw file bytes
+     * @throws Exception if the channel connect, metadata write, or byte stream fails
+     */
+    void writeMetadataThenStreamToChannel(String channel,
+                                          String metadata,
+                                          java.io.InputStream inputStream) throws Exception;
+
+    /**
      * Checks if the transport is currently connected.
      */
     boolean isConnected();

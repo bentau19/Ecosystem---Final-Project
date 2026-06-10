@@ -1,52 +1,14 @@
-"""
-ViewModel for the backup progress screen.
-
-Owns all mutable state for an in-progress backup session — per-file status,
-per-file byte counters, and the overall total — and translates that state into
-PySide6 Signals that :class:`~views.widgets.backup.backup_progress_window.BackupProgressWindow`
-(and any other subscriber) connects to.
-
-Architecture notes
-------------------
-* The view **never** imports from services or repositories.  It wires itself
-  to this ViewModel's signals and calls the ViewModel's public methods in
-  response to user actions (pause, resume, cancel).
-* ``start_backup`` is **gated** behind device connectivity — silently no-ops
-  when no device is connected.
-* Pause, resume, and cancel are **not** gated — an in-flight operation the
-  user already confirmed must still be cancellable after a disconnect.
-
-Service seam
-------------
-No ``BackupService`` exists yet.  The constructor accepts one via a
-``TYPE_CHECKING``-guarded type annotation so the wiring is zero-cost at
-runtime.  The private ``_on_*`` slots are fully implemented and ready to be
-connected as soon as the service is built::
-
-    backup_service.file_progress.connect(self._on_file_progress)
-    backup_service.file_complete.connect(self._on_file_complete)
-    backup_service.file_failed.connect(self._on_file_failed)
-    backup_service.backup_complete.connect(self._on_backup_complete)
-
-The ``BackupService`` will need to emit:
-
-* ``file_progress(str, int, float)``  — (path, bytes_done, speed_bps)
-* ``file_complete(str)``              — path
-* ``file_failed(str, str)``           — (path, error_message)
-* ``backup_complete()``
-"""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import time
+from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from domain.dto.backup_file import BackupFileDTO
+from domain.dto.backup_review_prompt import BackupReviewPromptDTO
 from domain.enums.backup_status import BackupStatus
-
-if TYPE_CHECKING:
-    from services.backup import BackupService
-    from services.connectivity import ConnectivityService
+from services.backup import BackupService
+from services.connectivity import ConnectivityService
 
 
 class BackupViewModel(QObject):
@@ -57,38 +19,98 @@ class BackupViewModel(QObject):
     signals and updates its own widgets in response — the ViewModel never
     touches view objects directly.
 
+    Architecture notes:
+        * The view **never** imports from services or repositories.  It wires
+          itself to this ViewModel's signals and calls the ViewModel's public
+          methods in response to user actions (confirm destination, cancel,
+          pause, resume).
+        * When Android sends a backup manifest the service emits
+          ``manifest_received`` with a
+          :class:`~domain.dto.backup_session_prompt.BackupSessionPromptDTO`.
+          The ViewModel resets its session state and emits
+          ``dest_dir_requested`` so the view can open a folder-picker dialog.
+        * Per-file state (``_statuses``, ``_bytes_done_map``, ``_file_sizes``)
+          is **lazily initialised** via :attr:`file_registered` signals
+          emitted by the service when each slot's JSON header is read.  This
+          is necessary because the manifest only contains the total file count
+          and size — not per-file metadata.
+        * The view calls :meth:`confirm_dest_dir` (user picked a folder) or
+          :meth:`cancel_dest_selection` (user dismissed the picker).  Both are
+          **not** gated by connectivity so the user can always dismiss an
+          incoming request.
+        * Pause, resume, and cancel are **not** gated — an in-flight session
+          must remain controllable even after a disconnect.
+
+    Flow::
+
+        Android sends manifest
+          → service.manifest_received(prompt)
+          → _on_manifest_received  (resets state, emits dest_dir_requested)
+          → view opens QFileDialog
+          → user picks folder  → confirm_dest_dir(path) → service.proceed(path)
+          → user cancels       → cancel_dest_selection() → service.cancel_session()
+
+        After proceed():
+          → service sends "ready" to Android
+          → For each slot i:
+                service emits file_registered(rel_path, size_bytes)
+                  → VM initialises _statuses / _bytes_done_map / _file_sizes
+                service emits file_progress(rel_path, bytes, speed)
+                (if classifier returns NEEDS_REVIEW:
+                    service emits review_required(BackupReviewPromptDTO)
+                      → _on_review_required → emits review_requested
+                      → view shows keep/discard dialog
+                      → resolve_review(channel, keep) → service.resolve_review(...)
+                      → slot's receiver thread unblocks)
+                service emits file_complete(rel_path) | file_failed(rel_path, reason)
+          → service emits backup_complete
+
     Signals:
-        backup_ready (Signal[list]): Emitted with ``list[BackupFileDTO]`` when
-            :meth:`start_backup` is called and the session is initialised.
-            The view should create :class:`BackupProgressWindow` (or reset it)
-            from this payload.
-        file_progress_updated (Signal[str, int, float]): Emitted periodically
-            during a transfer as ``(path, bytes_done, speed_bps)``.  Maps to
-            ``BackupProgressWindow.update_progress``.
+        dest_dir_requested (Signal[object]): Emitted with a
+            :class:`~domain.dto.backup_session_prompt.BackupSessionPromptDTO`
+            when a manifest arrives from Android.  The view should open a
+            folder-picker dialog and call :meth:`confirm_dest_dir` or
+            :meth:`cancel_dest_selection` in response.
+        backup_ready (Signal[int, int]): Emitted as ``(file_count, total_bytes)``
+            once the user confirms a destination so the view can open/reset
+            the progress window.
+        file_registered (Signal[str, int]): Forwarded from the service as
+            ``(rel_path, size_bytes)`` when each slot's JSON header is parsed.
+            The view uses this to lazily create per-file row widgets before any
+            progress ticks arrive.
+        file_progress_updated (Signal[str, int, float]): Emitted on every
+            progress tick as ``(rel_path, bytes_done, speed_bps)``.
         file_status_changed (Signal[str, object]): Emitted on every status
-            transition as ``(path, BackupStatus)``.  Maps to
-            ``BackupProgressWindow.set_status``.
-        overall_updated (Signal[int, int]): Emitted after every per-file
-            progress tick as ``(total_bytes, done_bytes)``.  Maps to
-            ``BackupProgressWindow.set_overall``.
-        backup_complete (Signal): Emitted once every file reaches
-            ``DONE`` or ``FAILED``.  Maps to ``BackupProgressWindow.mark_done``.
-        backup_error (Signal[str]): Emitted when the service reports a
-            session-level (non-file) error.
+            transition as ``(rel_path, BackupStatus)``.
+        overall_updated (Signal[int, int, float]): Emitted after every progress
+            tick as ``(total_bytes, done_bytes, eta_secs)``.  ``eta_secs`` is
+            ``-1.0`` when not yet computable.
+        backup_complete (Signal): Emitted once every file reaches ``DONE``
+            or ``FAILED``.
+        backup_error (Signal[str]): Emitted on a session-level error.
         device_ready_changed (Signal[bool]): ``True`` when a device connects,
-            ``False`` when it disconnects — use this to enable/disable the
-            "Start Backup" button.
+            ``False`` when it disconnects.
+        review_requested (Signal[object]): Forwarded from the service as a
+            :class:`~domain.dto.backup_review_prompt.BackupReviewPromptDTO`
+            when the ML classifier needs the user to decide whether to keep
+            or discard a file. The view should show a confirmation dialog and
+            call :meth:`resolve_review` with the result.
     """
 
     # ── Signals ───────────────────────────────────────────────────────────────
 
-    backup_ready: Signal            = Signal(list)          # list[BackupFileDTO]
-    file_progress_updated: Signal   = Signal(str, int, float)  # path, bytes_done, speed_bps
-    file_status_changed: Signal     = Signal(str, object)   # path, BackupStatus
-    overall_updated: Signal         = Signal(int, int)      # total_bytes, done_bytes
-    backup_complete: Signal         = Signal()
-    backup_error: Signal            = Signal(str)
-    device_ready_changed: Signal    = Signal(bool)
+    dest_dir_requested: Signal = Signal(int, 'qint64')  # (file_count, total_bytes)
+    backup_ready: Signal = Signal(int, 'qint64')        # (file_count, total_bytes)
+    file_registered: Signal = Signal(str, 'qint64')     # (rel_path, size_bytes)
+    file_progress_updated: Signal = Signal(str, 'qint64', float)
+    file_status_changed: Signal = Signal(str, object)
+    overall_updated: Signal = Signal('qint64', 'qint64', float)  # (total_bytes, done_bytes, eta_secs)
+    backup_complete: Signal = Signal()
+    backup_error: Signal = Signal(str)
+    device_ready_changed: Signal = Signal(bool)
+    pause_state_changed: Signal = Signal(bool)  # True = paused, False = resumed
+    review_requested: Signal = Signal(object)  # BackupReviewPromptDTO
+    backup_session_result: Signal = Signal(bool, str)  # (classify, dest_dir) — fires after backup_complete
 
     def __init__(
             self,
@@ -99,10 +121,10 @@ class BackupViewModel(QObject):
         """Wire service signals and initialise empty session state.
 
         Args:
-            backup_service: The service that performs the actual file I/O
+            backup_service: The service that manages Android-to-PC transfers
                 and emits per-file progress / completion events.
-            connectivity_service: Used to gate :meth:`start_backup` and to
-                forward ``device_ready_changed`` to the view.
+            connectivity_service: Used to track device connectivity and emit
+                :attr:`device_ready_changed`.
             parent: Optional Qt parent for memory management.
         """
         super().__init__(parent)
@@ -111,26 +133,33 @@ class BackupViewModel(QObject):
         self._connectivity_service: ConnectivityService = connectivity_service
 
         # ── Session state ─────────────────────────────────────────────────────
-        self._files: list[BackupFileDTO] = []
-        self._statuses: dict[str, BackupStatus] = {}       # path → status
-        self._bytes_done_map: dict[str, int] = {}          # path → bytes transferred
+        self._file_count: int = 0
+        self._statuses: dict[str, BackupStatus] = {}
+        self._bytes_done_map: dict[str, int] = {}
+        self._file_sizes: dict[str, int] = {}  # rel_path → expected total bytes
         self._total_bytes: int = 0
         self._done_bytes: int = 0
+        self._session_start_time: float | None = None
         self._is_paused: bool = False
         self._is_device_connected: bool = False
         self._is_active: bool = False
+        self._classify: bool = False   # forwarded from BackupSessionPromptDTO.classify
+        self._dest_dir: str = ""       # path chosen by the user; used in backup_session_result
 
         # ── Connectivity wiring ───────────────────────────────────────────────
         self._connectivity_service.device_connected.connect(self._on_device_connected)
         self._connectivity_service.device_disconnected.connect(self._on_device_disconnected)
 
         # ── BackupService wiring ──────────────────────────────────────────────
-        # Connect once BackupService is available; slots are fully implemented.
-        #
-        #   self._backup_service.file_progress.connect(self._on_file_progress)
-        #   self._backup_service.file_complete.connect(self._on_file_complete)
-        #   self._backup_service.file_failed.connect(self._on_file_failed)
-        #   self._backup_service.backup_complete.connect(self._on_backup_complete)
+        self._backup_service.manifest_received.connect(self._on_manifest_received)
+        self._backup_service.file_registered.connect(self._on_file_registered)
+        self._backup_service.file_progress.connect(self._on_file_progress)
+        self._backup_service.file_complete.connect(self._on_file_complete)
+        self._backup_service.file_failed.connect(self._on_file_failed)
+        self._backup_service.backup_complete.connect(self._on_backup_complete)
+        self._backup_service.session_paused.connect(self._on_session_paused)
+        self._backup_service.session_resumed.connect(self._on_session_resumed)
+        self._backup_service.review_required.connect(self._on_review_required)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -144,43 +173,37 @@ class BackupViewModel(QObject):
         """Whether a backup session is currently in progress."""
         return self._is_active
 
-    def start_backup(self, files: list[BackupFileDTO]) -> None:
-        """Initialise a new backup session and begin transferring files.
+    def confirm_dest_dir(self, dest_dir: str) -> None:
+        """User confirmed a backup destination folder — unblock the service.
 
-        No-ops silently when no device is connected or when a session is
-        already in progress.
+        Called by the view after the user picks a folder in the
+        ``dest_dir_requested`` dialog.  Emits :attr:`backup_ready` with the
+        session's file count and total byte size so the view can open the
+        progress window.
 
-        Emits:
-            backup_ready: With the validated file list so the view can
-                initialise (or reset) :class:`BackupProgressWindow`.
+        Not gated by connectivity — the user must be able to confirm even if
+        the connection state changed while the dialog was open.
 
         Args:
-            files: Ordered list of files to back up.  Empty lists are
-                accepted and will immediately emit :attr:`backup_complete`.
+            dest_dir: Absolute path to the chosen backup folder.
         """
-        if not self._is_device_connected or self._is_active:
-            return
+        self._dest_dir = dest_dir
+        self.backup_ready.emit(self._file_count, self._total_bytes)
+        self._backup_service.proceed(Path(dest_dir))
 
-        self._reset_session(files)
-        self.backup_ready.emit(list(self._files))
+    def cancel_dest_selection(self) -> None:
+        """User dismissed the folder picker — abort the pending backup session.
 
-        if not self._files:
-            # Nothing to do — complete immediately so the view reaches a
-            # terminal state rather than waiting forever.
-            self.backup_complete.emit()
-            return
-
-        self._is_active = True
-        self._backup_service.start(paths=[f.path for f in self._files])
+        Not gated by connectivity.
+        """
+        self._backup_service.cancel_session()
+        self._reset_session()
 
     def pause(self) -> None:
         """Pause all active transfers.
 
-        Not gated by connectivity — in-flight transfers must be pausable
-        even if the device disconnects mid-session.
-
-        Emits nothing directly; the service will stop emitting
-        ``file_progress`` events while paused.
+        Not gated by connectivity — in-flight transfers must be pausable even
+        if the device disconnects mid-session.
         """
         if not self._is_active or self._is_paused:
             return
@@ -200,91 +223,146 @@ class BackupViewModel(QObject):
     def cancel(self) -> None:
         """Cancel the running backup session and reset internal state.
 
-        Not gated by connectivity — the user must always be able to cancel.
+        Works during both the destination-picker phase and the active transfer
+        phase.  Not gated by connectivity.
         """
         if not self._is_active:
             return
         self._backup_service.cancel()
-        self._reset_session([])
+        self._reset_session()
+
+    def resolve_review(self, channel: str, keep: bool) -> None:
+        """User responded to a pending confidence review prompt.
+
+        Called by the view after the user dismisses the dialog shown for
+        :attr:`review_requested`. Not gated by connectivity — the user must
+        be able to respond even if the device disconnects mid-session.
+
+        Args:
+            channel: The slot channel from the originating
+                :class:`~domain.dto.backup_review_prompt.BackupReviewPromptDTO`.
+            keep: ``True`` to keep the file, ``False`` to discard it.
+        """
+        self._backup_service.resolve_review(channel, keep)
 
     # ── Connectivity slots ────────────────────────────────────────────────────
 
     @Slot()
     def _on_device_connected(self) -> None:
-        """Gate new backups and notify the view that the button can be enabled."""
+        """Notify the view that a device is connected."""
         self._is_device_connected = True
         self.device_ready_changed.emit(True)
 
     @Slot()
     def _on_device_disconnected(self) -> None:
-        """Drop the connectivity gate; leave any in-flight session untouched."""
+        """Notify the view that the device has disconnected."""
         self._is_device_connected = False
         self.device_ready_changed.emit(False)
 
     # ── BackupService slots ───────────────────────────────────────────────────
 
-    @Slot(str, int, float)
+    @Slot(int, 'qint64', bool)
+    def _on_manifest_received(self, files_count: int, files_size: int, classify: bool) -> None:
+        """Android sent a manifest header — reset session state and ask for dest.
+
+        Sets ``_is_active = True`` immediately so :meth:`cancel` works during
+        the folder-picker phase.
+
+        Args:
+            files_count: Total number of files in the incoming session.
+            files_size: Total byte size of all files in the incoming session.
+            classify: Whether the session will run ML content screening.
+        """
+        if self._is_active:
+            # A session is already running — ignore the incoming manifest.
+            return
+
+        self._reset_session(
+            file_count=files_count,
+            total_bytes=files_size,
+        )
+        self._classify = classify
+        self._is_active = True
+        self.dest_dir_requested.emit(files_count, files_size)
+
+    @Slot(str, 'qint64')
+    def _on_file_registered(self, rel_path: str, size_bytes: int) -> None:
+        """Lazily initialise per-file tracking state when a slot header arrives.
+
+        Called by the service after reading each slot's JSON metadata line,
+        before any progress ticks are emitted for that file.  Forwards the
+        event to the view layer via :attr:`file_registered` so the view can
+        create its per-file row widget.
+
+        Args:
+            rel_path:   File name / relative path used as the per-file key.
+            size_bytes: Expected total byte count for this file.
+        """
+        self._statuses[rel_path] = BackupStatus.QUEUED
+        self._bytes_done_map[rel_path] = 0
+        self._file_sizes[rel_path] = size_bytes
+        self.file_registered.emit(rel_path, size_bytes)
+        self._transition_status(rel_path, BackupStatus.QUEUED)
+
+    @Slot(str, 'qint64', float)
     def _on_file_progress(self, path: str, bytes_done: int, speed_bps: float) -> None:
         """Handle a per-file progress tick from the backup service.
 
-        Updates internal byte counters, recomputes the overall total, and
-        emits both :attr:`file_progress_updated` and :attr:`overall_updated`.
+        Updates internal byte counters, transitions the file to ``ACTIVE`` on
+        first tick, and emits :attr:`file_progress_updated` and
+        :attr:`overall_updated`.
 
         Args:
-            path: Absolute path of the file being transferred.
-            bytes_done: Number of bytes transferred so far.
-            speed_bps: Current transfer speed in bytes per second.
+            path:       ``rel_path`` key identifying the file.
+            bytes_done: Number of bytes received so far.
+            speed_bps:  Current transfer speed in bytes per second.
         """
         if path not in self._bytes_done_map:
             return
 
         previous = self._bytes_done_map[path]
         self._bytes_done_map[path] = bytes_done
-
-        # Recompute overall done_bytes as a delta to avoid a full O(n) sum on
-        # every tick.
         self._done_bytes = max(0, self._done_bytes + (bytes_done - previous))
+
+        if self._session_start_time is None and bytes_done > 0:
+            self._session_start_time = time.monotonic()
 
         if self._statuses.get(path) != BackupStatus.ACTIVE:
             self._transition_status(path, BackupStatus.ACTIVE)
 
         self.file_progress_updated.emit(path, bytes_done, speed_bps)
-        self.overall_updated.emit(self._total_bytes, self._done_bytes)
+        self.overall_updated.emit(self._total_bytes, self._done_bytes, self._compute_eta())
 
     @Slot(str)
     def _on_file_complete(self, path: str) -> None:
-        """Handle successful completion of a single file transfer.
+        """Handle successful save of a single file.
 
-        Marks the file ``DONE``, credits its full size to ``done_bytes``,
-        and checks whether the entire session is finished.
+        Marks the file ``DONE``, credits its full size to ``_done_bytes``, and
+        checks whether the entire session is finished.
 
         Args:
-            path: Absolute path of the completed file.
+            path: ``rel_path`` key of the completed file.
         """
         if path not in self._statuses:
             return
 
-        file_size = next(
-            (f.size_bytes for f in self._files if f.path == path), 0
-        )
+        file_size = self._file_sizes.get(path, 0)
         self._bytes_done_map[path] = file_size
         self._done_bytes = sum(self._bytes_done_map.values())
 
         self._transition_status(path, BackupStatus.DONE)
-        self.overall_updated.emit(self._total_bytes, self._done_bytes)
+        self.overall_updated.emit(self._total_bytes, self._done_bytes, self._compute_eta())
         self._check_session_complete()
 
     @Slot(str, str)
     def _on_file_failed(self, path: str, error: str) -> None:  # noqa: ARG002
-        """Handle a failed file transfer.
+        """Handle a failed file (transport error, corrupt, duplicate, or filtered).
 
         Marks the file ``FAILED`` and checks whether the session is finished.
-        The per-file ``error`` string is absorbed here; session-level errors
-        arrive via :meth:`_on_backup_error`.
 
         Args:
-            path: Absolute path of the failed file.
-            error: Human-readable error description (logged / future toast).
+            path:  ``rel_path`` key of the failed file.
+            error: Human-readable failure reason.
         """
         if path not in self._statuses:
             return
@@ -294,61 +372,113 @@ class BackupViewModel(QObject):
 
     @Slot()
     def _on_backup_complete(self) -> None:
-        """Handle a session-complete event from the service.
+        """Handle session-complete signal from the service.
 
-        The service emits this after all file-level work is done.  The VM
-        mirrors the check in :meth:`_check_session_complete` so either side
-        can trigger the terminal state.
+        Guards against double-emission: :meth:`_check_session_complete` may
+        have already fired :attr:`backup_complete` if all files reached a
+        terminal state before this slot was delivered.
         """
+        if not self._is_active:
+            return  # already emitted via _check_session_complete
         self._is_active = False
         self._is_paused = False
         self.backup_complete.emit()
+        self.backup_session_result.emit(self._classify, self._dest_dir)
 
-    @Slot(str)
-    def _on_backup_error(self, error: str) -> None:
-        """Handle a session-level (non-file) error from the service.
+    @Slot()
+    def _on_session_paused(self) -> None:
+        """Android paused the transfer — sync local pause state and notify the view.
+
+        Mirrors the bookkeeping in :meth:`pause` without re-sending a control
+        command to Android (it already knows — it initiated this).
+        """
+        if self._is_paused:
+            return
+        self._is_paused = True
+        self.pause_state_changed.emit(True)
+
+    @Slot()
+    def _on_session_resumed(self) -> None:
+        """Android resumed the transfer — sync local pause state and notify the view."""
+        if not self._is_paused:
+            return
+        self._is_paused = False
+        self.pause_state_changed.emit(False)
+
+    @Slot(object)
+    def _on_review_required(self, prompt: BackupReviewPromptDTO) -> None:
+        """Forward a pending confidence review prompt to the view.
 
         Args:
-            error: Human-readable description of the session error.
+            prompt: Describes the file awaiting a keep/discard decision.
         """
-        self._is_active = False
-        self._is_paused = False
-        self.backup_error.emit(error)
+        self.review_requested.emit(prompt)
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    def _reset_session(self, files: list[BackupFileDTO]) -> None:
-        """Replace all session state with a fresh baseline for *files*.
+    def _reset_session(
+            self,
+            file_count: int = 0,
+            total_bytes: int = 0,
+    ) -> None:
+        """Replace all session state with a fresh baseline.
+
+        Per-file maps are cleared and will be lazily populated when
+        :attr:`~services.backup.BackupService.file_registered` signals arrive.
 
         Args:
-            files: The new file list; pass ``[]`` to clear the session.
+            file_count:   Number of files in the new session (0 to clear).
+            total_bytes:  Total byte count for the new session (0 to clear).
         """
-        self._files = list(files)
-        self._statuses = {f.path: BackupStatus.QUEUED for f in files}
-        self._bytes_done_map = {f.path: 0 for f in files}
-        self._total_bytes = sum(f.size_bytes for f in files)
+        self._file_count = file_count
+        self._statuses = {}
+        self._bytes_done_map = {}
+        self._file_sizes = {}
+        self._total_bytes = total_bytes
         self._done_bytes = 0
+        self._session_start_time = None
         self._is_paused = False
         self._is_active = False
+        self._classify = False
+        self._dest_dir = ""
 
     def _transition_status(self, path: str, status: BackupStatus) -> None:
         """Update the stored status for *path* and emit :attr:`file_status_changed`.
 
         Args:
-            path: Absolute path of the affected file.
+            path:   ``rel_path`` key of the affected file.
             status: The new :class:`~domain.enums.backup_status.BackupStatus`.
         """
         self._statuses[path] = status
         self.file_status_changed.emit(path, status)
 
     def _check_session_complete(self) -> None:
-        """Emit :attr:`backup_complete` if every file has reached a terminal state.
+        """Emit :attr:`backup_complete` if every registered file has reached
+        a terminal state and all expected files have been registered.
 
-        Terminal states are ``DONE`` and ``FAILED``.  ``QUEUED`` and ``ACTIVE``
-        files keep the session open.
+        Emits only once — sets ``_is_active = False`` before emitting to
+        prevent :meth:`_on_backup_complete` from double-firing.
         """
+        # Guard: not all files have registered yet
+        if len(self._statuses) < self._file_count:
+            return
+
         terminal = {BackupStatus.DONE, BackupStatus.FAILED}
-        if all(s in terminal for s in self._statuses.values()):
+        if self._is_active and all(s in terminal for s in self._statuses.values()):
             self._is_active = False
             self._is_paused = False
             self.backup_complete.emit()
+            self.backup_session_result.emit(self._classify, self._dest_dir)
+
+    def _compute_eta(self) -> float:
+        """Return estimated seconds remaining, or ``-1.0`` if not yet computable.
+
+        Uses virtual bytes (scaled ``[0, total_bytes]`` across both transfer
+        phases) which keeps the ratio consistent with ``_total_bytes``.
+        """
+        if not self._session_start_time or self._done_bytes <= 0:
+            return -1.0
+        elapsed = time.monotonic() - self._session_start_time
+        rate = self._done_bytes / elapsed  # virtual bytes/sec
+        remaining = max(0, self._total_bytes - self._done_bytes)
+        return remaining / rate if rate > 0 else -1.0
