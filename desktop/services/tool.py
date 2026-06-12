@@ -1,7 +1,5 @@
 import threading
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
@@ -14,8 +12,8 @@ class ToolService(QObject):
 
     Re-emits repository mutation signals as service-level signals so that
     viewmodels can subscribe without importing from the repositories layer.
-    All repository I/O is dispatched on background threads via :meth:`_spawn`
-    so the GUI thread is never blocked by SQLite calls.
+    All repository I/O is submitted to :attr:`_executor` so the GUI thread
+    is never blocked by SQLite calls.
 
     Signals:
         tool_added (Signal[object]): Forwarded from
@@ -82,7 +80,7 @@ class ToolService(QObject):
         """
         if not self._is_running.is_set():
             return
-        self._spawn(self._fetch_all_enabled)
+        self._executor.submit(self._fetch_all_enabled)
 
     # ── Private lifecycle ──────────────────────────────────────────────────────
 
@@ -96,17 +94,15 @@ class ToolService(QObject):
 
     def _stop(self) -> None:
         # Clear the running flag then wait for all submitted work to finish.
+        # The executor reference is captured inside the lock so a concurrent
+        # _start() (which swaps self._executor) can never have its fresh pool
+        # shut down by this stop.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-        self._executor.shutdown(wait=True, cancel_futures=True)
-
-    def _spawn(self, target: Callable[..., None], *args: Any) -> None:
-        # Reject new submissions during teardown.
-        if not self._is_running.is_set():
-            return
-        self._executor.submit(target, *args)
+            executor = self._executor
+        executor.shutdown(wait=True, cancel_futures=True)
 
     def _fetch_all_enabled(self) -> None:
         # Retrieve enabled tools from the repository and emit the result.

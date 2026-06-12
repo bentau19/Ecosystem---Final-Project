@@ -10,6 +10,7 @@ import androidx.lifecycle.ViewModel;
 import com.example.android.domain.entities.BackupFileEntry;
 import com.example.android.domain.entities.BackupOptions;
 import com.example.android.domain.enums.BackupScanStatus;
+import com.example.android.domain.enums.BackupTransferStatus;
 import com.example.android.domain.usecases.ScanBackupFilesUseCase;
 import com.example.android.repositories.BackupRepository;
 
@@ -60,6 +61,38 @@ public class BackupViewModel extends ViewModel {
      */
     public LiveData<BackupScanStatus> getScanStatus() {
         return repository.getScanStatus();
+    }
+
+    /**
+     * Forwards the transfer-phase lifecycle LiveData.
+     * Observed by {@link com.example.android.ui.fragments.BackupFragment} to stay
+     * alive during the transfer and show the completion summary dialog.
+     */
+    public LiveData<BackupTransferStatus> getTransferStatus() {
+        return repository.getTransferStatus();
+    }
+
+    /**
+     * Running count of files confirmed by the PC so far in the current batch.
+     * Used to update the in-progress button label ("Backing up X / Y…").
+     */
+    public LiveData<Integer> getTransferSent() {
+        return repository.getTransferSent();
+    }
+
+    /**
+     * Total number of files in the current backup batch.
+     */
+    public LiveData<Integer> getTransferTotal() {
+        return repository.getTransferTotal();
+    }
+
+    /**
+     * Count of files the PC reported as transfer failures in the current batch.
+     * Read in the summary dialog to show "X succeeded, Y failed".
+     */
+    public LiveData<Integer> getFailedCount() {
+        return repository.getFailedCount();
     }
 
     // ── User actions ──────────────────────────────────────────────────────────

@@ -16,12 +16,10 @@ import androidx.lifecycle.ProcessLifecycleOwner;
 import com.example.android.data.datasource.BackupDataSource;
 import com.example.android.data.datasource.SystemDataSource;
 import com.example.android.domain.entities.RemoteDeviceInfo;
-import com.example.android.domain.entities.BackupOptions;
 import com.example.android.domain.enums.BackupTransferStatus;
 import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.domain.enums.SendFileStatus;
 import com.example.android.domain.enums.ConnectionType;
-import com.example.android.enums.Channel;
 import com.example.android.enums.DeviceInfoChannels;
 import com.example.android.enums.FileTransferChannels;
 import com.example.android.enums.SessionChannels;
@@ -44,6 +42,9 @@ import com.example.android.network.transport.TransportManager;
 import com.example.android.network.transport.TransportStatus;
 import com.example.android.network.transport.TauSyncTransportManager;
 import com.example.android.repositories.DeviceRepository;
+
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * ConnectivityService - Thin Orchestrator for managing remote PC connections.
@@ -82,6 +83,11 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     // Observer for backup scan failures — kept for removal in onDestroy
     private Observer<com.example.android.domain.enums.BackupScanStatus> backupScanStatusObserver;
 
+    // Channels currently being handled by a PeerRequestHandler thread. Prevents the
+    // poll loop from spawning a second handler for the same channel while a prior
+    // writeToChannel() call is still blocking inside tauSync.connect().
+    private final Set<String> inProgressChannels = ConcurrentHashMap.newKeySet();
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -114,8 +120,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         receiveFileUseCase = new ReceiveFileUseCase(transportManager, ReceiveFileRepository.getInstance(), this);
         sendFileUseCase = new SendFileUseCase(transportManager, SendFileRepository.getInstance(), this);
         backupTransferUseCase = new BackupTransferUseCase(
-                transportManager, BackupRepository.getInstance(), this, new BackupDataSource(),
-                handlerRegistry);
+                transportManager, BackupRepository.getInstance(), this, new BackupDataSource());
 
         registerChannelHandlers();
         registerFileTransferActionListener();
@@ -352,7 +357,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // Map transport status to domain status
         ConnectionStatus connectionStatus = mapTransportStatusToConnectionStatus(status);
 
-        // ◄ הגנה: אם המצב הנוכחי באפליקציה הוא כבר FAILED, אל תיתן לשום סטטוס משני לדרוס אותו
+        // Guard: if the app has already reached FAILED, ignore any secondary status update.
         if (deviceRepository.getCurrentConnectionStatus() == ConnectionStatus.FAILED) {
             Log.w(TAG, "Connection already marked as FAILED. Ignoring secondary status: " + status);
             return;
@@ -371,12 +376,57 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     public void onPeerRequestsAvailable(java.util.List<String> channels) {
         Log.d(TAG, "Peer requests available for channels: " + channels);
 
-        // Handle sequential polling requests from the desktop server on a dedicated worker thread to maintain thread safety
-        new Thread(() -> {
-            for (String channel : channels) {
-                handlerRegistry.handlePeerRequest(channel);
+        // Called on the main thread via mainHandler.post(). Each channel gets its own
+        // daemon thread so device-info channels respond in parallel (matching the PC's
+        // concurrent ThreadPoolExecutor reads). inProgressChannels prevents duplicate
+        // dispatches: the poll loop fires every 2 s regardless of how long a handler
+        // blocks inside writeToChannel(), so without this guard each poll tick would
+        // spawn a new thread that collides with the still-running one and throws
+        // IllegalStateException: "Connect already in progress for word '...'".
+        for (String channel : channels) {
+            // Backup channels below are consumed directly by BackupTransferUseCase
+            // threads (readFromChannel / writeToChannel / streamInputStreamToChannel),
+            // never via the registry — skip them to avoid spurious "No handler
+            // registered" warnings. This includes backup_manifest, which the PC's
+            // listener loop keeps pending almost continuously by design.
+            // backup_ctrl_pc is NOT skipped: it has a real registered handler
+            // (BackupControlChannelHandler).
+            if (isDirectlyConsumedBackupChannel(channel)) continue;
+
+            // Atomically claim the channel. If another thread is already inside
+            // handlePeerRequest() for this word, skip — the poll will retry it next tick.
+            if (!inProgressChannels.add(channel)) {
+                Log.d(TAG, "Channel already in progress, skipping: " + channel);
+                continue;
             }
-        }, "PeerRequestHandlerThread").start();
+
+            new Thread(() -> {
+                try {
+                    handlerRegistry.handlePeerRequest(channel);
+                } finally {
+                    inProgressChannels.remove(channel);
+                }
+            }, "PeerRequestHandler-" + channel).start();
+        }
+    }
+
+    /**
+     * Returns {@code true} for backup channels that are consumed directly by
+     * {@code BackupTransferUseCase} threads rather than dispatched through the
+     * {@code ChannelHandlerRegistry}. These channels legitimately appear in the
+     * peer-waiting list (the PC opens them and blocks until Android connects the same
+     * word), so reporting "No handler registered" for them is pure noise — by design
+     * no handler will ever exist.
+     *
+     * @param channel Full channel name from the peer-waiting snapshot.
+     * @return {@code true} if the registry should not be consulted for this channel.
+     */
+    private static boolean isDirectlyConsumedBackupChannel(String channel) {
+        return channel.startsWith(BackupChannels.BACKUP_FILE_RESULT.getValue())
+                || channel.startsWith(BackupChannels.BACKUP_FILE_DATA_SLOT.getValue())
+                || channel.startsWith(BackupChannels.BACKUP_FILE_META_SLOT.getValue())
+                || channel.equals(BackupChannels.BACKUP_READY_FROM_PC.getValue())
+                || channel.equals(BackupChannels.BACKUP_MANIFEST_FROM_ANDROID.getValue());
     }
 
     @Override
@@ -471,11 +521,11 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     }
 
     private String getStorageTotal() {
-        return String.valueOf(systemDataSource.getRawStorageStats().getTotal());
+        return String.valueOf(systemDataSource.getRawStorageStats().total());
     }
 
     private String getStorageUsed() {
-        return String.valueOf(systemDataSource.getRawStorageStats().getUsed());
+        return String.valueOf(systemDataSource.getRawStorageStats().used());
     }
 
     // ============ File Transfer Action Listener ============
@@ -551,7 +601,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
      */
     private void registerIncomingRequestListener() {
         ReceiveFileRepository.getInstance().setIncomingRequestListener(request -> {
-            Log.d(TAG, "Incoming request arrived: " + request.getFileName());
+            Log.d(TAG, "Incoming request arrived: " + request.fileName());
 
             // Show a notification only when the app is in the background.
             // When the app is in the foreground, MainActivity's LiveData observer
@@ -563,7 +613,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
             if (!appInForeground) {
                 notificationManager.showFileTransferApprovalNotification(
-                        request.getFileName(),
+                        request.fileName(),
                         request.getFormattedSize()
                 );
             }
@@ -638,9 +688,16 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                     break;
                 }
                 case STOPPED:
-                    // BackupFragment is gone — replace the sticky notification with a
-                    // brief "Backup stopped" notice instead of dismissing silently.
+                    // User tapped Stop in the notification — replace the sticky
+                    // progress notification with a brief "Backup stopped" notice.
                     notificationManager.showBackupStoppedNotification();
+                    repo.resetTransfer();
+                    break;
+                case CANCELED_BY_PC:
+                    // PC dismissed the folder picker before any file was sent.
+                    // BackupFragment is still on-screen and shows a Toast — no
+                    // notification banner needed; just dismiss the progress icon.
+                    notificationManager.dismissBackupProgressNotification();
                     repo.resetTransfer();
                     break;
                 case FAILED:

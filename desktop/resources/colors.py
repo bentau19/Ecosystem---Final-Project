@@ -47,6 +47,7 @@ class Palette(ColorsEnum):
     GREEN_200 = "#00C853"  # Secondary green color
 
     ORANGE_500 = "#FF9800"  # Orange accent color
+    ORANGE_900 = "#2b1500"  # Deep amber tint — skipped/removed row & badge bg
 
     BLUE_700 = "#0369a1"  # Steel blue — device icon container background
 
@@ -265,6 +266,7 @@ class LightPalette(ColorsEnum):
     GREEN_200 = "#00C853"
 
     ORANGE_500 = "#FF9800"
+    ORANGE_900 = "#FFF3E0"  # Light amber tint — skipped/removed row & badge bg
 
     BLUE_700 = "#0369a1"
 
@@ -578,14 +580,16 @@ class BackupProgressColors(ColorsEnum):
     STATUS_QUEUED_TEXT  = Palette.SLATE_600  # "Queued" badge text
     STATUS_ACTIVE_BG    = Palette.CYAN_900   # "Syncing" badge + row background
     STATUS_ACTIVE_TEXT  = Palette.CYAN_400   # "Syncing" badge text + speed label
-    STATUS_DONE_BG      = Palette.GREEN_900  # "Done" badge + row background
-    STATUS_DONE_TEXT    = Palette.GREEN_400  # "Done" badge text + row border
-    STATUS_FAILED_BG    = Palette.PINK_900   # "Failed" badge + row background
-    STATUS_FAILED_TEXT  = Palette.PINK_500   # "Failed" badge text + row border
-    BTN_PAUSE_BORDER    = Palette.GRAY_700   # Pause button border (default)
-    BTN_PAUSE_TEXT      = Palette.SLATE_100  # Pause button text (default)
-    BTN_CANCEL_BORDER   = Palette.PINK_500   # Cancel button border
-    BTN_CANCEL_TEXT     = Palette.PINK_500   # Cancel button text
+    STATUS_DONE_BG      = Palette.GREEN_900   # "Done" badge + row background
+    STATUS_DONE_TEXT    = Palette.GREEN_400   # "Done" badge text + row border
+    STATUS_FAILED_BG    = Palette.PINK_900    # "Failed" badge + row background
+    STATUS_FAILED_TEXT  = Palette.PINK_500    # "Failed" badge text + row border
+    STATUS_SKIPPED_BG   = Palette.ORANGE_900  # "Removed" badge + row background
+    STATUS_SKIPPED_TEXT = Palette.ORANGE_500  # "Removed" badge text + row border
+    BTN_PAUSE_BORDER    = Palette.GRAY_700    # Pause button border (default)
+    BTN_PAUSE_TEXT      = Palette.SLATE_100   # Pause button text (default)
+    BTN_CANCEL_BORDER   = Palette.PINK_500    # Cancel button border
+    BTN_CANCEL_TEXT     = Palette.PINK_500    # Cancel button text
 
 
 class LightBackupProgressColors(ColorsEnum):
@@ -610,11 +614,13 @@ class LightBackupProgressColors(ColorsEnum):
     STATUS_QUEUED_TEXT  = LightPalette.SLATE_600  # "Queued" badge text
     STATUS_ACTIVE_BG    = LightPalette.CYAN_900   # "Syncing" badge + row background
     STATUS_ACTIVE_TEXT  = Palette.CYAN_400        # "Syncing" badge text (invariant)
-    STATUS_DONE_BG      = LightPalette.GREEN_900  # "Done" badge + row background
-    STATUS_DONE_TEXT    = Palette.GREEN_400        # "Done" badge text (invariant)
-    STATUS_FAILED_BG    = LightPalette.PINK_900   # "Failed" badge + row background
-    STATUS_FAILED_TEXT  = Palette.PINK_500        # "Failed" badge text (invariant)
-    BTN_PAUSE_BORDER    = LightPalette.GRAY_700   # Pause button border (default)
-    BTN_PAUSE_TEXT      = LightPalette.SLATE_100  # Pause button text (default)
-    BTN_CANCEL_BORDER   = Palette.PINK_500        # Cancel button border (invariant)
+    STATUS_DONE_BG      = LightPalette.GREEN_900   # "Done" badge + row background
+    STATUS_DONE_TEXT    = Palette.GREEN_400         # "Done" badge text (invariant)
+    STATUS_FAILED_BG    = LightPalette.PINK_900    # "Failed" badge + row background
+    STATUS_FAILED_TEXT  = Palette.PINK_500         # "Failed" badge text (invariant)
+    STATUS_SKIPPED_BG   = LightPalette.ORANGE_900  # "Removed" badge + row background
+    STATUS_SKIPPED_TEXT = Palette.ORANGE_500        # "Removed" badge text (invariant)
+    BTN_PAUSE_BORDER    = LightPalette.GRAY_700    # Pause button border (default)
+    BTN_PAUSE_TEXT      = LightPalette.SLATE_100   # Pause button text (default)
+    BTN_CANCEL_BORDER   = Palette.PINK_500         # Cancel button border (invariant)
     BTN_CANCEL_TEXT     = Palette.PINK_500        # Cancel button text (invariant)

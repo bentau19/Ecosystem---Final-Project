@@ -15,7 +15,10 @@ namespace TauSync.Implementations.Management
     /// <summary>
     /// Central hub (Singleton) for ID management and packet routing per TauSync v3.
     /// Branch on TargetID first; TargetID=0 = discovery (require CONTROL + MagicBytes); TargetID&gt;0 = pass to handler.
-    /// FIN cleanup: remove from both _routingMap and _targetMap, then ReleaseId.
+    /// FIN cleanup: remove from both _routingMap and _targetMap.
+    /// IDs are never reused within a session (24-bit monotonic counter, reset on reconnect),
+    /// so stale FIN frames addressed to a closed channel hit an unmapped ID and are dropped
+    /// instead of corrupting a newer channel that recycled the same ID.
     /// </summary>
     public sealed class ConnectionContext
     {
@@ -27,16 +30,6 @@ namespace TauSync.Implementations.Management
         private const int MaxId = 0xFFFFFF;
 
         private int _nextCorrelationId = MinId;
-
-        /// <summary>
-        /// IDs eligible for reuse, keyed for idempotent add (prevents double-recycle when both
-        /// FIN-dispatch and <see cref="ConnectionManager.CompleteStream"/> release the same ID).
-        /// IDs are added only after a grace period so that in-flight FIN frames targeting a recycled
-        /// ID don't corrupt the new handler registered for that ID.
-        /// </summary>
-        private readonly ConcurrentDictionary<int, byte> _releasedIds = new();
-
-        private const int IdRecycleDelayMs = 2000;
 
         /// <summary>LocalID -> handler(payload, flags). Handler decides DATA vs in-band CONTROL.</summary>
         private readonly ConcurrentDictionary<int, Action<byte[], byte>> _routingMap = new();
@@ -69,10 +62,36 @@ namespace TauSync.Implementations.Management
             if (_wifiTransport == null)
                 throw new InvalidOperationException("Not initialized.");
             // Clear any routing/discovery state left over from a previous session before
-            // re-establishing. Without this, stale handlers, pending REQs, and recycled IDs
-            // from the prior connection get replayed onto the new session's frames.
+            // re-establishing. Without this, stale handlers and pending REQs from the
+            // prior connection get replayed onto the new session's frames.
             Reset();
             await _wifiTransport.Connect(targetId, timeoutSeconds).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Aborts every open channel by delivering a synthetic FIN to its registered handler.
+        /// Each handler responds to FIN by completing its backing <see cref="BackBufferedStream"/>,
+        /// which unblocks any thread sitting in <c>Read()</c> with EOF instead of hanging forever.
+        ///
+        /// Must be called when the transport dies (receive loop exit / explicit disconnect):
+        /// without it, streams whose peer vanished without sending FIN (e.g. phone leaves
+        /// Wi-Fi mid-transfer) block their readers indefinitely.
+        /// </summary>
+        public void AbortAllChannels()
+        {
+            foreach (var kvp in _routingMap)
+            {
+                try
+                {
+                    kvp.Value(Array.Empty<byte>(), CoreConfig.FlagFin);
+                }
+                catch
+                {
+                    // A failing handler must not prevent the remaining channels from being aborted.
+                }
+            }
+            _routingMap.Clear();
+            _targetMap.Clear();
         }
 
         /// <summary>
@@ -87,7 +106,6 @@ namespace TauSync.Implementations.Management
             _targetMap.Clear();
             _serviceRegistry.Clear();
             _pendingDiscoveryByWord.Clear();
-            _releasedIds.Clear();
             Interlocked.Exchange(ref _nextCorrelationId, MinId);
         }
 
@@ -102,14 +120,15 @@ namespace TauSync.Implementations.Management
         public bool IsTransportServerMode =>
             (_wifiTransport as SocketTransport)?.IsServerMode ?? false;
 
+        /// <summary>
+        /// Reserves the next channel ID. IDs are strictly monotonic within a session —
+        /// never recycled — so frames that arrive late for a closed channel (e.g. a peer
+        /// FIN delayed behind bulk transfer data) can never be misrouted to a newer
+        /// channel. The 24-bit space (16.7M IDs) cannot realistically be exhausted in one
+        /// session, and <see cref="Reset"/> restarts the counter on every reconnect.
+        /// </summary>
         public int ReserveId()
         {
-            foreach (var key in _releasedIds.Keys)
-            {
-                if (_releasedIds.TryRemove(key, out _))
-                    return key;
-            }
-
             int id = Interlocked.Increment(ref _nextCorrelationId) - 1;
             if (id < MinId || id > MaxId)
             {
@@ -135,9 +154,12 @@ namespace TauSync.Implementations.Management
 
 
         /// <summary>
-        /// Releases ID: clears routing/target maps immediately, then schedules the ID
-        /// for recycling after <see cref="IdRecycleDelayMs"/> so that in-flight FIN frames
-        /// are processed before another handler can claim the same ID.
+        /// Releases ID: clears routing/target maps immediately. The ID itself is
+        /// intentionally NOT returned to a free pool — recycling IDs allowed a delayed
+        /// peer FIN (or a double release from FIN-dispatch + CompleteStream) to destroy
+        /// the routing/target entries of a newer channel that had re-reserved the same
+        /// ID, surfacing as "No peer route for localId N" on writes. Safe to call
+        /// multiple times for the same ID.
         /// </summary>
         public void ReleaseId(int id)
         {
@@ -145,13 +167,6 @@ namespace TauSync.Implementations.Management
                 return;
             _routingMap.TryRemove(id, out _);
             _targetMap.TryRemove(id, out _);
-            _ = RecycleIdAfterDelayAsync(id);
-        }
-
-        private async Task RecycleIdAfterDelayAsync(int id)
-        {
-            await Task.Delay(IdRecycleDelayMs).ConfigureAwait(false);
-            _releasedIds[id] = 0;
         }
 
         /// <summary>PeerID to use when sending for this local task. Returns null if not bound.</summary>
@@ -225,6 +240,8 @@ namespace TauSync.Implementations.Management
         {
             if ((flags & CoreConfig.FlagControl) == 0)
                 return false;
+            if (TryParseDiscoveryCancel(payload, out TransferRequest cancel))
+                return HandleDiscoveryCancel(cancel);
             if (!TryParseDiscoveryRequest(payload, out TransferRequest request))
                 return false;
             if (!TryResolveServiceCallback(request, out Action<int, int, Stream> callback))
@@ -330,6 +347,96 @@ namespace TauSync.Implementations.Management
                 return false;
 
             request = parsed;
+            return true;
+        }
+
+        /// <summary>
+        /// Parses a discovery frame as a handshake cancellation (Status == "CANCEL").
+        /// Same wire shape as REQ; sent by a peer whose outgoing REQ ended up unused
+        /// (connect timed out, or its connect resolved via the peer path). See spec §7.8.
+        /// </summary>
+        private bool TryParseDiscoveryCancel(byte[] payload, out TransferRequest request)
+        {
+            request = default!;
+            TransferRequest? parsed = ParseTransferRequest(payload);
+            if (parsed == null)
+                return false;
+            if (parsed.MagicBytes != CoreConfig.MagicBytes)
+                return false;
+            if (!string.Equals(parsed.Status?.Trim(), "CANCEL", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            request = parsed;
+            return true;
+        }
+
+        /// <summary>
+        /// Handles a peer handshake cancellation: the peer abandoned its REQ for
+        /// <c>(Type=word, SenderID)</c> and we must forget it. Two cases:
+        ///
+        /// <list type="number">
+        ///   <item><b>REQ still queued</b> — remove exactly the queued payload whose
+        ///   SenderID matches from <see cref="_pendingDiscoveryByWord"/>, so
+        ///   <see cref="GetPeerWaitingWords"/> stops reporting a word nobody waits on.</item>
+        ///   <item><b>REQ already handshaken</b> — the incoming channel built from that
+        ///   REQ targets the cancelled SenderID. Abort it with a synthetic FIN (the
+        ///   <c>AbortAllChannels</c> pattern) so any blocked reader gets EOF instead of
+        ///   hanging until its read timeout, then release the local id.</item>
+        /// </list>
+        ///
+        /// Idempotent and best-effort: a CANCEL for an unknown word/id is a no-op.
+        /// </summary>
+        private bool HandleDiscoveryCancel(TransferRequest cancel)
+        {
+            string? word = cancel.Type?.Trim();
+            if (string.IsNullOrEmpty(word))
+                return false;
+
+            // ── Case 1: REQ still queued — drop the matching entry only ──────────
+            if (_pendingDiscoveryByWord.TryGetValue(word, out ConcurrentQueue<byte[]>? queue) && queue != null)
+            {
+                var kept = new List<byte[]>();
+                while (queue.TryDequeue(out byte[]? entry))
+                {
+                    if (entry == null)
+                        continue;
+                    TransferRequest? req = ParseTransferRequest(entry);
+                    bool isCancelledReq = req != null
+                                          && req.SenderID == cancel.SenderID
+                                          && string.Equals(req.Status?.Trim(), "REQ", StringComparison.OrdinalIgnoreCase);
+                    if (!isCancelledReq)
+                        kept.Add(entry);
+                }
+                foreach (byte[] entry in kept)
+                    queue.Enqueue(entry);
+                if (queue.IsEmpty)
+                    _pendingDiscoveryByWord.TryRemove(word, out _);
+            }
+
+            // ── Case 2: REQ already handshaken into an active incoming channel ───
+            // Only the incoming channel created from that REQ targets the cancelled
+            // SenderID (a peer's outgoing-attempt id); our own outgoing routes target
+            // the peer's *incoming* ids, which come from a disjoint ReserveId call —
+            // so this reverse lookup can never hit a live winning channel.
+            foreach (var kvp in _targetMap)
+            {
+                if (kvp.Value != cancel.SenderID)
+                    continue;
+                if (_routingMap.TryGetValue(kvp.Key, out Action<byte[], byte>? handler) && handler != null)
+                {
+                    try
+                    {
+                        handler(Array.Empty<byte>(), CoreConfig.FlagFin);
+                    }
+                    catch
+                    {
+                        // A failing handler must not prevent the id cleanup below.
+                    }
+                }
+                CleanupLocalId(kvp.Key);
+                break;
+            }
+
             return true;
         }
 

@@ -58,10 +58,9 @@ class BackupViewModel(QObject):
                 service emits file_progress(rel_path, bytes, speed)
                 (if classifier returns NEEDS_REVIEW:
                     service emits review_required(BackupReviewPromptDTO)
-                      → _on_review_required → emits review_requested
-                      → view shows keep/discard dialog
-                      → resolve_review(channel, keep) → service.resolve_review(...)
-                      → slot's receiver thread unblocks)
+                      → _on_review_required
+                          → service.resolve_review(channel, keep=True)  ← unblocks thread immediately
+                          → _review_flagged.append(prompt)              ← accumulates for post-session review)
                 service emits file_complete(rel_path) | file_failed(rel_path, reason)
           → service emits backup_complete
 
@@ -85,32 +84,32 @@ class BackupViewModel(QObject):
         overall_updated (Signal[int, int, float]): Emitted after every progress
             tick as ``(total_bytes, done_bytes, eta_secs)``.  ``eta_secs`` is
             ``-1.0`` when not yet computable.
-        backup_complete (Signal): Emitted once every file reaches ``DONE``
-            or ``FAILED``.
+        backup_complete (Signal): Emitted once every file reaches ``DONE``,
+            ``FAILED``, or ``SKIPPED``.
         backup_error (Signal[str]): Emitted on a session-level error.
         device_ready_changed (Signal[bool]): ``True`` when a device connects,
             ``False`` when it disconnects.
-        review_requested (Signal[object]): Forwarded from the service as a
-            :class:`~domain.dto.backup_review_prompt.BackupReviewPromptDTO`
-            when the ML classifier needs the user to decide whether to keep
-            or discard a file. The view should show a confirmation dialog and
-            call :meth:`resolve_review` with the result.
+        review_requested (Signal[object]): Reserved — not currently emitted.
+            ML-flagged files are auto-kept during the session and accumulated in
+            ``_review_flagged``; the batch review dialog is driven by
+            :attr:`backup_session_result` after the session completes.
     """
 
     # ── Signals ───────────────────────────────────────────────────────────────
 
-    dest_dir_requested: Signal = Signal(int, 'qint64')  # (file_count, total_bytes)
+    dest_dir_requested: Signal = Signal(int, 'qint64', bool)  # (file_count, total_bytes, storage_saver)
     backup_ready: Signal = Signal(int, 'qint64')        # (file_count, total_bytes)
     file_registered: Signal = Signal(str, 'qint64')     # (rel_path, size_bytes)
     file_progress_updated: Signal = Signal(str, 'qint64', float)
     file_status_changed: Signal = Signal(str, object)
+    file_saved_at: Signal = Signal(str, str)             # (file_name, abs_dest_path) — images only thumbnail hint
     overall_updated: Signal = Signal('qint64', 'qint64', float)  # (total_bytes, done_bytes, eta_secs)
     backup_complete: Signal = Signal()
     backup_error: Signal = Signal(str)
     device_ready_changed: Signal = Signal(bool)
     pause_state_changed: Signal = Signal(bool)  # True = paused, False = resumed
     review_requested: Signal = Signal(object)  # BackupReviewPromptDTO
-    backup_session_result: Signal = Signal(bool, str)  # (classify, dest_dir) — fires after backup_complete
+    backup_session_result: Signal = Signal(list, str)  # (flagged_prompts: list[BackupReviewPromptDTO], dest_dir) — fires after backup_complete
 
     def __init__(
             self,
@@ -143,8 +142,11 @@ class BackupViewModel(QObject):
         self._is_paused: bool = False
         self._is_device_connected: bool = False
         self._is_active: bool = False
-        self._classify: bool = False   # forwarded from BackupSessionPromptDTO.classify
-        self._dest_dir: str = ""       # path chosen by the user; used in backup_session_result
+        self._classify: bool = False        # forwarded from BackupSessionPromptDTO.classify
+        self._storage_saver: bool = False   # forwarded from BackupSessionPromptDTO.storage_saver
+        self._effective_total_bytes: int = 0  # running sum of per-slot meta["size"] (re-encoded sizes)
+        self._dest_dir: str = ""            # path chosen by the user; used in backup_session_result
+        self._review_flagged: list[BackupReviewPromptDTO] = []  # ML-flagged files accumulated during session
 
         # ── Connectivity wiring ───────────────────────────────────────────────
         self._connectivity_service.device_connected.connect(self._on_device_connected)
@@ -156,7 +158,9 @@ class BackupViewModel(QObject):
         self._backup_service.file_progress.connect(self._on_file_progress)
         self._backup_service.file_complete.connect(self._on_file_complete)
         self._backup_service.file_failed.connect(self._on_file_failed)
+        self._backup_service.file_skipped.connect(self._on_file_skipped)
         self._backup_service.backup_complete.connect(self._on_backup_complete)
+        self._backup_service.backup_error.connect(self.backup_error)
         self._backup_service.session_paused.connect(self._on_session_paused)
         self._backup_service.session_resumed.connect(self._on_session_resumed)
         self._backup_service.review_required.connect(self._on_review_required)
@@ -181,12 +185,17 @@ class BackupViewModel(QObject):
         session's file count and total byte size so the view can open the
         progress window.
 
-        Not gated by connectivity — the user must be able to confirm even if
-        the connection state changed while the dialog was open.
+        Guards against the race where the device disconnects while the folder
+        picker is open: ``_on_device_disconnected`` resets ``_is_active`` via
+        :meth:`cancel`, so a stale "Accept" click after disconnect is a no-op.
 
         Args:
             dest_dir: Absolute path to the chosen backup folder.
         """
+        if not self._is_active:
+            # Session was cancelled (e.g. device disconnected) before the user
+            # responded — nothing to proceed with.
+            return
         self._dest_dir = dest_dir
         self.backup_ready.emit(self._file_count, self._total_bytes)
         self._backup_service.proceed(Path(dest_dir))
@@ -255,23 +264,37 @@ class BackupViewModel(QObject):
 
     @Slot()
     def _on_device_disconnected(self) -> None:
-        """Notify the view that the device has disconnected."""
+        """Notify the view that the device has disconnected.
+
+        If a backup session is in progress it is cancelled automatically —
+        the phone is gone so there is nothing left to transfer from.
+        The service-side threads are already being torn down by
+        ``AppState``'s ``backup_service.stop()`` wiring; this call resets
+        the ViewModel state and lets the view close the progress window.
+        """
         self._is_device_connected = False
+        # Auto-cancel any in-progress session so _reset_session() fires and
+        # the view receives device_ready_changed(False) with _is_active=False.
+        if self._is_active:
+            self.cancel()
         self.device_ready_changed.emit(False)
 
     # ── BackupService slots ───────────────────────────────────────────────────
 
-    @Slot(int, 'qint64', bool)
-    def _on_manifest_received(self, files_count: int, files_size: int, classify: bool) -> None:
+    @Slot(int, 'qint64', bool, bool)
+    def _on_manifest_received(self, files_count: int, files_size: int,
+                               classify: bool, storage_saver: bool) -> None:
         """Android sent a manifest header — reset session state and ask for dest.
 
         Sets ``_is_active = True`` immediately so :meth:`cancel` works during
         the folder-picker phase.
 
         Args:
-            files_count: Total number of files in the incoming session.
-            files_size: Total byte size of all files in the incoming session.
-            classify: Whether the session will run ML content screening.
+            files_count:   Total number of files in the incoming session.
+            files_size:    Total byte size of all files (original sizes, upper bound).
+            classify:      Whether the session will run ML content screening.
+            storage_saver: Whether Android will re-encode images before sending.
+                           When ``True``, actual bytes transferred < ``files_size``.
         """
         if self._is_active:
             # A session is already running — ignore the incoming manifest.
@@ -282,11 +305,12 @@ class BackupViewModel(QObject):
             total_bytes=files_size,
         )
         self._classify = classify
+        self._storage_saver = storage_saver
         self._is_active = True
-        self.dest_dir_requested.emit(files_count, files_size)
+        self.dest_dir_requested.emit(files_count, files_size, storage_saver)
 
-    @Slot(str, 'qint64')
-    def _on_file_registered(self, rel_path: str, size_bytes: int) -> None:
+    @Slot(str, 'qint64', 'qint64')
+    def _on_file_registered(self, rel_path: str, size_bytes: int, orig_size_bytes: int) -> None:
         """Lazily initialise per-file tracking state when a slot header arrives.
 
         Called by the service after reading each slot's JSON metadata line,
@@ -294,14 +318,35 @@ class BackupViewModel(QObject):
         event to the view layer via :attr:`file_registered` so the view can
         create its per-file row widget.
 
+        When Storage Saver is active and Android re-encoded this file,
+        ``orig_size_bytes > size_bytes``.  The difference (the byte savings)
+        is subtracted from ``_total_bytes`` so the overall progress denominator
+        converges from the manifest's original-size total toward the exact
+        compressed total as slots register.  Because ``size_bytes ≤ orig_size_bytes``
+        the denominator can only decrease — the progress bar never jumps backward.
+
         Args:
-            rel_path:   File name / relative path used as the per-file key.
-            size_bytes: Expected total byte count for this file.
+            rel_path:       File name / relative path used as the per-file key.
+            size_bytes:     Actual (compressed) byte count for this file.
+            orig_size_bytes: Original (pre-compression) byte count as reported
+                            by Android.  Equals ``size_bytes`` for non-compressed
+                            files (raw fallback or non-media), producing zero savings.
         """
         self._statuses[rel_path] = BackupStatus.QUEUED
         self._bytes_done_map[rel_path] = 0
         self._file_sizes[rel_path] = size_bytes
-        self.file_registered.emit(rel_path, size_bytes)
+        self._effective_total_bytes += size_bytes
+
+        # Progressively correct the running total when Storage Saver compressed
+        # this file.  The manifest counted orig_size_bytes but only size_bytes will
+        # actually be transferred — subtract the savings so _total_bytes (denominator)
+        # converges to the real compressed total without ever increasing.
+        if self._storage_saver:
+            savings = orig_size_bytes - size_bytes
+            if savings > 0:
+                self._total_bytes = max(0, self._total_bytes - savings)
+
+        self.file_registered.emit(rel_path, size_bytes)  # VM's own signal stays (str, qint64)
         self._transition_status(rel_path, BackupStatus.QUEUED)
 
     @Slot(str, 'qint64', float)
@@ -331,17 +376,21 @@ class BackupViewModel(QObject):
             self._transition_status(path, BackupStatus.ACTIVE)
 
         self.file_progress_updated.emit(path, bytes_done, speed_bps)
-        self.overall_updated.emit(self._total_bytes, self._done_bytes, self._compute_eta())
+        self.overall_updated.emit(self._progress_total, self._done_bytes, self._compute_eta())
 
-    @Slot(str)
-    def _on_file_complete(self, path: str) -> None:
+    @Slot(str, str)
+    def _on_file_complete(self, path: str, abs_dest_path: str) -> None:
         """Handle successful save of a single file.
 
         Marks the file ``DONE``, credits its full size to ``_done_bytes``, and
-        checks whether the entire session is finished.
+        checks whether the entire session is finished.  Emits
+        :attr:`file_saved_at` with the absolute on-disk path so the UI can
+        load a thumbnail for image files.
 
         Args:
-            path: ``rel_path`` key of the completed file.
+            path:          ``file_name`` key of the completed file.
+            abs_dest_path: Absolute filesystem path where the file was saved
+                           (may be empty string if path was not available).
         """
         if path not in self._statuses:
             return
@@ -351,14 +400,21 @@ class BackupViewModel(QObject):
         self._done_bytes = sum(self._bytes_done_map.values())
 
         self._transition_status(path, BackupStatus.DONE)
-        self.overall_updated.emit(self._total_bytes, self._done_bytes, self._compute_eta())
+        self.overall_updated.emit(self._progress_total, self._done_bytes, self._compute_eta())
+        if abs_dest_path:
+            self.file_saved_at.emit(path, abs_dest_path)
         self._check_session_complete()
 
     @Slot(str, str)
     def _on_file_failed(self, path: str, error: str) -> None:  # noqa: ARG002
-        """Handle a failed file (transport error, corrupt, duplicate, or filtered).
+        """Handle a failed file (transport / IO error only).
 
-        Marks the file ``FAILED`` and checks whether the session is finished.
+        Marks the file ``FAILED``, credits its full byte size to
+        ``_done_bytes`` (same as :meth:`_on_file_complete` and
+        :meth:`_on_file_skipped`), and checks whether the session is
+        finished.  Crediting the bytes prevents the overall progress bar
+        from stalling and then abruptly jumping to 100 % when
+        ``backup_complete`` fires.
 
         Args:
             path:  ``rel_path`` key of the failed file.
@@ -367,7 +423,39 @@ class BackupViewModel(QObject):
         if path not in self._statuses:
             return
 
+        # Credit the full file size so the progress bar advances smoothly.
+        file_size = self._file_sizes.get(path, 0)
+        self._bytes_done_map[path] = file_size
+        self._done_bytes = sum(self._bytes_done_map.values())
+
         self._transition_status(path, BackupStatus.FAILED)
+        self.overall_updated.emit(self._progress_total, self._done_bytes, self._compute_eta())
+        self._check_session_complete()
+
+    @Slot(str)
+    def _on_file_skipped(self, path: str) -> None:
+        """Handle a file that was not kept locally (auto-filtered or user-removed).
+
+        The transfer completed and Android received ``SUCCESS`` — the file was
+        simply not saved on the PC side.  Marks the file ``SKIPPED``, credits
+        its full byte size to the overall progress (mirrors ``_on_file_complete``
+        so the progress bar advances correctly), and checks whether the session
+        is finished.
+
+        Args:
+            path: ``rel_path`` key of the skipped file.
+        """
+        if path not in self._statuses:
+            return
+
+        # Credit the full file size so the overall progress bar advances exactly
+        # as it would for a saved file — the transfer completed successfully.
+        file_size = self._file_sizes.get(path, 0)
+        self._bytes_done_map[path] = file_size
+        self._done_bytes = sum(self._bytes_done_map.values())
+
+        self._transition_status(path, BackupStatus.SKIPPED)
+        self.overall_updated.emit(self._progress_total, self._done_bytes, self._compute_eta())
         self._check_session_complete()
 
     @Slot()
@@ -383,7 +471,7 @@ class BackupViewModel(QObject):
         self._is_active = False
         self._is_paused = False
         self.backup_complete.emit()
-        self.backup_session_result.emit(self._classify, self._dest_dir)
+        self.backup_session_result.emit(self._review_flagged, self._dest_dir)
 
     @Slot()
     def _on_session_paused(self) -> None:
@@ -407,12 +495,20 @@ class BackupViewModel(QObject):
 
     @Slot(object)
     def _on_review_required(self, prompt: BackupReviewPromptDTO) -> None:
-        """Forward a pending confidence review prompt to the view.
+        """Auto-keep a classifier-flagged file and accumulate it for post-session review.
+
+        The service thread blocks until ``resolve_review`` is called, so we
+        unblock it immediately with ``keep=True`` (the file is already saved to
+        ``dest_dir``).  The prompt is added to ``_review_flagged`` so the full
+        set of flagged files can be presented to the user in a single
+        ``BackupReviewDialog`` after the session completes — rather than
+        interrupting the transfer with per-file dialogs.
 
         Args:
             prompt: Describes the file awaiting a keep/discard decision.
         """
-        self.review_requested.emit(prompt)
+        self._backup_service.resolve_review(prompt.channel, True)
+        self._review_flagged.append(prompt)
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
@@ -435,12 +531,15 @@ class BackupViewModel(QObject):
         self._bytes_done_map = {}
         self._file_sizes = {}
         self._total_bytes = total_bytes
+        self._effective_total_bytes = 0
         self._done_bytes = 0
         self._session_start_time = None
         self._is_paused = False
         self._is_active = False
         self._classify = False
+        self._storage_saver = False
         self._dest_dir = ""
+        self._review_flagged = []
 
     def _transition_status(self, path: str, status: BackupStatus) -> None:
         """Update the stored status for *path* and emit :attr:`file_status_changed`.
@@ -463,22 +562,41 @@ class BackupViewModel(QObject):
         if len(self._statuses) < self._file_count:
             return
 
-        terminal = {BackupStatus.DONE, BackupStatus.FAILED}
+        terminal = {BackupStatus.DONE, BackupStatus.FAILED, BackupStatus.SKIPPED}
         if self._is_active and all(s in terminal for s in self._statuses.values()):
             self._is_active = False
             self._is_paused = False
             self.backup_complete.emit()
-            self.backup_session_result.emit(self._classify, self._dest_dir)
+            self.backup_session_result.emit(self._review_flagged, self._dest_dir)
+
+    @property
+    def _progress_total(self) -> int:
+        """Running total bytes used as the overall progress-bar and ETA denominator.
+
+        Initialised to the manifest's ``_total_bytes`` (sum of original file sizes).
+        When Storage Saver is active, :meth:`_on_file_registered` subtracts
+        ``orig_size − compressed_size`` from ``_total_bytes`` for each slot that
+        Android re-encoded.  Because ``compressed_size ≤ orig_size``, the denominator
+        can only *decrease* — the progress bar never jumps backward.
+
+        After all slots have registered, ``_total_bytes`` equals the exact sum of
+        compressed sizes, so the bar reaches ≈ 100 % at session end without relying
+        on the ``_on_backup_complete`` snap.
+
+        Falls back to ``_effective_total_bytes`` only if the manifest total is
+        unavailable (should not happen in practice).
+        """
+        return self._total_bytes or self._effective_total_bytes
 
     def _compute_eta(self) -> float:
         """Return estimated seconds remaining, or ``-1.0`` if not yet computable.
 
-        Uses virtual bytes (scaled ``[0, total_bytes]`` across both transfer
-        phases) which keeps the ratio consistent with ``_total_bytes``.
+        Uses ``_progress_total`` (actual transferred sizes) rather than the
+        manifest total so ETA is accurate when Storage Saver shrinks files.
         """
         if not self._session_start_time or self._done_bytes <= 0:
             return -1.0
         elapsed = time.monotonic() - self._session_start_time
-        rate = self._done_bytes / elapsed  # virtual bytes/sec
-        remaining = max(0, self._total_bytes - self._done_bytes)
+        rate = self._done_bytes / elapsed  # bytes/sec
+        remaining = max(0, self._progress_total - self._done_bytes)
         return remaining / rate if rate > 0 else -1.0

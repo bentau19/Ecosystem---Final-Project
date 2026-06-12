@@ -19,6 +19,13 @@ namespace TauSync.Implementations.Management
         private readonly IProtocolHandler _protocolHandler;
         /// <summary>Per-word queue of incoming connections (when the other side sent REQ first).</summary>
         private readonly ConcurrentDictionary<string, Channel<Stream>> _incomingByWord = new();
+        /// <summary>
+        /// Words with an unresolved Connect() in flight. Guards against concurrent same-word
+        /// handshakes, which would clobber the single service-registry slot and orphan one of
+        /// the paired streams on the peer side (silent hang, no error). Keyed by trimmed word,
+        /// case-sensitive — matching how <see cref="ConnectionContext.RegisterService"/> keys.
+        /// </summary>
+        private readonly ConcurrentDictionary<string, byte> _inFlightWords = new();
         private bool _disposed;
 
         public event EventHandler<Exception>? ErrorOccurred;
@@ -68,6 +75,28 @@ namespace TauSync.Implementations.Management
         {
             ValidateConnectState(word);
             string wordTrimmed = word.Trim();
+            // Reject a second Connect() while one is still in flight for the same word.
+            // Two concurrent same-word handshakes clobber the single service-registry slot
+            // and leave the peer with an orphaned stream that hangs forever — fail loud instead.
+            if (!_inFlightWords.TryAdd(wordTrimmed, 0))
+                throw new InvalidOperationException(
+                    $"Connect already in progress for word '{wordTrimmed}'. " +
+                    "Wait for it to resolve or use a distinct word.");
+            try
+            {
+                return await ConnectCore(wordTrimmed, timeoutSeconds).ConfigureAwait(false);
+            }
+            finally
+            {
+                // Release the in-flight guard last, so the word only becomes reusable after
+                // all per-word state (service registry, word channel) is torn down.
+                _inFlightWords.TryRemove(wordTrimmed, out _);
+            }
+        }
+
+        /// <summary>Runs the actual handshake for an already guard-acquired word.</summary>
+        private async Task<Stream> ConnectCore(string wordTrimmed, int? timeoutSeconds)
+        {
             Channel<Stream> channel = GetOrCreateWordChannel(wordTrimmed);
             RegisterWordListener(wordTrimmed, channel);
 
@@ -76,7 +105,7 @@ namespace TauSync.Implementations.Management
             await SendWordRequestAsync(wordTrimmed, attempt.LocalId).ConfigureAwait(false);
             try
             {
-                return await ResolveConnectRaceAsync(ctx, channel, attempt, timeoutSeconds).ConfigureAwait(false);
+                return await ResolveConnectRaceAsync(ctx, channel, attempt, timeoutSeconds, wordTrimmed).ConfigureAwait(false);
             }
             finally
             {
@@ -89,6 +118,11 @@ namespace TauSync.Implementations.Management
                 // cannot trigger a second Connect() call — causing the peer to hang forever.
                 ConnectionContext.Instance.UnregisterService(wordTrimmed);
                 _incomingByWord.TryRemove(wordTrimmed, out _);
+                // Complete the writer so the losing ReadPeerStreamAsync terminates. Without this,
+                // disposing the timeout CTS (which kills its timer before it ever fires) leaves the
+                // orphaned ReadAsync waiting on a token that can no longer cancel — leaking one
+                // Task + Channel per successful Connect() for the process lifetime.
+                channel.Writer.TryComplete();
             }
         }
 
@@ -139,7 +173,7 @@ namespace TauSync.Implementations.Management
         /// This guarantees both sides pick complementary streams so data flows correctly.
         /// Falls back to the other path if the preferred one fails.
         /// </summary>
-        private async Task<Stream> ResolveConnectRaceAsync(ConnectionContext ctx, Channel<Stream> channel, ConnectAttempt attempt, int? timeoutSeconds)
+        private async Task<Stream> ResolveConnectRaceAsync(ConnectionContext ctx, Channel<Stream> channel, ConnectAttempt attempt, int? timeoutSeconds, string word)
         {
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds ?? CoreConfig.HandshakeTimeoutSeconds));
             timeoutCts.Token.Register(() => attempt.ResponseTcs.TrySetException(new TimeoutException("Handshake timeout.")));
@@ -161,7 +195,7 @@ namespace TauSync.Implementations.Management
                 }
                 catch
                 {
-                    CleanupLosingOutgoingAttempt(ctx, attempt);
+                    CleanupLosingOutgoingAttempt(ctx, attempt, word);
                     return await streamFromPeerRequest.ConfigureAwait(false);
                 }
             }
@@ -169,12 +203,23 @@ namespace TauSync.Implementations.Management
             try
             {
                 Stream result = await streamFromPeerRequest.ConfigureAwait(false);
-                CleanupLosingOutgoingAttempt(ctx, attempt);
+                CleanupLosingOutgoingAttempt(ctx, attempt, word);
                 return result;
             }
             catch
             {
-                return await streamFromOwnRequest.ConfigureAwait(false);
+                try
+                {
+                    return await streamFromOwnRequest.ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Both paths failed (typically a double timeout). Without this cleanup the
+                    // outgoing attempt's handler stayed in _routingMap and its BackBufferedStream
+                    // was never disposed — leaking once per failed handshake.
+                    CleanupLosingOutgoingAttempt(ctx, attempt, word);
+                    throw;
+                }
             }
         }
 
@@ -193,13 +238,59 @@ namespace TauSync.Implementations.Management
             {
                 throw new TimeoutException("Handshake timeout.");
             }
+            catch (ChannelClosedException)
+            {
+                // The word channel was completed (race already resolved elsewhere or manager
+                // disposed) — surface the same exception type as the timeout path.
+                throw new TimeoutException("Handshake timeout.");
+            }
         }
 
-        private static void CleanupLosingOutgoingAttempt(ConnectionContext ctx, ConnectAttempt attempt)
+        /// <summary>
+        /// Tears down an outgoing connect attempt whose REQ ended up unused — either the
+        /// connect failed (timeout / double timeout) or it resolved via the peer path.
+        /// Besides the local cleanup, sends a best-effort CANCEL frame (spec §7.8) so the
+        /// peer removes the now-orphaned REQ from its pending-discovery queue — or, if the
+        /// peer already handshook it into an incoming channel, aborts that channel. Without
+        /// the CANCEL, one-shot meeting words leak a "peer waiting" entry on the peer for
+        /// the rest of the session (re-reported by GetPeerWaitingWords on every poll).
+        /// </summary>
+        private void CleanupLosingOutgoingAttempt(ConnectionContext ctx, ConnectAttempt attempt, string word)
         {
+            // One-shot: cleanup can run more than once for the same attempt (e.g. fallback
+            // path failure after the preferred path already cleaned up) — cancel only once.
+            if (attempt.TryMarkAbandoned())
+                TrySendWordCancel(word, attempt.LocalId);
             ctx.ReleaseId(attempt.LocalId);
             ctx.UnregisterHandler(attempt.LocalId);
             attempt.BackStream.Dispose();
+        }
+
+        /// <summary>
+        /// Sends a best-effort CANCEL discovery frame for an abandoned REQ. Fire-and-forget:
+        /// failures are swallowed because cancellation is an optimisation (the transport may
+        /// already be dead, and an old peer simply drops unknown discovery statuses).
+        /// </summary>
+        private void TrySendWordCancel(string word, int localId)
+        {
+            try
+            {
+                var cancel = new TransferRequest
+                {
+                    MagicBytes = CoreConfig.MagicBytes,
+                    SenderID = localId,
+                    Type = word,
+                    Status = "CANCEL"
+                };
+
+                byte[] body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(cancel));
+                byte[] frame = _protocolHandler.BuildFrame(CoreConfig.ControlChannelId, body, CoreConfig.FlagControl);
+                _ = _wifiTransport?.SendRaw(frame);
+            }
+            catch
+            {
+                // Best-effort — never let a failed CANCEL break the connect cleanup path.
+            }
         }
 
         /// <summary>
@@ -362,6 +453,8 @@ namespace TauSync.Implementations.Management
 
         private sealed class ConnectAttempt
         {
+            private int _abandoned;
+
             public int LocalId { get; }
             public BackBufferedStream BackStream { get; }
             public TaskCompletionSource<byte[]> ResponseTcs { get; }
@@ -372,6 +465,12 @@ namespace TauSync.Implementations.Management
                 BackStream = backStream;
                 ResponseTcs = responseTcs;
             }
+
+            /// <summary>
+            /// Marks this attempt's outgoing REQ as abandoned. Returns true only on the
+            /// first call so the CANCEL frame is sent exactly once per attempt.
+            /// </summary>
+            public bool TryMarkAbandoned() => Interlocked.Exchange(ref _abandoned, 1) == 0;
         }
 
         public IReadOnlyList<string> GetPeerWaitingWords()

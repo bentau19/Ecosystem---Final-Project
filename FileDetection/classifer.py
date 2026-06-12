@@ -1,27 +1,22 @@
+from __future__ import annotations
+
 import sqlite3
 import threading
 from pathlib import Path
-
-from PIL import Image
 
 from file_duplicates import check_for_duplicates
 from image_classifer import ClassificationResult, ClassificationVerdict, classify_image
 
 
 class Classifier:
-    """Three-stage incoming-file screening pipeline backed by a local SQLite database.
+    """Two-stage incoming-file screening pipeline backed by a local SQLite database.
 
     Pipeline:
         1. **Exact duplicate** — ``check_for_duplicates(db_path, file_path, dest_path) -> bool``.
            Content-hash (xxh3_128) lookup against the ``files`` table.
            Registers every new file seen; rejects byte-identical repeats.
 
-        2. **Visual similarity** — ``process_image(db_path, file_path, threshold)``.
-           dHash + quality-score check against the ``visual_groups`` table.
-           Keeps the best-quality representative per perceptual group;
-           discards inferior near-duplicates.
-
-        3. **ML confidence** (``image_classifer.py``).
+        2. **ML confidence** (``image_classifer.py``, opt-in via ``use_ml``).
            Content-based screening of unwanted images via :func:`classify_image`.
            Three outcomes are possible, surfaced through
            :class:`ClassificationVerdict`:
@@ -61,12 +56,12 @@ class Classifier:
         self._init_db()
 
     def _init_db(self) -> None:
-        # Delete any existing file at db_path and recreate it with both the
-        # "files" table (Stage 1, exact-dup detection) and the
-        # "visual_groups" table (Stage 2, visual-similarity selection).
+        # Delete any existing file at db_path and recreate both tables:
+        # "files" (exact-dup detection) and "visual_groups" (reserved for
+        # future visual-similarity stage).
         with self._db_lock:
             if self.db_path.exists():
-                Path(self.db_path).unlink()
+                self.db_path.unlink()
 
             db = sqlite3.connect(self.db_path)
 
@@ -90,15 +85,6 @@ class Classifier:
             finally:
                 db.close()
 
-    @staticmethod
-    def _is_image(path: Path) -> bool:
-        try:
-            with Image.open(path) as img:
-                img.verify()  # Verify image integrity
-            return True
-        except Exception:
-            return False
-
     def classify(self, file: Path, dest_path: Path, use_ml: bool = False) -> ClassificationResult:
         """Run *file* through the screening pipeline.
 
@@ -106,7 +92,7 @@ class Classifier:
             file: Path to the cached incoming file.
             dest_path: Permanent destination path the file will be saved to,
                 registered as this content's identity if not a duplicate.
-            use_ml: Whether to run the ML image classifier (stage 3). When
+            use_ml: Whether to run the ML image classifier (stage 2). When
                 ``False``, only the exact-duplicate check (stage 1) runs.
 
         Returns:
@@ -121,13 +107,18 @@ class Classifier:
         """
         with self._db_lock:
             if check_for_duplicates(self.db_path, file, dest_path):
-                return ClassificationResult(ClassificationVerdict.REJECTED, 0)
+                return ClassificationResult(ClassificationVerdict.REJECTED, 0.0)
         if not use_ml:
-            return ClassificationResult(ClassificationVerdict.ACCEPTED, 0)
-        if self._is_image(file):
+            return ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)
+        # classify_image opens the image itself — no pre-flight _is_image decode
+        # needed. Non-image files and unreadable files are caught by the except
+        # and treated as accepted (let the file through; it wasn't screened).
+        try:
             result = classify_image(file)
-            if result.verdict is ClassificationVerdict.REJECTED:
-                return ClassificationResult(ClassificationVerdict.REJECTED, result.confidence)
-            if result.verdict is ClassificationVerdict.NEEDS_REVIEW:
-                return ClassificationResult(ClassificationVerdict.NEEDS_REVIEW, result.confidence)
-        return ClassificationResult(ClassificationVerdict.ACCEPTED, 0)
+        except Exception:
+            return ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)
+        if result.verdict is ClassificationVerdict.REJECTED:
+            return ClassificationResult(ClassificationVerdict.REJECTED, result.confidence)
+        if result.verdict is ClassificationVerdict.NEEDS_REVIEW:
+            return ClassificationResult(ClassificationVerdict.NEEDS_REVIEW, result.confidence)
+        return ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)

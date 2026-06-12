@@ -4,7 +4,7 @@
 
   <Bundle Name="SyncDose"
           Version="1.0.0.0"
-          Manufacturer="YourName"
+          Manufacturer="SyncDose"
           UpgradeCode="a6a1933c-32d8-4b05-b46b-9b80fd8dd621">
 
     <BootstrapperApplication>
@@ -16,12 +16,15 @@
 
 
 
-<util:RegistrySearch Id="DotNet8Check"
-                     Root="HKLM"
-                     Key="SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App"
-                     Value="8.0"
-                     Result="exists"
-                     Variable="DotNet8Installed" />
+<!-- Detects whether .NET 8 x64 Runtime is already installed.
+     Sets Variable="DotNet8Installed" to the found version string (e.g. "8.0.16")
+     or leaves it empty if not found. ExePackage DetectCondition treats non-empty as true. -->
+<util:DotNetCoreSearch
+    Id="DotNet8Check"
+    RuntimeType="dotnet"
+    Platform="x64"
+    MajorVersion="8"
+    Variable="DotNet8Installed" />
 
     <Chain>
 
@@ -38,7 +41,7 @@
             DownloadUrl="https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.16/dotnet-runtime-8.0.16-win-x64.exe"
             Size="29032704"
             Compressed="no"
-            Hash="TODO_REPLACE_WITH_SHA512_OF_dotnet-runtime-8.0.16-win-x64.exe"
+            Hash="8c61220263b0d5640cb5c5499652fff5a99bbe9930d95d42943eb336cff80ecc7e00a7f6304d992da8016f5e8bacaac5323ecab92aa2e2cdf214c4e8425aef4f"
             Version="8.0.16"
             ProductName="Microsoft .NET Runtime 8.0.16" />
       </ExePackage>

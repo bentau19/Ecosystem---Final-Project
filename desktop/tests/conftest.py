@@ -1,8 +1,21 @@
+import sys
 from datetime import date
+from pathlib import Path
 
 import pytest
 
 from domain.entities.device_info import DeviceEntity
+
+# ---------------------------------------------------------------------------
+# FileDetection sys.path injection
+# ---------------------------------------------------------------------------
+# BackupService (and its tests) import from classifer, image_classifer, etc.
+# which live in FileDetection/ at the project root — two levels above
+# desktop/tests/.  Inserting it here applies to every test collected under
+# desktop/tests/ regardless of which subdirectory they live in.
+_FILE_DETECTION_DIR = Path(__file__).resolve().parents[2] / "FileDetection"
+if str(_FILE_DETECTION_DIR) not in sys.path:
+    sys.path.insert(0, str(_FILE_DETECTION_DIR))
 
 @pytest.fixture()
 def previous_device_online() -> DeviceEntity:

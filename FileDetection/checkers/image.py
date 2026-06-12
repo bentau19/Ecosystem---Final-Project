@@ -1,6 +1,13 @@
+import threading
 from pathlib import Path
 
 from PIL import Image, ImageFile, UnidentifiedImageError
+
+# Serialises concurrent callers so that the save-mutate-restore sequence on
+# the module-level ImageFile.LOAD_TRUNCATED_IMAGES global is atomic. Without
+# this, thread A's finally-block restore could overwrite thread B's intended
+# setting while B is mid-decode.
+_image_check_lock: threading.Lock = threading.Lock()
 
 
 def check_image(file_path: Path) -> bool:
@@ -23,16 +30,16 @@ def check_image(file_path: Path) -> bool:
         True if the image is corrupt (Pillow raised during decode), False if
         it decoded successfully.
     """
-    # Disable truncated-image tolerance so Pillow raises on truncation instead
-    # of silently padding with gray pixels.
-    original_truncated_setting: bool = ImageFile.LOAD_TRUNCATED_IMAGES
-    ImageFile.LOAD_TRUNCATED_IMAGES = False
-
-    try:
-        with Image.open(file_path) as img:
-            img.load()
-        return False
-    except (UnidentifiedImageError, OSError, SyntaxError):
-        return True
-    finally:
-        ImageFile.LOAD_TRUNCATED_IMAGES = original_truncated_setting
+    with _image_check_lock:
+        # Disable truncated-image tolerance so Pillow raises on truncation
+        # instead of silently padding with gray pixels.
+        original: bool = ImageFile.LOAD_TRUNCATED_IMAGES
+        ImageFile.LOAD_TRUNCATED_IMAGES = False
+        try:
+            with Image.open(file_path) as img:
+                img.load()
+            return False
+        except (UnidentifiedImageError, OSError, SyntaxError):
+            return True
+        finally:
+            ImageFile.LOAD_TRUNCATED_IMAGES = original

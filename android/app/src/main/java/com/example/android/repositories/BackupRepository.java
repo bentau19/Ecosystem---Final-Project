@@ -10,6 +10,7 @@ import com.example.android.domain.entities.BackupFileEntry;
 import com.example.android.domain.entities.BackupOptions;
 import com.example.android.domain.enums.BackupScanStatus;
 import com.example.android.domain.enums.BackupTransferStatus;
+import com.example.android.viewmodel.BackupViewModel;
 
 import java.util.Collections;
 import java.util.List;
@@ -177,6 +178,27 @@ public class BackupRepository {
     // ── Observers (for ViewModel / Fragment / ConnectivityService) ────────────
 
     /**
+     * Returns {@code true} when a scan or transfer is currently running or paused.
+     *
+     * <p>Safe to call from any thread — reads the last-posted LiveData values
+     * synchronously, so there is a negligible window at the very start of
+     * {@link #requestScan} (before {@code postValue} delivers SCANNING to the
+     * main thread) where this may still return {@code false}.  In practice the
+     * UI check in {@code ActionsFragment} is always on the main thread and well
+     * after the previous scan was dispatched, so this window is never hit.
+     *
+     * @return {@code true} if a scan is running or a transfer is SENDING / PAUSED.
+     */
+    public boolean isBackupActive() {
+        BackupScanStatus scan = scanStatus.getValue();
+        BackupTransferStatus xfer = transferStatus.getValue();
+        boolean scanning = scan == BackupScanStatus.SCANNING;
+        boolean transferring = xfer == BackupTransferStatus.SENDING
+                || xfer == BackupTransferStatus.PAUSED;
+        return scanning || transferring;
+    }
+
+    /**
      * @return LiveData tracking the current scan lifecycle state.
      */
     public LiveData<BackupScanStatus> getScanStatus() {
@@ -232,6 +254,10 @@ public class BackupRepository {
      *                  to forward to {@link #requestTransfer} once the scan finishes.
      */
     public void requestScan(String mode, Uri folderUri, BackupOptions options) {
+        if (isBackupActive()) {
+            Log.w(TAG, "requestScan: backup already active — ignoring duplicate request");
+            return;
+        }
         Log.d(TAG, "requestScan: mode=" + mode + " options=" + options);
         this.pendingOptions = (options != null) ? options : new BackupOptions(true);
         this.scanActiveForTransfer = true;   // arm: user explicitly started this scan
@@ -414,11 +440,25 @@ public class BackupRepository {
 
     /**
      * Called by {@code BackupTransferUseCase} when the user intentionally stops the
-     * transfer (via notification action or PC cancel).  (any state) → STOPPED.
+     * transfer via the phone notification.  (any state) → STOPPED.
      */
     public void onTransferStopped() {
         Log.d(TAG, "onTransferStopped");
         transferStatus.postValue(BackupTransferStatus.STOPPED);
+    }
+
+    /**
+     * Called by {@code BackupTransferUseCase} when the PC explicitly rejects the
+     * session before any file is sent — the PC user dismissed the folder-picker dialog
+     * ({@code waitForPcReady()} received a non-{@code "ready"} token).
+     * (any state) → CANCELED_BY_PC.
+     *
+     * <p>Distinct from {@link #onTransferStopped()} so that {@code BackupFragment} can
+     * remain on-screen and show a Toast instead of navigating back.
+     */
+    public void onTransferCanceledByPc() {
+        Log.d(TAG, "onTransferCanceledByPc");
+        transferStatus.postValue(BackupTransferStatus.CANCELED_BY_PC);
     }
 
     // ── Control: UI → Repository (pause / resume / stop) ─────────────────────

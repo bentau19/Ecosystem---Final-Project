@@ -13,8 +13,11 @@ class BackupChannels(StrEnum):
     # PC sends a ready ack after the user confirms the destination folder.
     BACKUP_READY_FROM_PC = "backup_ready_pc"
 
-    # Per-file channel prefix. Full channel name: BACKUP_FILE_SLOT + str(slot_index). Slot index matches the scan order.
-    BACKUP_FILE_SLOT = "backup_slot_"
+    # Per-file metadata channel prefix. Full channel name: BACKUP_FILE_META_SLOT + str(slot_index). Android sends a JSON object: {"name": "photo.jpg", "size": N, "mtime": T, "rel_path": "..."}. Slot index matches the scan order.
+    BACKUP_FILE_META_SLOT = "backup_slot_meta_"
+
+    # Per-file data channel prefix. Full channel name: BACKUP_FILE_DATA_SLOT + str(slot_index). Android streams exactly size raw bytes after the metadata channel closes. PC opens this channel with a file-size-proportional timeout.
+    BACKUP_FILE_DATA_SLOT = "backup_slot_data_"
 
     # PC sends per-file transfer result to Android after receiving and attempting to save the file. Prefix — append slot index. Payload: one of BackupFileResult's values ("succ" | "fail"). "fail" indicates a transport/IO problem; PC-local screening rejections (corrupt/duplicate/filtered) are reported as "succ" since the transfer itself completed.
     BACKUP_FILE_RESULT = "backup_file_result_"

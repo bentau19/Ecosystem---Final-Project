@@ -24,93 +24,93 @@ def _build_qss(is_dark: bool) -> str:
     Returns:
         A QSS stylesheet string with theme-appropriate colors interpolated.
     """
-    P = Palette if is_dark else LightPalette
-    CYAN = Palette.CYAN_400   # accent — invariant across themes
+    p = Palette if is_dark else LightPalette
+    cyan = Palette.CYAN_400   # accent — invariant across themes
 
     return f"""
     QDialog#BackupDestPickerDialog {{
-        background-color: {P.DARK_900};
-        color: {P.SLATE_100};
+        background-color: {p.DARK_900};
+        color: {p.SLATE_100};
     }}
 
     /* ── Header ─────────────────────────────────────────────────────── */
     QWidget#DestHeader {{
-        background-color: {P.DARK_800};
+        background-color: {p.DARK_800};
     }}
     QLabel#DestHeaderIcon {{
         font-size: 22px;
     }}
     QLabel#DestHeaderTitle {{
-        color: {P.SLATE_100};
+        color: {p.SLATE_100};
         font-size: 14px;
         font-weight: 600;
     }}
     QLabel#DestHeaderSubtitle {{
-        color: {P.SLATE_500};
+        color: {p.SLATE_500};
         font-size: 12px;
     }}
 
     /* ── Divider ─────────────────────────────────────────────────────── */
     QFrame#DestDivider {{
-        background-color: {P.GRAY_700};
+        background-color: {p.GRAY_700};
     }}
 
     /* ── Body ────────────────────────────────────────────────────────── */
     QLabel#DestFolderLabel {{
-        color: {P.SLATE_500};
+        color: {p.SLATE_500};
         font-size: 11px;
         font-weight: 500;
     }}
     QLineEdit#DestPathInput {{
-        background-color: {P.DARK_750};
-        border: 1px solid {P.GRAY_700};
+        background-color: {p.DARK_750};
+        border: 1px solid {p.GRAY_700};
         border-radius: 4px;
-        color: {P.SLATE_100};
+        color: {p.SLATE_100};
         padding: 4px 8px;
         font-size: 12px;
     }}
     QLineEdit#DestPathInput:focus {{
-        border-color: {CYAN};
+        border-color: {cyan};
     }}
 
     /* ── Browse button (secondary) ───────────────────────────────────── */
     QPushButton#BrowseButton {{
-        background-color: {P.DARK_750};
-        border: 1px solid {P.GRAY_700};
+        background-color: {p.DARK_750};
+        border: 1px solid {p.GRAY_700};
         border-radius: 4px;
-        color: {CYAN};
+        color: {cyan};
         font-size: 12px;
         font-weight: 500;
         padding: 4px 12px;
     }}
     QPushButton#BrowseButton:hover {{
-        background-color: {P.DARK_720};
-        border-color: {CYAN};
+        background-color: {p.DARK_720};
+        border-color: {cyan};
     }}
     QPushButton#BrowseButton:pressed {{
-        background-color: {P.DARK_800};
+        background-color: {p.DARK_800};
     }}
 
     /* ── Cancel button (ghost) ───────────────────────────────────────── */
     QPushButton#CancelButton {{
         background-color: transparent;
-        border: 1px solid {P.GRAY_700};
+        border: 1px solid {p.GRAY_700};
         border-radius: 4px;
-        color: {P.SLATE_500};
+        color: {p.SLATE_500};
         font-size: 12px;
         padding: 4px 14px;
     }}
     QPushButton#CancelButton:hover {{
-        border-color: {P.SLATE_500};
-        color: {P.SLATE_100};
+        border-color: {p.SLATE_500};
+        color: {p.SLATE_100};
     }}
     QPushButton#CancelButton:pressed {{
-        background-color: {P.DARK_750};
+        background-color: {p.DARK_750};
     }}
 
     /* ── Confirm button (primary accent) ─────────────────────────────── */
     QPushButton#ConfirmButton {{
-        background-color: {CYAN};
+        background-color: {cyan};
         border: none;
         border-radius: 4px;
         color: {Palette.DARK_900};
@@ -125,8 +125,8 @@ def _build_qss(is_dark: bool) -> str:
         background-color: {Palette.TEAL_700};
     }}
     QPushButton#ConfirmButton:disabled {{
-        background-color: {P.GRAY_700};
-        color: {P.SLATE_600};
+        background-color: {p.GRAY_700};
+        color: {p.SLATE_600};
     }}
     """
 
@@ -156,11 +156,13 @@ class BackupDestPickerDialog(QDialog):
             self,
             file_count: int,
             total_bytes: int,
+            storage_saver: bool = False,
             parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._file_count: int = file_count
         self._total_bytes: int = total_bytes
+        self._storage_saver: bool = storage_saver
         self._selected_path: str = ""
 
         self._setup_ui()
@@ -183,6 +185,8 @@ class BackupDestPickerDialog(QDialog):
 
     def _setup_ui(self) -> None:
         self.setObjectName("BackupDestPickerDialog")
+        # Surface above all other apps so an incoming backup request is never missed.
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         self.setWindowTitle("SyncDose — Choose Backup Destination")
         self.setFixedWidth(_DIALOG_WIDTH)
         # Let Qt size the height from content; prevent the user from resizing.
@@ -215,9 +219,14 @@ class BackupDestPickerDialog(QDialog):
         title = QLabel("Incoming Backup")
         title.setObjectName("DestHeaderTitle")
 
+        size_str = (
+            f"Up to {fmt_size(self._total_bytes)}  ·  Storage Saver on"
+            if self._storage_saver
+            else fmt_size(self._total_bytes)
+        )
         subtitle = QLabel(
             f"{n} file{'s' if n != 1 else ''}  ·  "
-            f"{fmt_size(self._total_bytes)} — choose a destination folder"
+            f"{size_str} — choose a destination folder"
         )
         subtitle.setObjectName("DestHeaderSubtitle")
 
@@ -234,14 +243,16 @@ class BackupDestPickerDialog(QDialog):
         row.addLayout(text_col, 1)
         return container
 
-    def _create_path_input(self) -> QLineEdit:
+    @staticmethod
+    def _create_path_input() -> QLineEdit:
         inp = QLineEdit()
         inp.setObjectName("DestPathInput")
         inp.setReadOnly(True)
         inp.setPlaceholderText("No folder selected…")
         return inp
 
-    def _create_browse_button(self) -> QPushButton:
+    @staticmethod
+    def _create_browse_button() -> QPushButton:
         btn = QPushButton("Browse…")
         btn.setObjectName("BrowseButton")
         btn.setFixedHeight(32)
@@ -249,7 +260,8 @@ class BackupDestPickerDialog(QDialog):
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         return btn
 
-    def _create_cancel_button(self) -> QPushButton:
+    @staticmethod
+    def _create_cancel_button() -> QPushButton:
         btn = QPushButton("Cancel")
         btn.setObjectName("CancelButton")
         btn.setFixedHeight(36)
@@ -257,7 +269,8 @@ class BackupDestPickerDialog(QDialog):
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         return btn
 
-    def _create_confirm_button(self) -> QPushButton:
+    @staticmethod
+    def _create_confirm_button() -> QPushButton:
         btn = QPushButton("Start Backup")
         btn.setObjectName("ConfirmButton")
         btn.setFixedHeight(36)
@@ -349,7 +362,7 @@ if __name__ == "__main__":
     import resources_qrc  # noqa: F401 — registers Qt virtual paths
 
     app = QApplication(sys.argv)
-    dlg = BackupDestPickerDialog(file_count=42, total_bytes=1_234_567_890)
+    dlg = BackupDestPickerDialog(file_count=42, total_bytes=1_234_567_890, storage_saver=True)
     result = dlg.exec()
     if result == QDialog.DialogCode.Accepted:
         print(f"Accepted — path: {dlg.selected_path}")

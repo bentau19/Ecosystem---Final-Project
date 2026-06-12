@@ -1,8 +1,12 @@
 name: Build & Release
 
-
 on:
   push:
+    branches:
+      - main          # CI builds on every push to main
+    tags:
+      - 'v*.*.*'      # Release pipeline fires on version tags (v1.0.0, v1.2.3-beta, etc.)
+  workflow_dispatch:  # Allow manually triggering a build+release from the GitHub UI
 
 jobs:
   # =========================
@@ -49,6 +53,8 @@ jobs:
           pyinstaller desktop/installer/Package/specs/file_handler.spec --distpath desktop/installer/Package/dist
 
       - name: Build installer
+        # Bundle.wixproj has a ProjectReference to Package.wixproj,
+        # so this single command builds Package.msi first, then the Bundle .exe.
         run: dotnet build desktop/installer/Bundle/ -c Release
 
       - name: Upload Windows artifacts
@@ -96,11 +102,16 @@ jobs:
 
 
   # =========================
-  # RELEASE (UPLOAD TO GITHUB RELEASE)
+  # RELEASE — only on version tags (v*.*.*)
   # =========================
   deploy:
-    needs: [ windows-build, android-build ]
+    needs: [windows-build, android-build]
     runs-on: ubuntu-latest
+    # Only create a GitHub Release when a semantic version tag is pushed.
+    # Branch pushes (main, feature branches) build artifacts but do NOT publish a release.
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write   # Required by softprops/action-gh-release to create releases
 
     steps:
       - name: Download Windows artifacts
@@ -119,6 +130,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
+          name: "SyncDose ${{ github.ref_name }}"
+          generate_release_notes: true   # auto-generates changelog from commits since last tag
           files: |
-            artifacts/windows/**/*.exe
+            artifacts/windows/**/*.msi
             artifacts/android/**/*.apk

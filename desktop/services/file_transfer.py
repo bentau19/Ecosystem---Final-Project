@@ -1,12 +1,11 @@
 import datetime
+import logging
 import math
 import os
 import threading
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import sleep
-from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
@@ -18,6 +17,8 @@ from domain.enums.file_transfer_response import FileTransferResponse
 from native import Server
 from serializers.file_metadata import FileMetadataSerializer
 from services.connectivity import ConnectivityService
+
+logger = logging.getLogger(__name__)
 
 
 # ── Data-channel timeout calibration ─────────────────────────────────────────
@@ -34,9 +35,8 @@ class FileTransferService(QObject):
     Reads ``connectivity.tau`` at the start of every call so reconnects that
     replace the underlying transport are handled transparently.
 
-    All I/O runs on daemon threads spawned via :meth:`_spawn`; Qt's
-    queued-connection mechanism keeps signal emissions safe on the
-    main-thread side.
+    All I/O is submitted to :attr:`_executor`; Qt's queued-connection
+    mechanism keeps signal emissions safe on the main-thread side.
 
     Signals:
         file_send_complete (Signal[FileSendCompleteDTO]): Emitted on success.
@@ -97,15 +97,19 @@ class FileTransferService(QObject):
                 return
             self._executor = ThreadPoolExecutor()
             self._is_running.set()
-            self._spawn(self._listen_for_file_to_send)
+            self._executor.submit(self._listen_for_file_to_send)
 
     def _stop(self) -> None:
         # Clear the running flag then wait for all submitted work to finish.
+        # The executor reference is captured inside the lock so a concurrent
+        # _start() (which swaps self._executor) can never have its fresh pool
+        # shut down by this stop.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-        self._executor.shutdown(wait=True, cancel_futures=True)
+            executor = self._executor
+        executor.shutdown(wait=True, cancel_futures=True)
 
     def send_file(self, path: str) -> None:
         """Send a local file to the connected peer on a background thread.
@@ -122,7 +126,7 @@ class FileTransferService(QObject):
         if not self._is_running.is_set():
             return
 
-        self._spawn(self._send_file, path)
+        self._executor.submit(self._send_file, path)
 
     def receive_metadata(self) -> None:
         """Listen for the peer's file-transfer metadata on a background thread.
@@ -139,7 +143,7 @@ class FileTransferService(QObject):
         if not self._is_running.is_set():
             return
 
-        self._spawn(self._receive_metadata)
+        self._executor.submit(self._receive_metadata)
 
     def receive_file(self, dest_path: str, file_size: int, modified_at_ms: int = 0) -> None:
         """Accept the transfer and stream the incoming bytes to *dest_path*.
@@ -165,7 +169,7 @@ class FileTransferService(QObject):
         """
         if not self._is_running.is_set():
             return
-        self._spawn(self._receive_file, dest_path, file_size, modified_at_ms)
+        self._executor.submit(self._receive_file, dest_path, file_size, modified_at_ms)
 
     def reject_receive(self) -> None:
         """Decline the transfer by writing ``"reject"`` to the response channel.
@@ -180,15 +184,9 @@ class FileTransferService(QObject):
 
         if not self._is_running.is_set():
             return
-        self._spawn(self._reject_receive)
+        self._executor.submit(self._reject_receive)
 
     # ── Private Functions ─────────────────────────────────────────────────────────────
-
-    def _spawn(self, target: Callable[..., None], *args: Any) -> None:
-        # Reject new submissions during teardown.
-        if not self._is_running.is_set():
-            return
-        self._executor.submit(target, *args)
 
     def _data_timeout(self, file_size: int) -> int:
         """Compute a file-size-proportional connect timeout for the data channel.
@@ -309,4 +307,4 @@ class FileTransferService(QObject):
                     sleep(3)
                     continue
                 except Exception as exc:
-                    print(f"[FileTransferService] Pipe listener error: {exc}")
+                    logger.error("Pipe listener error: %s", exc)

@@ -9,18 +9,26 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # FileDetection path injection
 # ---------------------------------------------------------------------------
-# BackupService imports is_corrupt, check_for_duplicates, and is_wanted from
-# the FileDetection/ module that lives at the project root (one level above
-# this desktop/ directory).  Adding it to sys.path here — before any deferred
-# imports — ensures those bare-module imports resolve at app startup rather
-# than silently failing mid-backup.
+# BackupService imports classifer, image_classifer, detector, file_duplicates
+# as bare top-level modules.  They live in FileDetection/ which is NOT a
+# proper package on sys.path, so we add it here before any deferred imports.
 #
-# The insert is intentionally idempotent (guards against double-registration
-# if this block is somehow executed twice).
-_FILE_DETECTION_DIR: Path = Path(__file__).resolve().parent.parent / "FileDetection"
+# Two locations depending on execution context:
+#   • Frozen (PyInstaller): FileDetection/ was bundled into sys._MEIPASS
+#   • Source: FileDetection/ is one level above this desktop/ directory
+#
+# The insert is idempotent (guards against double-registration).
+if getattr(sys, 'frozen', False):
+    _FILE_DETECTION_DIR: Path = Path(sys._MEIPASS) / "FileDetection"  # type: ignore[attr-defined]
+else:
+    _FILE_DETECTION_DIR: Path = Path(__file__).resolve().parent.parent / "FileDetection"
 if str(_FILE_DETECTION_DIR) not in sys.path:
     sys.path.insert(0, str(_FILE_DETECTION_DIR))
 # ---------------------------------------------------------------------------
+
+from app.logging_config import configure_logging
+
+configure_logging()
 
 from PySide6.QtWidgets import QApplication
 
@@ -44,6 +52,8 @@ if __name__ == "__main__":
 
     main_window = MainWindow()
     main_window.show()
+    main_window.raise_()
+    main_window.activateWindow()
 
     result = app.exec()
 

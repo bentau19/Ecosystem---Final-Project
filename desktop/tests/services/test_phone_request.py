@@ -16,7 +16,7 @@ from domain.enums.session_channels import SessionChannels
 
 
 def _make_service() -> tuple[PhoneRequestService, MagicMock, MagicMock]:
-    """Construct PhoneRequestService with connectivity and file-transfer mocked.
+    """Construct PhoneRequestService with all collaborator services mocked.
 
     Returns:
         Tuple of ``(service, mock_connectivity, mock_file_transfer)``.
@@ -24,10 +24,12 @@ def _make_service() -> tuple[PhoneRequestService, MagicMock, MagicMock]:
     mock_connectivity = MagicMock()
     mock_connectivity.connected = True
     mock_file_transfer = MagicMock()
+    mock_backup = MagicMock()
 
     svc = PhoneRequestService(
         connectivity_service=mock_connectivity,
         file_transfer_service=mock_file_transfer,
+        backup_service=mock_backup,
     )
     svc._is_running.set()
     return svc, mock_connectivity, mock_file_transfer

@@ -152,7 +152,7 @@ class DeviceViewModel(QObject):
     def disconnect_device(self) -> None:
         """Disconnect the currently connected device via the connectivity service.
 
-        Delegates to :meth:`~services.connectivity.ConnectivityService.disconnect_device`
+        Delegates to :meth:`~services.connectivity.ConnectivityService.stop`
         which emits ``device_disconnecting`` before any teardown begins.  The
         forwarding wire in ``__init__`` propagates that signal to this
         ViewModel's own ``device_disconnecting`` — no direct emit here to avoid
@@ -204,13 +204,19 @@ class DeviceViewModel(QObject):
 
     @Slot()
     def _on_device_disconnected(self) -> None:
-        # stop() joins any lingering network threads from the previous session.
-        # start() immediately re-enables the service for DB reads — fetch_all_devices
-        # and fetch_device_by_id are needed by the login screen before the next
-        # connection exists. Both calls are async and serialise on _lifecycle_lock,
-        # so the stop-then-start sequence is race-safe.
-        self._device_info_service.stop()
-        self._device_info_service.start()
+        # Only connectivity and device-info restart after a disconnect; every
+        # other service (backup, phone-request, file-transfer) is stopped via
+        # the device_disconnected wiring and starts again on the next connect.
+        #
+        # restart() runs stop-then-start sequentially on one thread, joining
+        # any lingering network threads from the previous session before
+        # re-enabling DB reads (fetch_all_devices / fetch_device_by_id are
+        # needed by the login screen before the next connection exists).
+        #
+        # connectivity.start() is safe here: ConnectivityService emits
+        # device_disconnected only after its own executor is fully drained,
+        # so this restart can never race the previous shutdown.
+        self._device_info_service.restart()
         self._connectivity_service.start()
         self.device_disconnected.emit()
 

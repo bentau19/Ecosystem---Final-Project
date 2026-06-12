@@ -1,6 +1,7 @@
 <RCC>
     <qresource prefix="/icons">
         <file alias="logo.svg">icons/logo.svg</file>
+        <file alias="backup_progress.svg">icons/backup_progress.svg</file>
         <file alias="settings.svg">icons/settings.svg</file>
         <file alias="dashboard.svg">icons/dashboard.svg</file>
         <file alias="battery.svg">icons/battery.svg</file>

@@ -78,7 +78,7 @@ public class BackupDataSource {
 
         walkAllFilesTree(folder, folder, results);
 
-        results.sort(Comparator.comparing(BackupFileEntry::getDisplayPath));
+        results.sort(Comparator.comparing(BackupFileEntry::displayPath));
         Log.d(TAG, "scanFolderByPath: found " + results.size() + " files");
         return results;
     }
@@ -110,9 +110,9 @@ public class BackupDataSource {
             if (child.isDirectory()) {
                 walkAllFilesTree(child, rootFolder, out);
             } else if (child.isFile()) {
-                String absPath  = child.getAbsolutePath();
-                long sizeBytes  = child.length();
-                long mtimeMs    = child.lastModified();
+                String absPath = child.getAbsolutePath();
+                long sizeBytes = child.length();
+                long mtimeMs = child.lastModified();
                 String sourceUri = android.net.Uri.fromFile(child).toString();
 
                 // Compute relative path within the chosen root folder so the desktop
@@ -123,7 +123,8 @@ public class BackupDataSource {
                         ? absPath.substring(rootAbs.length() + 1)
                         : child.getName(); // fallback: just the filename
 
-                out.add(new BackupFileEntry(absPath, sizeBytes, mtimeMs, sourceUri, relPath));
+                out.add(new BackupFileEntry(absPath, java.util.UUID.randomUUID().toString(),
+                        sizeBytes, mtimeMs, sourceUri, relPath));
             }
         }
     }
@@ -165,7 +166,7 @@ public class BackupDataSource {
 
         walkDocumentTree(context, root, rootPrefix, "", results);
 
-        results.sort(Comparator.comparing(BackupFileEntry::getDisplayPath));
+        results.sort(Comparator.comparing(BackupFileEntry::displayPath));
         Log.d(TAG, "scanFolder: found " + results.size() + " files");
         return results;
     }
@@ -173,14 +174,14 @@ public class BackupDataSource {
     /**
      * Recursively visits {@code dir} and appends every file it finds to {@code out}.
      *
-     * @param context     Application context.
-     * @param dir         Current directory node.
-     * @param pathPrefix  Display path of this directory (e.g. {@code /DCIM/Camera}).
-     * @param relPrefix   Relative path accumulated so far within the root folder
-     *                    (e.g. {@code "Camera/2024"}). Empty string at the root level.
-     *                    Used to build each file's {@code relPath} so the desktop can
-     *                    mirror the directory structure under its destination.
-     * @param out         Accumulator list — entries are appended in discovery order.
+     * @param context    Application context.
+     * @param dir        Current directory node.
+     * @param pathPrefix Display path of this directory (e.g. {@code /DCIM/Camera}).
+     * @param relPrefix  Relative path accumulated so far within the root folder
+     *                   (e.g. {@code "Camera/2024"}). Empty string at the root level.
+     *                   Used to build each file's {@code relPath} so the desktop can
+     *                   mirror the directory structure under its destination.
+     * @param out        Accumulator list — entries are appended in discovery order.
      */
     private void walkDocumentTree(Context context,
                                   DocumentFile dir,
@@ -194,7 +195,7 @@ public class BackupDataSource {
             if (child.isDirectory()) {
                 String childName = child.getName();
                 if (childName == null) childName = "";
-                String childPath     = pathPrefix + "/" + childName;
+                String childPath = pathPrefix + "/" + childName;
                 String childRelPrefix = relPrefix.isEmpty()
                         ? childName
                         : relPrefix + "/" + childName;
@@ -205,9 +206,9 @@ public class BackupDataSource {
                 if (fileName == null || fileName.isEmpty()) continue;
 
                 String displayPath = pathPrefix + "/" + fileName;
-                long sizeBytes     = child.length();
-                long mtimeMs       = child.lastModified();  // already in ms
-                String sourceUri   = child.getUri().toString();
+                long sizeBytes = child.length();
+                long mtimeMs = child.lastModified();  // already in ms
+                String sourceUri = child.getUri().toString();
 
                 // relPath mirrors the structure under the root folder so the desktop
                 // can recreate subdirectories.
@@ -216,7 +217,8 @@ public class BackupDataSource {
                         ? fileName
                         : relPrefix + "/" + fileName;
 
-                out.add(new BackupFileEntry(displayPath, sizeBytes, mtimeMs, sourceUri, relPath));
+                out.add(new BackupFileEntry(displayPath, java.util.UUID.randomUUID().toString(),
+                        sizeBytes, mtimeMs, sourceUri, relPath));
             }
         }
     }
@@ -369,7 +371,7 @@ public class BackupDataSource {
         }
 
         // Newest first — most relevant for incremental backup flows
-        results.sort((a, b) -> Long.compare(b.getMtimeMs(), a.getMtimeMs()));
+        results.sort((a, b) -> Long.compare(b.mtimeMs(), a.mtimeMs()));
         Log.d(TAG, "scanAllMedia: total " + results.size() + " files");
         return results;
     }
@@ -435,7 +437,7 @@ public class BackupDataSource {
                 // MANAGE_EXTERNAL_STORAGE is held, and via new FileInputStream() directly.
                 String sourceUri = android.net.Uri.fromFile(child).toString();
 
-                out.add(new BackupFileEntry(absPath, sizeBytes, mtimeMs, sourceUri));
+                out.add(new BackupFileEntry(absPath, sizeBytes, mtimeMs, sourceUri, java.util.UUID.randomUUID().toString()));
             }
         }
     }
@@ -470,9 +472,9 @@ public class BackupDataSource {
      * @return {@code true} if the file was deleted; {@code false} otherwise.
      */
     public boolean deleteSourceFile(@NonNull Context context, @NonNull BackupFileEntry entry) {
-        String sourceUriStr = entry.getSourceUri();
+        String sourceUriStr = entry.sourceUri();
         if (sourceUriStr == null || sourceUriStr.isEmpty()) {
-            Log.w(TAG, "deleteSourceFile: empty sourceUri for " + entry.getDisplayPath());
+            Log.w(TAG, "deleteSourceFile: empty sourceUri for " + entry.displayPath());
             return false;
         }
 
@@ -503,7 +505,7 @@ public class BackupDataSource {
             return rows > 0;
 
         } catch (Exception e) {
-            Log.e(TAG, "deleteSourceFile: failed for " + entry.getDisplayPath()
+            Log.e(TAG, "deleteSourceFile: failed for " + entry.displayPath()
                     + " (" + sourceUriStr + ") — " + e.getMessage(), e);
             return false;
         }
@@ -541,14 +543,14 @@ public class BackupDataSource {
      * @param entry The just-deleted file's entry.
      */
     public void deleteEmptyParentFolders(@NonNull BackupFileEntry entry) {
-        String relPath = entry.getRelPath();
+        String relPath = entry.relPath();
         if (relPath == null || relPath.isEmpty()) {
             Log.d(TAG, "deleteEmptyParentFolders: skipping (no relPath) — "
-                    + entry.getDisplayPath());
+                    + entry.displayPath());
             return;
         }
 
-        String sourceUriStr = entry.getSourceUri();
+        String sourceUriStr = entry.sourceUri();
         Uri uri;
         try {
             uri = Uri.parse(sourceUriStr);
@@ -561,7 +563,7 @@ public class BackupDataSource {
             return;
         }
 
-        String displayPath = entry.getDisplayPath();
+        String displayPath = entry.displayPath();
         if (displayPath == null || !displayPath.endsWith(relPath)) {
             Log.w(TAG, "deleteEmptyParentFolders: displayPath does not end with relPath — "
                     + "displayPath=" + displayPath + ", relPath=" + relPath);
@@ -605,7 +607,7 @@ public class BackupDataSource {
      * Executes a single MediaStore query and appends results to {@code out}.
      *
      * <p>{@code DATE_MODIFIED} in MediaStore is stored as Unix <em>seconds</em>.
-     * We multiply by 1000 here so {@link BackupFileEntry#getMtimeMs()} always
+     * We multiply by 1000 here so {@link BackupFileEntry#mtimeMs()} always
      * holds milliseconds — matching the desktop {@code BackupReviewDialog} which
      * divides by 1000 when formatting the date label.
      *
@@ -681,7 +683,7 @@ public class BackupDataSource {
                 Uri sourceContentUri = ContentUris.withAppendedId(contentUri, id);
 
                 out.add(new BackupFileEntry(displayPath, sizeBytes, mtimeMs,
-                        sourceContentUri.toString()));
+                        sourceContentUri.toString(),java.util.UUID.randomUUID().toString()));
                 count++;
             }
             Log.d(TAG, "queryMediaStore: " + label + " → " + count + " entries");

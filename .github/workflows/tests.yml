@@ -87,7 +87,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: pip install pillow xxhash numpy pytest
+        run: pip install -r FileDetection/requirements.txt pytest
 
       - name: Run FileDetection tests
         working-directory: FileDetection

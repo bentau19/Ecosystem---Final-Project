@@ -3,7 +3,7 @@ from pathlib import Path
 from PySide6.QtCore import Slot, QEvent
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QMainWindow, QMenu, QMessageBox, QStackedWidget,
+    QApplication, QDialog, QMainWindow, QMenu, QStackedWidget,
     QSystemTrayIcon, QWidget,
 )
 
@@ -11,17 +11,15 @@ import utils.styles
 from app.app_state import app_state
 from app.theme_manager import theme_manager
 from domain.dto.backup_file import BackupFileDTO
-from domain.dto.backup_review_prompt import BackupReviewPromptDTO
+from domain.dto.backup_review_prompt import BackupReviewPromptDTO  # used in type hint for _on_backup_session_result
 from domain.dto.file_receive_prompt import FileReceivePromptDTO
 from domain.enums.screen import Screen
 from resources.colors import Colors, LightColors
 from resources.paths import Icons, Styles
 from app.navigation_manager import navigation_manager, NavigationManager
-from utils.file_type import IMAGE_EXTS, file_ext
 from utils.styles import themed
 from views.screens.dashboard import DashboardScreen
 from views.screens.login import LoginScreen
-from views.widgets.backup.backup_classification_review_dialog import BackupClassificationReviewDialog
 from views.widgets.backup.backup_dest_picker_dialog import BackupDestPickerDialog
 from views.widgets.backup.backup_progress_window import BackupProgressWindow
 from views.widgets.backup.backup_review_dialog import BackupReviewDialog
@@ -68,10 +66,6 @@ class MainWindow(QMainWindow):
         self._backup_progress_win: BackupProgressWindow | None = None
         # Holds the FileReceivedToast alive while it's on screen.
         self._toast: FileReceivedToast | None = None
-        # Set to True when the user clicks "Keep All Files" in a review dialog,
-        # so that subsequent review prompts in the same session are auto-kept.
-        # Reset to False each time a new backup session manifest arrives.
-        self._keep_all_reviews: bool = False
 
         self._setup_ui()
         self._connect_signals()
@@ -109,7 +103,7 @@ class MainWindow(QMainWindow):
 
         self._tray_icon.setContextMenu(self._tray_menu)
         self._tray_icon.activated.connect(self._on_tray_activated)
-        self._tray_icon.show()
+        # Tray icon visibility is managed reactively by showEvent/hideEvent.
 
     def _connect_signals(self) -> None:
         # Wire navigation, file-transfer, backup, and theme signals to their slots.
@@ -118,8 +112,8 @@ class MainWindow(QMainWindow):
         self._file_transfer_vm.metadata_received.connect(self._on_file_received_metadata)
         self._backup_vm.dest_dir_requested.connect(self._on_dest_dir_requested)
         self._backup_vm.backup_ready.connect(self._on_backup_ready)
-        self._backup_vm.review_requested.connect(self._on_review_requested)
         self._backup_vm.backup_session_result.connect(self._on_backup_session_result)
+        self._backup_vm.device_ready_changed.connect(self._on_backup_device_ready_changed)
         theme_manager.theme_changed.connect(self._restyle_tray)
 
     def changeEvent(self, event: QEvent) -> None:
@@ -130,9 +124,28 @@ class MainWindow(QMainWindow):
         """
         if event.type() == QEvent.Type.WindowStateChange:
             if self.isMinimized():
-                # Hide to tray instead of showing a minimised taskbar entry
+                # Hide to tray instead of showing a minimised taskbar entry.
+                # hideEvent will fire automatically and show the tray icon.
                 self.hide()
         super().changeEvent(event)
+
+    def showEvent(self, event: QEvent) -> None:
+        """Hide the tray icon while the window is visible.
+
+        Args:
+            event: The show event delivered by Qt.
+        """
+        super().showEvent(event)
+        self._tray_icon.hide()
+
+    def hideEvent(self, event: QEvent) -> None:
+        """Show the tray icon whenever the window is hidden so the user can restore it.
+
+        Args:
+            event: The hide event delivered by Qt.
+        """
+        super().hideEvent(event)
+        self._tray_icon.show()
 
     # ── Slots ──────────────────────────────────────────────────────────────────
 
@@ -170,14 +183,19 @@ class MainWindow(QMainWindow):
             )
         )
 
-    @Slot(int, 'qint64')
-    def _on_dest_dir_requested(self, file_count: int, files_size: int) -> None:
+    @Slot(int, 'qint64', bool)
+    def _on_dest_dir_requested(self, file_count: int, files_size: int,
+                                storage_saver: bool) -> None:
         # Android sent a manifest — show the folder-picker dialog. Opens
         # BackupDestPickerDialog modally. On accept, unblocks the service with
         # the chosen path; on cancel, aborts the session.
-        # Reset the "keep all" flag so each new session starts fresh.
-        self._keep_all_reviews = False
-        dlg = BackupDestPickerDialog(file_count, files_size, parent=self)
+        #
+        # Restore the window first: a QDialog with a hidden parent will not
+        # render on screen, leaving the backup service stuck waiting forever.
+        if not self.isVisible():
+            self._restore_window()
+        dlg = BackupDestPickerDialog(file_count, files_size,
+                                     storage_saver=storage_saver, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._backup_vm.confirm_dest_dir(dlg.selected_path)
         else:
@@ -196,110 +214,74 @@ class MainWindow(QMainWindow):
         self._backup_progress_win.connect_viewmodel(self._backup_vm)
         self._backup_progress_win.show()
 
-    @Slot(object)
-    def _on_review_requested(self, prompt: BackupReviewPromptDTO) -> None:
-        # The classifier flagged a file as ambiguous — ask the user to decide.
-        # Opens BackupClassificationReviewDialog modally. The user's choice is
-        # reported back to the service via BackupViewModel.resolve_review,
-        # which unblocks the slot's receiver thread.
-        #
-        # If the user previously clicked "Keep All Files", skip the dialog and
-        # auto-keep every subsequent file in this session without interrupting.
-        #
-        # The progress window may be minimized to the system tray when this
-        # fires, so this dialog is raised on top of the main window to ensure
-        # it's visible.
-        if self._keep_all_reviews:
-            self._backup_vm.resolve_review(prompt.channel, True)
-            return
-
-        self.showNormal()
-        self.activateWindow()
-        self.raise_()
-
-        dlg = BackupClassificationReviewDialog(prompt, parent=self)
-        result = dlg.exec()
-
-        if result == BackupClassificationReviewDialog.KEEP_ALL_CODE:
-            # Keep this file and suppress all further review dialogs this session.
-            self._keep_all_reviews = True
-
-        # Any result that is not Rejected counts as "keep".
-        self._backup_vm.resolve_review(
-            prompt.channel,
-            result != QDialog.DialogCode.Rejected,
-        )
-
-    @Slot(bool, str)
-    def _on_backup_session_result(self, classify: bool, dest_dir: str) -> None:
+    @Slot(list, str)
+    def _on_backup_session_result(self, flagged: list[BackupReviewPromptDTO], dest_dir: str) -> None:
         # Fired after backup_complete. Close the progress window (safe — _backup_done
-        # is already True) then branch on whether ML classification was enabled.
+        # is already True) then show a review dialog for any ML-flagged files.
+        #
+        # Non-blocking design: the main window is NOT force-restored to the front.
+        # Completion is communicated via a tray balloon so the user is informed
+        # without interrupting whatever they are currently doing.
         if self._backup_progress_win is not None:
             self._backup_progress_win.close()
             self._backup_progress_win = None
 
-        # Ensure the main window is visible in case it was hidden to the tray.
-        self.showNormal()
-        self.activateWindow()
-        self.raise_()
-
-        if classify:
-            # Build a list of every image file that was saved to dest_dir.
-            # rglob handles Android rel_path subdirectories (e.g. DCIM/Camera/).
-            dest = Path(dest_dir)
+        if flagged:
+            # Stat only the handful of ML-flagged files — no directory scan needed.
+            # prompt.cache_path is the final dest_dir path set by the service.
             files: list[BackupFileDTO] = []
-            if dest.exists():
-                for f in sorted(dest.rglob("*")):
-                    if f.is_file() and file_ext(f.name) in IMAGE_EXTS:
-                        try:
-                            st = f.stat()
-                            files.append(BackupFileDTO(
-                                path=str(f),
-                                name=f.name,
-                                size_bytes=st.st_size,
-                                mtime=int(st.st_mtime * 1000),
-                            ))
-                        except OSError:
-                            pass
+            for prompt in flagged:
+                try:
+                    st = Path(prompt.cache_path).stat()
+                    files.append(BackupFileDTO(
+                        path=prompt.cache_path,
+                        name=prompt.file_name,
+                        size_bytes=st.st_size,
+                        mtime=int(st.st_mtime * 1000),
+                    ))
+                except OSError:
+                    pass  # file was already deleted (e.g. disk error) — skip it
 
             if files:
-                # Let the user keep or delete each image; apply decisions on Accept.
                 dlg = BackupReviewDialog(files, parent=self)
                 if dlg.exec() == QDialog.DialogCode.Accepted:
                     decisions = dlg.get_decisions()
                     deleted_count = 0
-                    kept_count = 0
-
                     for path, decision in decisions.items():
                         if decision == "delete":
                             Path(path).unlink(missing_ok=True)
                             deleted_count += 1
-                        elif decision == "keep":
-                            # Files are already in dest_dir — the backup service
-                            # wrote them there before the review ran.  No copy
-                            # is required; count for the summary only.
-                            kept_count += 1
 
-                    parts: list[str] = []
-                    if kept_count:
-                        parts.append(f"{kept_count} file{'s' if kept_count != 1 else ''} kept")
-                    if deleted_count:
-                        parts.append(f"{deleted_count} file{'s' if deleted_count != 1 else ''} deleted")
-                    summary = ", ".join(parts) if parts else "No changes made."
-
-                    QMessageBox.information(
-                        self,
+                    kept = len(files) - deleted_count
+                    self._tray_icon.showMessage(
                         "Backup Review Complete",
-                        f"Decisions applied.\n\n{summary}\n\nFiles are saved to:\n{dest_dir}",
+                        f"{kept} file{'s' if kept != 1 else ''} kept"
+                        f", {deleted_count} deleted"
+                        f"\nFiles saved to: {dest_dir}",
+                        QSystemTrayIcon.MessageIcon.Information,
+                        6000,
                     )
                 return
 
-        # classify=False, or classify=True but no images were found
-        QMessageBox.information(
-            self,
+        # No flagged files — classify=False or every ML file passed automatically.
+        self._tray_icon.showMessage(
             "Backup Complete",
-            "Backup completed successfully!\nAll files have been saved.",
+            "All files have been saved successfully.",
+            QSystemTrayIcon.MessageIcon.Information,
+            5000,
         )
+
+    @Slot(bool)
+    def _on_backup_device_ready_changed(self, ready: bool) -> None:
+        """Force-close the backup progress window when the device disconnects mid-backup.
+
+        The ViewModel has already cancelled the session (reset ``_is_active``)
+        before emitting this signal, so the window can be torn down without a
+        confirmation dialog via :meth:`~BackupProgressWindow.force_close`.
+        """
+        if not ready and self._backup_progress_win is not None:
+            self._backup_progress_win.force_close()
+            self._backup_progress_win = None
 
     @Slot()
     def _on_file_receive_error(self, error: str) -> None:

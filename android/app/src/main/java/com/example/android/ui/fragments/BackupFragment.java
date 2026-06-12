@@ -23,6 +23,8 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.appcompat.widget.SwitchCompat;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -34,6 +36,7 @@ import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.domain.enums.BackupScanStatus;
+import com.example.android.domain.enums.BackupTransferStatus;
 
 import com.example.android.R;
 import com.example.android.domain.entities.BackupOptions;
@@ -129,6 +132,16 @@ public class BackupFragment extends Fragment {
      */
     private boolean scanInProgress = false;
 
+    /**
+     * Set to {@code true} when the scan completes successfully and the transfer has been
+     * dispatched.  Cleared by the transfer-status observer when a terminal state arrives
+     * (COMPLETED / FAILED / STOPPED).
+     *
+     * <p>Guards the {@code transferStatus} observer so it ignores the initial IDLE value
+     * emitted at registration time and the IDLE that follows {@code resetTransfer()}.
+     */
+    private boolean transferInProgress = false;
+
     // ── ViewModel ─────────────────────────────────────────────────────────────
     private BackupViewModel backupViewModel;
 
@@ -140,8 +153,11 @@ public class BackupFragment extends Fragment {
     private TextView tvFolderSubtitle;
     private CheckBox cbNoJunk;
     private CheckBox cbDeleteAfter;
+    private SwitchCompat switchStorageSaver;
+    private TextView tvStorageSaverState;
+    private View cardStorageSaver;
     private AppCompatButton btnStart;
-private View btnBack;
+    private View btnBack;
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -162,6 +178,13 @@ private View btnBack;
         // Observe scan lifecycle — drives loading state, error dialogs, and navigation.
         backupViewModel.getScanStatus().observe(getViewLifecycleOwner(),
                 this::onScanStatusChanged);
+        // Observe transfer lifecycle — keeps the fragment alive until the summary dialog
+        // is shown and acknowledged, rather than popping immediately after scan completes.
+        backupViewModel.getTransferStatus().observe(getViewLifecycleOwner(),
+                this::onTransferStatusChanged);
+        // Observe per-file progress ticks to update the in-progress button label.
+        backupViewModel.getTransferSent().observe(getViewLifecycleOwner(),
+                this::onTransferSentChanged);
     }
 
     // ── ViewModel init ────────────────────────────────────────────────────────
@@ -183,6 +206,9 @@ private View btnBack;
         tvFolderSubtitle = root.findViewById(R.id.tvFolderSubtitle);
         cbNoJunk = root.findViewById(R.id.cbNoJunk);
         cbDeleteAfter = root.findViewById(R.id.cbDeleteAfter);
+        switchStorageSaver = root.findViewById(R.id.switchStorageSaver);
+        tvStorageSaverState = root.findViewById(R.id.tvStorageSaverState);
+        cardStorageSaver = root.findViewById(R.id.cardStorageSaver);
         btnStart = root.findViewById(R.id.btnStart);
         btnBack  = root.findViewById(R.id.btnBack);
     }
@@ -195,6 +221,36 @@ private View btnBack;
         cardAllMedia.setOnClickListener(v -> selectMode(MODE_ALL_MEDIA));
         cardFolder.setOnClickListener(v -> selectMode(MODE_FOLDER));
         btnStart.setOnClickListener(v -> onStartBackup());
+        setupStorageSaverToggle();
+    }
+
+    /**
+     * Wires the Storage Saver switch to two reinforcing visual state signals:
+     *
+     * <ol>
+     *   <li><b>State label</b> ({@code tvStorageSaverState}): text flips between
+     *       "OFF" ({@code text_muted} grey) and "ON" ({@code accent_cyan} blue),
+     *       giving an unambiguous text confirmation of the current state.</li>
+     *   <li><b>Card border</b> ({@code cardStorageSaver}): swaps between
+     *       {@code backup_card_default} (dim 1dp border) and
+     *       {@code backup_card_selected} (2dp cyan stroke) — the same visual
+     *       language used by the mode-selection cards above.</li>
+     * </ol>
+     */
+    private void setupStorageSaverToggle() {
+        switchStorageSaver.setOnCheckedChangeListener((btn, isChecked) -> {
+            // Update the "OFF" / "ON" label text and colour
+            tvStorageSaverState.setText(isChecked
+                    ? R.string.backup_opt_storage_saver_on
+                    : R.string.backup_opt_storage_saver_off);
+            tvStorageSaverState.setTextColor(ContextCompat.getColor(requireContext(),
+                    isChecked ? R.color.accent_cyan : R.color.text_muted));
+
+            // Update the card border (same drawable swap the mode cards use)
+            cardStorageSaver.setBackgroundResource(isChecked
+                    ? R.drawable.backup_card_selected
+                    : R.drawable.backup_card_default);
+        });
     }
 
     // ── Selection logic ───────────────────────────────────────────────────────
@@ -632,12 +688,14 @@ private View btnBack;
         // "Don't classify junk files" checked → classify_images = false
         boolean classifyImages = !cbNoJunk.isChecked();
         boolean deleteAfter    = cbDeleteAfter.isChecked();
+        boolean storageSaver   = switchStorageSaver.isChecked();
         int     parallelSlots  = computeParallelSlots();
         Log.d(TAG, "startScan: mode=" + selectedMode
                 + " classifyImages=" + classifyImages
                 + " deleteAfter=" + deleteAfter
+                + " storageSaver=" + storageSaver
                 + " parallelSlots=" + parallelSlots);
-        BackupOptions options = new BackupOptions(classifyImages, parallelSlots, deleteAfter);
+        BackupOptions options = new BackupOptions(classifyImages, parallelSlots, deleteAfter, storageSaver);
 
         // Arm the observer guard before dispatching — the background thread may
         // complete and post a new status before the next UI frame.
@@ -676,16 +734,19 @@ private View btnBack;
                 if (scanInProgress) {
                     scanInProgress = false;
                     setScanningUiState(false);
-                    // Scan completed with files — transfer is already dispatched by the
-                    // repository.  Show toast and return to the main screen.
-                    Toast.makeText(requireContext(),
-                            R.string.backup_started_toast, Toast.LENGTH_LONG).show();
-                    requireActivity().getSupportFragmentManager().popBackStack();
+                    // Scan completed with files — the transfer has been dispatched by
+                    // BackupRepository.onScanComplete().  Instead of popping immediately,
+                    // stay on this fragment so we can show the in-app summary dialog when
+                    // the transfer finishes.
+                    transferInProgress = true;
+                    setTransferUiState(true, 0, 0);
                 }
                 break;
 
             case EMPTY:
                 scanInProgress = false;
+                transferInProgress = false;
+                setTransferUiState(false, 0, 0);
                 setScanningUiState(false);
                 showEmptyFilesDialog();
                 break;
@@ -746,6 +807,184 @@ private View btnBack;
                 .setTitle(R.string.backup_error_scan_failed_title)
                 .setMessage(R.string.backup_error_scan_failed_msg)
                 .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
+    // ── Transfer phase observers ──────────────────────────────────────────────
+
+    /**
+     * Reacts to every transfer lifecycle transition posted by {@link BackupRepository}.
+     *
+     * <p>The {@link #transferInProgress} guard prevents reacting to:
+     * <ul>
+     *   <li>The initial IDLE value emitted when the observer is first registered.</li>
+     *   <li>The IDLE emitted by {@code ConnectivityService} calling
+     *       {@code BackupRepository.resetTransfer()} after COMPLETED.</li>
+     * </ul>
+     *
+     * <p>LiveData dispatch order guarantees that when COMPLETED is posted,
+     * {@code ConnectivityService}'s observer (registered first) fires before this one.
+     * Even though {@code ConnectivityService} calls {@code resetTransfer()} inside its
+     * callback, those {@code postValue()} calls are queued for the <em>next</em>
+     * Looper iteration — so {@code failedCount} and {@code transferTotal} are still
+     * their pre-reset values when this callback reads them.
+     */
+    private void onTransferStatusChanged(BackupTransferStatus status) {
+        if (!transferInProgress || status == null) return;
+        switch (status) {
+            case SENDING:
+                // Progress ticks are handled by onTransferSentChanged below.
+                break;
+
+            case PAUSED:
+                // Show "Paused" in the button — the user can resume via the notification.
+                btnStart.setText(R.string.backup_scanning); // reuse existing "Scanning…" label
+                break;
+
+            case COMPLETED:
+                transferInProgress = false;
+                setTransferUiState(false, 0, 0);
+                showTransferSummaryDialog();
+                break;
+
+            case FAILED:
+                transferInProgress = false;
+                setTransferUiState(false, 0, 0);
+                showTransferFailedDialog();
+                break;
+
+            case CANCELED_BY_PC:
+                // PC dismissed its folder-picker before any file was sent.
+                // Stay on BackupFragment — the user should be able to retry immediately.
+                transferInProgress = false;
+                setTransferUiState(false, 0, 0);
+                // Re-enable Start so the user can kick off a new backup right away.
+                if (selectedMode != null) {
+                    btnStart.setEnabled(true);
+                    btnStart.setAlpha(1.0f);
+                }
+                btnStart.setText(R.string.backup_start);
+                if (isAdded()) {
+                    Toast.makeText(requireContext(),
+                            R.string.backup_canceled_by_pc,
+                            Toast.LENGTH_SHORT).show();
+                }
+                break;
+
+            case STOPPED:
+                // User tapped Stop in the notification mid-transfer — pop back to
+                // ActionsFragment silently; the notification banner already gave feedback.
+                transferInProgress = false;
+                setTransferUiState(false, 0, 0);
+                if (isAdded()) {
+                    requireActivity().getSupportFragmentManager().popBackStack();
+                }
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    /**
+     * Updates the button label with the running progress counter whenever the PC
+     * confirms another file ("Backing up X / Y…").
+     */
+    private void onTransferSentChanged(Integer sent) {
+        if (!transferInProgress) return;
+        Integer total = backupViewModel.getTransferTotal().getValue();
+        int s = (sent  != null) ? sent  : 0;
+        int t = (total != null) ? total : 0;
+        setTransferUiState(true, s, t);
+    }
+
+    // ── Transfer UI state ─────────────────────────────────────────────────────
+
+    /**
+     * Locks / unlocks the entire configuration UI while a transfer is in progress.
+     *
+     * <p>When {@code inProgress} is {@code true}:
+     * <ul>
+     *   <li>The Start button is disabled and shows "Backing up X / Y…" (or "Scanning…"
+     *       while the total is not yet known).</li>
+     *   <li>Both mode cards and all option controls are made non-interactive so the user
+     *       cannot change the configuration mid-transfer.</li>
+     * </ul>
+     *
+     * @param inProgress {@code true} while transfer is running; {@code false} to restore.
+     * @param sent       Number of files confirmed by PC so far.
+     * @param total      Total files in the batch (0 = not yet known).
+     */
+    private void setTransferUiState(boolean inProgress, int sent, int total) {
+        btnStart.setEnabled(false);
+        btnStart.setAlpha(inProgress ? 0.7f : 0.4f);
+        if (inProgress) {
+            btnStart.setText(total > 0
+                    ? getString(R.string.backup_backing_up_progress, sent, total)
+                    : getString(R.string.backup_scanning));
+        }
+        // Lock mode cards and option controls to prevent mid-transfer reconfiguration.
+        cardAllMedia.setClickable(!inProgress);
+        cardFolder.setClickable(!inProgress);
+        cbNoJunk.setEnabled(!inProgress);
+        cbDeleteAfter.setEnabled(!inProgress);
+        switchStorageSaver.setEnabled(!inProgress);
+    }
+
+    // ── Transfer result dialogs ───────────────────────────────────────────────
+
+    /**
+     * Shows the post-transfer summary dialog.
+     *
+     * <p>Reads {@link BackupViewModel#getTransferTotal()} and
+     * {@link BackupViewModel#getFailedCount()} directly — these LiveData values are
+     * still valid at dispatch time (see {@link #onTransferStatusChanged} Javadoc for
+     * the LiveData ordering guarantee).
+     *
+     * <p>The dialog is not cancellable so the user must acknowledge it before the
+     * fragment pops — this ensures they see the failure count rather than silently
+     * returning to the dashboard.
+     */
+    private void showTransferSummaryDialog() {
+        if (!isAdded()) {
+            // Fragment was detached before we got here — pop defensively.
+            requireActivity().getSupportFragmentManager().popBackStack();
+            return;
+        }
+        Integer total  = backupViewModel.getTransferTotal().getValue();
+        Integer failed = backupViewModel.getFailedCount().getValue();
+        int t = (total  != null) ? total  : 0;
+        int f = (failed != null) ? failed : 0;
+        int succeeded = Math.max(0, t - f);
+
+        String message = (f > 0)
+                ? getString(R.string.backup_complete_dialog_msg_with_errors, succeeded, f)
+                : getString(R.string.backup_complete_dialog_msg_all_ok, succeeded);
+
+        new AlertDialog.Builder(requireContext())
+                .setTitle(R.string.backup_complete_dialog_title)
+                .setMessage(message)
+                .setPositiveButton(android.R.string.ok,
+                        (d, w) -> requireActivity().getSupportFragmentManager().popBackStack())
+                .setCancelable(false)
+                .show();
+    }
+
+    /**
+     * Shows an error dialog for a catastrophic transport failure (the whole transfer
+     * collapsed, not just one file).  Per-file failures are counted in the summary
+     * dialog — this dialog is only shown for {@link BackupTransferStatus#FAILED}.
+     */
+    private void showTransferFailedDialog() {
+        if (!isAdded()) {
+            requireActivity().getSupportFragmentManager().popBackStack();
+            return;
+        }
+        new AlertDialog.Builder(requireContext())
+                .setTitle(R.string.backup_transfer_failed_title)
+                .setMessage(R.string.backup_transfer_failed_msg)
+                .setPositiveButton(android.R.string.ok,
+                        (d, w) -> requireActivity().getSupportFragmentManager().popBackStack())
                 .show();
     }
 

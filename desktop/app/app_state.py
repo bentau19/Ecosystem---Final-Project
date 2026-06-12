@@ -63,20 +63,16 @@ class AppState:
         self.phone_request_service: Final[PhoneRequestService] = PhoneRequestService(
             connectivity_service=self.connectivity_service,
             file_transfer_service=self.file_transfer_service,
+            backup_service=self.backup_service,
         )
 
-        # Wire PhoneRequestService lifecycle to device connection events.
-        # On connect  → start() is idempotent (guarded by _is_running); the thread
-        #               that was waiting in the initial wait-loop is now polling.
-        # On disconnect → stop() joins the polling thread; the next connect signal
-        #                 spawns a fresh _listen_to_channels thread.
-        self.device_viewmodel.device_connected.connect(self.phone_request_service.start)
-        self.device_viewmodel.device_disconnected.connect(self.phone_request_service.stop)
-
-        # Wire BackupService lifecycle to device connection events.
-        # start_listening() is idempotent (guarded by _is_running).
+        # Wire service lifecycles to device connection events.
+        # BackupService is wired first so its executor is initialised before
+        # PhoneRequestService can dispatch receive_manifest() on the first poll.
         self.device_viewmodel.device_connected.connect(self.backup_service.start)
+        self.device_viewmodel.device_connected.connect(self.phone_request_service.start)
         self.device_viewmodel.device_disconnected.connect(self.backup_service.stop)
+        self.device_viewmodel.device_disconnected.connect(self.phone_request_service.stop)
 
 
 app_state: Final[AppState] = AppState()

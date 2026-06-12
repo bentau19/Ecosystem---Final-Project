@@ -14,9 +14,14 @@
       "description": "PC sends a ready ack after the user confirms the destination folder."
     },
     {
-      "name": "BACKUP_FILE_SLOT",
-      "value": "backup_slot_",
-      "description": "Per-file channel prefix. Full channel name: BACKUP_FILE_SLOT + str(slot_index). Slot index matches the scan order."
+      "name": "BACKUP_FILE_META_SLOT",
+      "value": "backup_slot_meta_",
+      "description": "Per-file metadata channel prefix. Full channel name: BACKUP_FILE_META_SLOT + str(slot_index). Android sends a JSON object: {\"name\": \"photo.jpg\", \"size\": N, \"mtime\": T, \"rel_path\": \"...\"}. Slot index matches the scan order."
+    },
+    {
+      "name": "BACKUP_FILE_DATA_SLOT",
+      "value": "backup_slot_data_",
+      "description": "Per-file data channel prefix. Full channel name: BACKUP_FILE_DATA_SLOT + str(slot_index). Android streams exactly size raw bytes after the metadata channel closes. PC opens this channel with a file-size-proportional timeout."
     },
     {
       "name": "BACKUP_FILE_RESULT",

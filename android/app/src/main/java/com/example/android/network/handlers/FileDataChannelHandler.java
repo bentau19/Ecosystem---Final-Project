@@ -57,7 +57,7 @@ public class FileDataChannelHandler implements ChannelHandler {
             return;
         }
 
-        String fileName = request.getFileName();
+        String fileName = request.fileName();
         Log.d(TAG, "Starting file receive for: " + fileName);
 
         // Blocks until all bytes are received and saved to Downloads.

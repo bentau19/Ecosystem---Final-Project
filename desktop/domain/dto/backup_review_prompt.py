@@ -12,7 +12,7 @@ class BackupReviewPromptDTO:
     asked whether to keep or discard the file.
 
     Attributes:
-        channel: TauSync slot channel for this file (e.g. ``"backup_slot_0"``).
+        channel: TauSync meta-slot channel for this file (e.g. ``"backup_slot_meta_0"``).
             Used as the correlation key passed back to
             :meth:`~viewmodels.backup.BackupViewModel.resolve_review`.
         file_name: Display name of the file under review.

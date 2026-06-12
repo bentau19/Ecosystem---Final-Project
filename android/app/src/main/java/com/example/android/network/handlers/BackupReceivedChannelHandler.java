@@ -51,7 +51,9 @@ public class BackupReceivedChannelHandler implements ChannelHandler {
 
     private static final String TAG = "BackupReceivedHandler";
 
-    /** Prefix of all per-file result channels; suffix is the slot index. */
+    /**
+     * Prefix of all per-file result channels; suffix is the slot index.
+     */
     private static final String CHANNEL_PREFIX = BackupChannels.BACKUP_FILE_RESULT.getValue();
 
     private final TransportManager transportManager;
@@ -176,13 +178,13 @@ public class BackupReceivedChannelHandler implements ChannelHandler {
         // ── Delete-after-backup (best-effort, only on explicit PC success) ────
         // A "fail" result, a read error, or aborted state must never delete the source.
         if (ok && !aborted.get()
-                && options != null && options.isDeleteFilesOnBackup()
+                && options != null && options.deleteFilesOnBackup()
                 && slotIndex < files.size()) {
             BackupFileEntry entry = files.get(slotIndex);
             boolean deleted = backupDataSource.deleteSourceFile(context, entry);
             Log.d(TAG, "Slot " + slotIndex + ": deleteFilesOnBackup — "
                     + (deleted ? "deleted " : "failed to delete ")
-                    + entry.getDisplayPath());
+                    + entry.displayPath());
             if (deleted) {
                 backupDataSource.deleteEmptyParentFolders(entry);
             }

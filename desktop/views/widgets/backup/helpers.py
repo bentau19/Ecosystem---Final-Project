@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRectF, QSize
+from PySide6.QtCore import Qt, QObject, QRectF, QRunnable, QSize, Signal
 from PySide6.QtGui import QImageReader, QPainter, QPainterPath, QPixmap
 
 # Re-export the pure helpers so existing imports of the form
@@ -48,9 +48,13 @@ def make_rounded_pixmap(pixmap: QPixmap, radius: int) -> QPixmap:
 
 
 def load_thumb(path: str, size: int) -> QPixmap | None:
-    """Load an image at *size* × *size* resolution with centre-crop.
+    """Load an image at *size* × *size* resolution with fit-letterbox.
 
-    Uses :class:`QImageReader` scaled-size hint for memory efficiency.
+    Scales the image to fit entirely within a *size* × *size* square
+    (preserving aspect ratio), then centres it on a transparent canvas of
+    that size.  No content is ever cropped; transparent padding shows through
+    as the card background colour.  Uses :class:`QImageReader` scaled-size
+    hint for memory efficiency.
 
     Args:
         path: Filesystem path to the image file.
@@ -65,22 +69,62 @@ def load_thumb(path: str, size: int) -> QPixmap | None:
     original = reader.size()
     if not original.isValid():
         return None
+
+    # Scale to FIT within (size*2 × size*2) — aspect ratio preserved, no crop.
+    # The 2× oversampling keeps quality high; Qt downsamples efficiently on decode.
     hint = QSize(size * 2, size * 2)
     reader.setScaledSize(
-        original.scaled(hint, Qt.AspectRatioMode.KeepAspectRatioByExpanding)
+        original.scaled(hint, Qt.AspectRatioMode.KeepAspectRatio)
     )
     image = reader.read()
     if image.isNull():
         return None
+
     pixmap = QPixmap.fromImage(image)
-    w, h = pixmap.width(), pixmap.height()
-    if w > size or h > size:
-        x = max(0, (w - size) // 2)
-        y = max(0, (h - size) // 2)
-        pixmap = pixmap.copy(x, y, min(w, size), min(h, size))
+    # Final fit-scale to the exact target size (corrects any decode rounding).
     pixmap = pixmap.scaled(
         size, size,
         Qt.AspectRatioMode.KeepAspectRatio,
         Qt.TransformationMode.SmoothTransformation,
     )
-    return make_rounded_pixmap(pixmap, radius=8)
+
+    # Centre the (possibly non-square) scaled image on a size×size transparent
+    # canvas so downstream drawPixmap(square_rect, thumb) never distorts it.
+    canvas = QPixmap(size, size)
+    canvas.fill(Qt.GlobalColor.transparent)
+    p = QPainter(canvas)
+    p.drawPixmap((size - pixmap.width()) // 2, (size - pixmap.height()) // 2, pixmap)
+    p.end()
+
+    return make_rounded_pixmap(canvas, radius=8)
+
+
+# ── Async thumbnail infrastructure ─────────────────────────────────────────────
+# Shared by BackupProgressModel and BackupReviewModel so the implementation
+# lives in exactly one place.
+
+class ThumbResult(QObject):
+    """Carrier object that lives on the main thread and receives thumb signals."""
+    ready: Signal = Signal(str, object)  # (key, QPixmap | None)
+
+
+class ThumbLoader(QRunnable):
+    """Loads one thumbnail on a QThreadPool worker, then signals the result.
+
+    ``key`` is the model lookup key emitted back via ``ThumbResult.ready``; it
+    may differ from ``abs_path`` (e.g. in the progress window the key is a
+    relative filename while the path is absolute).  When both are the same,
+    just pass the same value for both arguments.
+    """
+
+    def __init__(self, key: str, abs_path: str, size: int, result: ThumbResult) -> None:
+        super().__init__()
+        self._key = key
+        self._abs_path = abs_path
+        self._size = size
+        self._result = result
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        pixmap = load_thumb(self._abs_path, self._size)
+        self._result.ready.emit(self._key, pixmap)

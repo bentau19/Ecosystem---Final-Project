@@ -11,7 +11,8 @@ class BackupStatus(StrEnum):
     selectors (e.g. ``[status="active"]``) without any extra conversion.
     """
 
-    QUEUED = "queued"
-    ACTIVE = "active"
-    DONE   = "done"
-    FAILED = "failed"
+    QUEUED   = "queued"
+    ACTIVE   = "active"
+    DONE     = "done"
+    FAILED   = "failed"
+    SKIPPED  = "skipped"   # transferred OK, not kept locally (filtered or user-removed)

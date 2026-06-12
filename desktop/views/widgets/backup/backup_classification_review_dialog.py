@@ -25,10 +25,6 @@ _DIALOG_WIDTH:  Final[int] = 420
 _THUMB_SIZE:    Final[int] = 96
 _BUTTON_HEIGHT: Final[int] = 38
 
-# Custom QDialog result code for "keep this file AND all future review prompts".
-# Accepted=1 (keep one), Rejected=0 (remove), KEEP_ALL_CODE=2 (keep all).
-_KEEP_ALL_CODE: Final[int] = 2
-
 
 class BackupClassificationReviewDialog(QDialog):
     """Modal dialog asking the user to keep or remove a flagged file.
@@ -36,13 +32,11 @@ class BackupClassificationReviewDialog(QDialog):
     Shown when the ML image classifier's argmax favours "remove" but isn't
     confident enough to act automatically
     (:attr:`~classifer.ScreeningResult.NEEDS_REVIEW`). Presents a thumbnail
-    preview of the file and asks the user to **Keep**, **Keep All Files**, or
-    **Remove** it.
+    preview of the file and asks the user to **Keep** or **Remove** it.
 
-    Resolves as ``Accepted`` if the user clicks **Keep**, ``KEEP_ALL_CODE``
-    if the user clicks **Keep All Files** (keep this file *and* suppress all
-    future review dialogs in the same session), or ``Rejected`` if the user
-    clicks **Remove** or closes the dialog.
+    Resolves as ``Accepted`` if the user clicks **Keep**, or ``Rejected`` if
+    the user clicks **Remove** or closes the dialog.  Any non-rejected result
+    should be treated as *keep* by the caller.
 
     Usage::
 
@@ -52,30 +46,19 @@ class BackupClassificationReviewDialog(QDialog):
         )
 
         prompt = BackupReviewPromptDTO(
-            channel="backup_slot_0",
+            channel="backup_slot_meta_0",
             file_name="photo.jpg",
             cache_path="C:/Temp/SyncDose_backup_xyz/abc123.tmp",
             confidence=0.78,
         )
         dlg = BackupClassificationReviewDialog(prompt, parent=self)
-        result = dlg.exec()
-        keep_all = result == BackupClassificationReviewDialog.KEEP_ALL_CODE
-        keep     = result != QDialog.DialogCode.Rejected
+        keep = dlg.exec() != QDialog.DialogCode.Rejected
         backup_vm.resolve_review(prompt.channel, keep)
-        if keep_all:
-            # suppress all future review dialogs for this session
-            ...
 
     Args:
         prompt: Describes the file pending review.
         parent: Optional Qt parent widget.
     """
-
-    #: Custom result code returned by :meth:`exec` when the user clicks
-    #: **Keep All Files**.  Callers should treat any result that is not
-    #: ``Rejected`` as *keep* and additionally set a session-wide flag when
-    #: this specific code is returned.
-    KEEP_ALL_CODE: Final[int] = _KEEP_ALL_CODE
 
     def __init__(
             self,
@@ -100,11 +83,10 @@ class BackupClassificationReviewDialog(QDialog):
         self._setup_layout()
 
     def _create_widgets(self) -> None:
-        self._header:        QWidget     = self._create_header()
-        self._preview_row:   QWidget     = self._create_preview_row()
-        self._keep_btn:      QPushButton = self._create_keep_button()
-        self._keep_all_btn:  QPushButton = self._create_keep_all_button()
-        self._remove_btn:    QPushButton = self._create_remove_button()
+        self._header:      QWidget     = self._create_header()
+        self._preview_row: QWidget     = self._create_preview_row()
+        self._keep_btn:    QPushButton = self._create_keep_button()
+        self._remove_btn:  QPushButton = self._create_remove_button()
 
     def _create_header(self) -> QWidget:
         # Build the icon + title + confidence subtitle header bar.
@@ -191,13 +173,6 @@ class BackupClassificationReviewDialog(QDialog):
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         return btn
 
-    def _create_keep_all_button(self) -> QPushButton:
-        btn = QPushButton("⟳  Keep All Files")
-        btn.setObjectName("KeepAllButton")
-        btn.setFixedHeight(_BUTTON_HEIGHT)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        return btn
-
     def _create_remove_button(self) -> QPushButton:
         btn = QPushButton("✗  Remove")
         btn.setObjectName("RemoveButton")
@@ -230,7 +205,6 @@ class BackupClassificationReviewDialog(QDialog):
         footer.setSpacing(Spacing.SM)
         footer.addStretch(1)
         footer.addWidget(self._remove_btn)
-        footer.addWidget(self._keep_all_btn)
         footer.addWidget(self._keep_btn)
         return footer
 
@@ -251,7 +225,6 @@ class BackupClassificationReviewDialog(QDialog):
 
     def _connect_signals(self) -> None:
         self._keep_btn.clicked.connect(self.accept)
-        self._keep_all_btn.clicked.connect(lambda: self.done(_KEEP_ALL_CODE))
         self._remove_btn.clicked.connect(self.reject)
         theme_manager.theme_changed.connect(self._apply_style)
 
@@ -263,18 +236,13 @@ if __name__ == "__main__":
 
     app = QApplication(sys.argv)
     sample = BackupReviewPromptDTO(
-        channel="backup_slot_0",
+        channel="backup_slot_meta_0",
         file_name="suspicious_photo.jpg",
         cache_path=r"C:\does\not\exist.tmp",
         confidence=0.78,
     )
     dlg = BackupClassificationReviewDialog(sample)
     result = dlg.exec()
-    if result == BackupClassificationReviewDialog.KEEP_ALL_CODE:
-        label = "Keep All"
-    elif result == QDialog.DialogCode.Accepted:
-        label = "Keep"
-    else:
-        label = "Remove"
+    label = "Keep" if result != QDialog.DialogCode.Rejected else "Remove"
     print(label)
     sys.exit(0)

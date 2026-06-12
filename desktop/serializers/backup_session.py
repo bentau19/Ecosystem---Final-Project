@@ -16,9 +16,10 @@ class BackupSessionSerializer(ISerializer[BackupSessionPromptDTO, str]):
     Wire format (Android → PC)::
 
         {
-            "file_count":  <int>,
-            "files_bytes": <int>,
-            "classify":    <bool>   # optional — defaults to True when absent
+            "file_count":    <int>,
+            "files_bytes":   <int>,
+            "classify":      <bool>,   # optional — defaults to True when absent
+            "storage_saver": <bool>    # optional — defaults to False when absent
         }
 
     Field mapping:
@@ -26,7 +27,8 @@ class BackupSessionSerializer(ISerializer[BackupSessionPromptDTO, str]):
     DTO field            ↔  JSON key
     ``file_count``       ↔  ``"file_count"``
     ``total_size_bytes`` ↔  ``"files_bytes"``
-    ``classify``         ↔  ``"classify"``   (optional on inbound; defaults to ``True``)
+    ``classify``         ↔  ``"classify"``        (optional; defaults to ``True``)
+    ``storage_saver``    ↔  ``"storage_saver"``   (optional; defaults to ``False``)
     """
 
     @staticmethod
@@ -45,9 +47,10 @@ class BackupSessionSerializer(ISerializer[BackupSessionPromptDTO, str]):
             return None
 
         payload = {
-            "file_count":  entity.file_count,
-            "files_bytes": entity.total_size_bytes,
-            "classify":    entity.classify,
+            "file_count":    entity.file_count,
+            "files_bytes":   entity.total_size_bytes,
+            "classify":      entity.classify,
+            "storage_saver": entity.storage_saver,
         }
         return json.dumps(payload)
 
@@ -90,4 +93,5 @@ class BackupSessionSerializer(ISerializer[BackupSessionPromptDTO, str]):
             file_count=int(file_count),
             total_size_bytes=int(files_bytes),
             classify=bool(parsed.get("classify", True)),
+            storage_saver=bool(parsed.get("storage_saver", False)),
         )

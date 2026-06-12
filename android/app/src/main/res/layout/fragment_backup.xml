@@ -265,6 +265,129 @@
                     android:textSize="14sp" />
             </LinearLayout>
 
+            <!-- ── Storage Saver section ──────────────────────────────────────── -->
+
+            <!-- Section label: storage saver -->
+            <TextView
+                android:id="@+id/tvSectionStorageSaver"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="24dp"
+                android:layout_marginTop="28dp"
+                android:letterSpacing="0.08"
+                android:text="@string/backup_section_storage_saver"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/optionsCard" />
+
+            <!--
+                Storage Saver card: icon | text block (weight=1) | state label | SwitchCompat.
+
+                Root is a horizontal LinearLayout so the state label and switch slot in
+                naturally — no gravity stacking or hard-coded marginEnd math required.
+
+                State feedback uses two reinforcing signals (updated in BackupFragment):
+                  - tvStorageSaverState: "OFF" (text_muted) ↔ "ON" (accent_cyan)
+                  - card background: backup_card_default ↔ backup_card_selected (2dp cyan stroke)
+            -->
+            <LinearLayout
+                android:id="@+id/cardStorageSaver"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="24dp"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/backup_card_default"
+                android:gravity="center_vertical"
+                android:minHeight="72dp"
+                android:orientation="horizontal"
+                android:paddingTop="14dp"
+                android:paddingBottom="14dp"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/tvSectionStorageSaver">
+
+                <!-- Compress icon — decorative; excluded from accessibility focus -->
+                <ImageView
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_marginStart="20dp"
+                    android:contentDescription="@null"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_compress"
+                    app:tint="@color/icon_blue" />
+
+                <!--
+                    Title + subtitle — weight=1 absorbs all remaining space so the
+                    state label and switch are pushed to the right edge.
+                -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="20dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/backup_opt_storage_saver"
+                        android:textColor="@color/text_primary"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/backup_opt_storage_saver_sub"
+                        android:textColor="@color/text_muted"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <!--
+                    State label: "OFF" / "ON".
+                    - Starts as "OFF" in text_muted; BackupFragment flips to "ON" in accent_cyan.
+                    - minWidth="32dp" keeps alignment stable when text changes length.
+                    - gravity="center" keeps the 2-char word visually centred in its slot.
+                    - Not focusable independently — TalkBack reads it as part of the switch row.
+                -->
+                <TextView
+                    android:id="@+id/tvStorageSaverState"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:focusable="false"
+                    android:gravity="center"
+                    android:importantForAccessibility="no"
+                    android:minWidth="32dp"
+                    android:text="@string/backup_opt_storage_saver_off"
+                    android:textColor="@color/text_muted"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <!--
+                    SwitchCompat:
+                    - No explicit width/height — wrap_content; LinearLayout measures it correctly.
+                    - thumbTint accent_cyan / trackTint stroke_card for brand consistency.
+                    - contentDescription is the accessible label; TalkBack reads switch state
+                      automatically ("on"/"off") after the description.
+                -->
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switchStorageSaver"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="16dp"
+                    android:checked="false"
+                    android:contentDescription="@string/backup_opt_storage_saver_desc"
+                    android:minWidth="48dp"
+                    app:thumbTint="@color/accent_cyan"
+                    app:trackTint="@color/stroke_card" />
+
+            </LinearLayout>
+
         </androidx.constraintlayout.widget.ConstraintLayout>
     </androidx.core.widget.NestedScrollView>
 

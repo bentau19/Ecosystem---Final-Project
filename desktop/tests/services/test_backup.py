@@ -2,10 +2,7 @@
 
 All tests mock:
   * The TauSync transport (no real network)
-  * FileDetection functions (is_corrupt, check_for_duplicates, is_wanted)
-
-The sys.path insertion for FileDetection is not needed here because the
-detection functions are patched at the service module level.
+  * Classifier.classify (replaces the three-stage screening pipeline)
 
 Wire format reminder
 --------------------
@@ -13,9 +10,13 @@ Manifest (Android → PC on ``backup_manifest``)::
 
     {"file_count": N, "files_bytes": S, "classify": true|false}
 
-Per-slot stream (``backup_slot_{i}``)::
+Per-file metadata (Android → PC on ``backup_slot_meta_{i}``)::
 
-    {"name": "photo.jpg", "size": 12345}\\n<raw file bytes>
+    {"name": "photo.jpg", "size": 12345}   (compact JSON — no newline delimiter needed)
+
+Per-file bytes (Android → PC on ``backup_slot_data_{i}``)::
+
+    [raw file bytes — exactly size bytes]
 
 Per-file transfer result (PC → Android on ``backup_file_result_{i}``, sent
 for every slot regardless of the manifest's ``classify`` flag)::
@@ -24,7 +25,16 @@ for every slot regardless of the manifest's ``classify`` flag)::
 
 "fail" is reserved for transport/IO problems; PC-local screening rejections
 (corrupt/duplicate/filtered) are reported as "succ" since the transfer
-itself completed.
+itself completed.  The corresponding signal is ``file_skipped``, not
+``file_failed`` — the latter is only emitted for transport/IO errors.
+
+Entry point change
+------------------
+``BackupService.start()`` now only sets the ``_is_running`` flag.  The
+manifest listener is driven by ``receive_manifest()`` (called by
+``PhoneRequestService`` when it sees ``backup_manifest`` in
+``get_peer_waiting_words()``).  All tests therefore call
+``svc.receive_manifest()`` right after ``svc.start()``.
 """
 
 from __future__ import annotations
@@ -32,14 +42,15 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pytestqt.qtbot import QtBot
 
-from classifer import ScreeningOutcome, ClassificationVerdict
-from domain.dto.backup_review_prompt import BackupReviewPromptDTO
+from classifer import Classifier, ClassificationVerdict
 from domain.dto.backup_session_prompt import BackupSessionPromptDTO
+from domain.enums.backup_channels import BackupChannels
+from image_classifer import ClassificationResult
 from services.backup import BackupService
 
 
@@ -67,21 +78,6 @@ def _manifest_json(
     })
 
 
-def _slot_bytes(name: str, size: int, content: bytes) -> bytes:
-    """Return the exact bytes Android writes on ``backup_slot_{i}``.
-
-    The stream begins with a newline-terminated JSON metadata line followed
-    immediately by the raw file bytes — both on the same channel.
-
-    Args:
-        name:    File display name (e.g. ``"photo.jpg"``).
-        size:    File size in bytes (must equal ``len(content)``).
-        content: Raw file bytes to append after the header.
-    """
-    header = json.dumps({"name": name, "size": size}).encode() + b"\n"
-    return header + content
-
-
 # ---------------------------------------------------------------------------
 # Mock helpers
 # ---------------------------------------------------------------------------
@@ -95,31 +91,61 @@ def _make_stream_cm(stream_mock: MagicMock) -> MagicMock:
     return cm
 
 
-def _make_slot_stream(name: str, size: int, content: bytes) -> MagicMock:
-    """Return a stream mock whose read_line() + read_to_file() behaves correctly.
+def _make_meta_stream(name: str, size: int, mtime: int = 0) -> MagicMock:
+    """Return a stream mock for ``backup_slot_meta_N``.
 
-    ``read_line()`` returns the JSON header line (including ``\\n``).
-    ``read_to_file(path, n)`` writes *content* to *path* (ignores *n*).
+    ``read_line()`` returns a newline-terminated JSON header that
+    :meth:`~services.backup.BackupService._get_file_metadata` can parse.
+
+    Args:
+        name:  File display name (e.g. ``"photo.jpg"``).
+        size:  File size in bytes.
+        mtime: Last-modified time in milliseconds since epoch.  Defaults to
+               ``0`` (epoch), which maps to ``photos/1970/01-January/`` for
+               all-media backups.
     """
     stream = MagicMock()
-    header_line = json.dumps({"name": name, "size": size}).encode() + b"\n"
+    header_line = json.dumps({"name": name, "size": size, "mtime": mtime}).encode() + b"\n"
     stream.read_line.return_value = header_line
-
-    def _fake_read_to_file(path: str, length: int) -> int:
-        Path(path).write_bytes(content)
-        return len(content)
-
-    stream.read_to_file.side_effect = _fake_read_to_file
     return stream
 
 
-def _make_tau(channel_map: dict[str, MagicMock]) -> MagicMock:
+def _make_data_stream(content: bytes) -> MagicMock:
+    """Return a stream mock for ``backup_slot_data_N``.
+
+    ``read(n)`` returns successive chunks of *content* then returns ``b""``
+    (EOF), matching the chunk-loop in
+    :meth:`~services.backup.BackupService._download_file_to_cache`.
+
+    Args:
+        content: Raw file bytes to deliver.
+    """
+    stream = MagicMock()
+    remaining = bytearray(content)
+
+    def _fake_read(n: int) -> bytes:
+        chunk = bytes(remaining[:n])
+        del remaining[:n]
+        return chunk
+
+    stream.read.side_effect = _fake_read
+    return stream
+
+
+def _make_tau(channel_map: dict[str, MagicMock], file_count: int = 1) -> MagicMock:
     """Return a mock TauSync that dispatches ``connect()`` by channel name/prefix.
+
+    Also configures ``get_peer_waiting_words()`` to return the concrete
+    ``backup_slot_meta_{i}`` channel names so that ``_get_files`` can
+    discover and spawn all *file_count* slot threads.
 
     Args:
         channel_map: Maps channel name or prefix → stream mock.
-            Matched longest-key-first so prefixes (e.g. ``"backup_slot_"``)
+            Matched longest-key-first so prefixes (e.g. ``"backup_slot_meta_"``)
             work correctly.
+        file_count: Number of files in the session.  Controls how many
+            ``backup_slot_meta_{i}`` names are returned by
+            ``get_peer_waiting_words``.
     """
     tau = MagicMock()
     sorted_keys = sorted(channel_map.keys(), key=len, reverse=True)
@@ -131,6 +157,12 @@ def _make_tau(channel_map: dict[str, MagicMock]) -> MagicMock:
         return _make_stream_cm(MagicMock())
 
     tau.connect.side_effect = _connect
+
+    # Return concrete meta-slot channel names so _get_files discovers all slots.
+    # The service de-duplicates via spawned_channels, so returning all at once is safe.
+    tau.get_peer_waiting_words.return_value = [
+        f"{BackupChannels.BACKUP_FILE_META_SLOT}{i}" for i in range(file_count)
+    ]
     return tau
 
 
@@ -141,6 +173,9 @@ def _make_one_shot_manifest(data: bytes) -> MagicMock:
     sends a new manifest.  Without this helper the instant-returning mock lets
     the listener loop spin hundreds of times, spawning extra coordinators and
     corrupting test assertions.
+
+    Args:
+        data: Raw manifest bytes to deliver on the first ``read_all()`` call.
     """
     _delivered = threading.Event()
     stream = MagicMock()
@@ -163,16 +198,13 @@ def _make_one_shot_manifest(data: bytes) -> MagicMock:
 
 @pytest.fixture
 def make_service(tmp_path):
-    """Factory fixture: creates a BackupService with a mocked detection DB path."""
+    """Factory fixture: creates a BackupService with a mocked connectivity."""
     services: list[BackupService] = []
 
     def factory(tau: MagicMock) -> BackupService:
         mock_conn = MagicMock()
         mock_conn.tau = tau
         svc = BackupService(connectivity=mock_conn)
-        svc._detection_db = tmp_path / "test_detection.db"
-        from services.backup import _ensure_detection_db
-        _ensure_detection_db(svc._detection_db)
         services.append(svc)
         return svc
 
@@ -194,13 +226,16 @@ def test_manifest_received_emits_prompt_dto(
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(file_count=2, files_bytes=1536, classify=True).encode()
     )
-    tau = _make_tau({"backup_manifest": manifest_stream})
+    tau = _make_tau({"backup_manifest": manifest_stream}, file_count=2)
 
     svc = make_service(tau)
     received: list[BackupSessionPromptDTO] = []
-    svc.manifest_received.connect(received.append)
+    svc.manifest_received.connect(
+        lambda n, s, c, ss: received.append(BackupSessionPromptDTO(n, s, c, ss))
+    )
 
     svc.start()
+    svc.receive_manifest()
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
     assert received[0].file_count == 2
@@ -215,13 +250,16 @@ def test_manifest_received_classify_false(
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(file_count=1, files_bytes=512, classify=False).encode()
     )
-    tau = _make_tau({"backup_manifest": manifest_stream})
+    tau = _make_tau({"backup_manifest": manifest_stream}, file_count=1)
 
     svc = make_service(tau)
     received: list[BackupSessionPromptDTO] = []
-    svc.manifest_received.connect(received.append)
+    svc.manifest_received.connect(
+        lambda n, s, c, ss: received.append(BackupSessionPromptDTO(n, s, c, ss))
+    )
 
     svc.start()
+    svc.receive_manifest()
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
     assert received[0].classify is False
@@ -238,9 +276,10 @@ def test_manifest_received_skipped_on_bad_json(
     svc = make_service(tau)
 
     received: list = []
-    svc.manifest_received.connect(received.append)
+    svc.manifest_received.connect(lambda n, s, c, ss: received.append((n, s, c, ss)))
 
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(300)
     assert received == []
 
@@ -258,13 +297,14 @@ def test_manifest_received_large_total_bytes_no_overflow(
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(file_count=3, files_bytes=large_size, classify=False).encode()
     )
-    tau = _make_tau({"backup_manifest": manifest_stream})
+    tau = _make_tau({"backup_manifest": manifest_stream}, file_count=3)
 
     svc = make_service(tau)
     received: list[tuple[int, int, bool]] = []
-    svc.manifest_received.connect(lambda n, s, c: received.append((n, s, c)))
+    svc.manifest_received.connect(lambda n, s, c, ss: received.append((n, s, c)))
 
     svc.start()
+    svc.receive_manifest()
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
     file_count, total_bytes, classify = received[0]
@@ -284,23 +324,25 @@ def test_proceed_sends_ready_ack(qtbot: QtBot, make_service, tmp_path) -> None:
         _manifest_json(1, 4).encode()
     )
     ready_stream = MagicMock()
-    slot_stream = _make_slot_stream("f.jpg", 4, b"DATA")
+    meta_stream = _make_meta_stream("f.jpg", 4)
+    data_stream = _make_data_stream(b"DATA")
 
     tau = _make_tau({
-        "backup_manifest": manifest_stream,
-        "backup_ready_pc": ready_stream,
-        "backup_slot_":    slot_stream,
-    })
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   ready_stream,
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
 
     svc = make_service(tau)
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
-    with patch("services.backup.is_corrupt", return_value=False), \
-         patch("services.backup.check_for_duplicates", return_value=False), \
-         patch("services.backup.is_wanted", return_value=True):
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
         svc.proceed(tmp_path / "dest")
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
@@ -310,22 +352,29 @@ def test_proceed_sends_ready_ack(qtbot: QtBot, make_service, tmp_path) -> None:
 def test_cancel_session_prevents_ready_ack(
         qtbot: QtBot, make_service,
 ) -> None:
-    """``cancel_session()`` before ``proceed()`` → no ``backup_ready_pc`` write."""
+    """``cancel_session()`` before ``proceed()`` sends ``"reject"`` (not ``"ready"``) on ``backup_ready_pc``.
+
+    The service must unblock Android immediately so it doesn't wait 120 s for a
+    ready ack that will never come.  The rejection token tells Android to abort
+    the current session cleanly rather than treating the timeout as a network error.
+    """
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 4).encode()
     )
     ready_stream = MagicMock()
 
     tau = _make_tau({
-        "backup_manifest": manifest_stream,
-        "backup_ready_pc": ready_stream,
-        "backup_slot_":    MagicMock(),
-    })
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   ready_stream,
+        "backup_slot_meta_": MagicMock(),
+        "backup_slot_data_": MagicMock(),
+    }, file_count=1)
 
     svc = make_service(tau)
     received: list = []
-    svc.manifest_received.connect(received.append)
+    svc.manifest_received.connect(lambda n, s, c, ss: received.append((n, s, c, ss)))
     svc.start()
+    svc.receive_manifest()
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
     qtbot.wait(100)
@@ -333,7 +382,13 @@ def test_cancel_session_prevents_ready_ack(
     svc.cancel_session()
     qtbot.wait(300)
 
-    ready_stream.write_string.assert_not_called()
+    # "reject" must be sent so Android's waitForPcReady() unblocks immediately.
+    ready_stream.write_string.assert_called_once_with("reject")
+    # "ready" must never be written — the session was cancelled before proceed().
+    assert all(
+        call.args != ("ready",)
+        for call in ready_stream.write_string.call_args_list
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -344,29 +399,31 @@ def test_cancel_session_prevents_ready_ack(
 def test_file_registered_emitted_before_progress(
         qtbot: QtBot, make_service, tmp_path,
 ) -> None:
-    """``file_registered`` fires with correct rel_path and size before progress ticks."""
+    """``file_registered`` fires with correct name and size before progress ticks."""
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 8).encode()
     )
-    slot_stream = _make_slot_stream("photo.jpg", 8, b"FAKE_IMG")
+    meta_stream = _make_meta_stream("photo.jpg", 8)
+    data_stream = _make_data_stream(b"FAKE_IMG")
 
     tau = _make_tau({
-        "backup_manifest": manifest_stream,
-        "backup_ready_pc": MagicMock(),
-        "backup_slot_":    slot_stream,
-    })
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
 
     svc = make_service(tau)
     registered: list[tuple[str, int]] = []
     done: list = []
-    svc.file_registered.connect(lambda p, s: registered.append((p, s)))
+    svc.file_registered.connect(lambda p, s, orig_s: registered.append((p, s)))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
-    with patch("services.backup.is_corrupt", return_value=False), \
-         patch("services.backup.check_for_duplicates", return_value=False), \
-         patch("services.backup.is_wanted", return_value=True):
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
         svc.proceed(tmp_path / "dest")
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
@@ -381,32 +438,36 @@ def test_clean_file_emits_file_complete_and_is_saved(
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 8).encode()
     )
-    slot_stream = _make_slot_stream("photo.jpg", 8, b"FAKE_IMG")
+    meta_stream = _make_meta_stream("photo.jpg", 8)
+    data_stream = _make_data_stream(b"FAKE_IMG")
 
     tau = _make_tau({
-        "backup_manifest": manifest_stream,
-        "backup_ready_pc": MagicMock(),
-        "backup_slot_":    slot_stream,
-    })
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
 
     svc = make_service(tau)
     dest_dir = tmp_path / "backup"
 
     complete_files: list[str] = []
     done: list = []
-    svc.file_complete.connect(complete_files.append)
+    svc.file_complete.connect(lambda name, path: complete_files.append(name))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
-    with patch("services.backup.is_corrupt", return_value=False), \
-         patch("services.backup.check_for_duplicates", return_value=False), \
-         patch("services.backup.is_wanted", return_value=True):
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
         svc.proceed(dest_dir)
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
     assert complete_files == ["photo.jpg"]
-    assert (dest_dir / "photo.jpg").exists()
+    # All-media backup (no rel_path) → organized into photos/{year}/{MM-MonthName}/
+    # mtime defaults to 0 (epoch 1970-01-01) in the test meta stream.
+    assert (dest_dir / "photos" / "1970" / "01-January" / "photo.jpg").exists()
 
 
 def test_backup_complete_fires_after_all_files_terminal(
@@ -417,33 +478,41 @@ def test_backup_complete_fires_after_all_files_terminal(
         _manifest_json(2, 8).encode()
     )
 
-    slot_streams: dict[str, MagicMock] = {}
+    meta_streams: dict[str, MagicMock] = {}
+    data_streams: dict[str, MagicMock] = {}
 
     def _connect(word: str, **_kw) -> MagicMock:
         if word == "backup_manifest":
             return _make_stream_cm(manifest_stream)
         if word == "backup_ready_pc":
             return _make_stream_cm(MagicMock())
-        if word.startswith("backup_slot_"):
-            if word not in slot_streams:
-                idx = word[len("backup_slot_"):]
-                name = f"file{idx}.jpg"
-                slot_streams[word] = _make_slot_stream(name, 4, b"DATA")
-            return _make_stream_cm(slot_streams[word])
+        if word.startswith(BackupChannels.BACKUP_FILE_META_SLOT):
+            if word not in meta_streams:
+                idx = word[len(BackupChannels.BACKUP_FILE_META_SLOT):]
+                meta_streams[word] = _make_meta_stream(f"file{idx}.jpg", 4)
+            return _make_stream_cm(meta_streams[word])
+        if word.startswith(BackupChannels.BACKUP_FILE_DATA_SLOT):
+            if word not in data_streams:
+                data_streams[word] = _make_data_stream(b"DATA")
+            return _make_stream_cm(data_streams[word])
         return _make_stream_cm(MagicMock())
 
     tau = MagicMock()
     tau.connect.side_effect = _connect
+    tau.get_peer_waiting_words.return_value = [
+        f"{BackupChannels.BACKUP_FILE_META_SLOT}0",
+        f"{BackupChannels.BACKUP_FILE_META_SLOT}1",
+    ]
 
     svc = make_service(tau)
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
-    with patch("services.backup.is_corrupt", return_value=False), \
-         patch("services.backup.check_for_duplicates", return_value=False), \
-         patch("services.backup.is_wanted", return_value=True):
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
         svc.proceed(tmp_path / "dest")
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
@@ -451,106 +520,124 @@ def test_backup_complete_fires_after_all_files_terminal(
 
 
 # ---------------------------------------------------------------------------
-# Screening failures — file_failed
+# Screening failures — file_skipped (not file_failed)
+#
+# PC-local screening rejections (duplicate / filtered / confidently unwanted)
+# are reported to Android as SUCCESS — the transfer completed; the file just
+# wasn't kept locally.  The local signal is ``file_skipped``, not
+# ``file_failed``.  The latter is reserved exclusively for transport/IO errors.
 # ---------------------------------------------------------------------------
 
 
-def test_corrupt_file_emits_file_failed(
+def test_corrupt_file_emits_file_skipped(
         qtbot: QtBot, make_service, tmp_path,
 ) -> None:
-    """A structurally corrupt cached file emits ``file_failed`` with 'corrupt' reason."""
+    """A file rejected by the classifier emits ``file_skipped`` (not ``file_failed``)."""
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 4).encode()
     )
-    slot_stream = _make_slot_stream("bad.jpg", 4, b"BAD!")
+    meta_stream = _make_meta_stream("bad.jpg", 4)
+    data_stream = _make_data_stream(b"BAD!")
 
     tau = _make_tau({
-        "backup_manifest": manifest_stream,
-        "backup_ready_pc": MagicMock(),
-        "backup_slot_":    slot_stream,
-    })
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
 
     svc = make_service(tau)
-    failed: list[tuple[str, str]] = []
+    skipped: list[str] = []
+    failed: list = []
     done: list = []
+    svc.file_skipped.connect(skipped.append)
     svc.file_failed.connect(lambda p, r: failed.append((p, r)))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
-    with patch("services.backup.is_corrupt", return_value=True):
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.REJECTED, 0.0)):
         svc.proceed(tmp_path / "dest")
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
-    assert len(failed) == 1
-    assert failed[0][0] == "bad.jpg"
-    assert "corrupt" in failed[0][1].lower()
+    assert skipped == ["bad.jpg"]
+    assert failed == []
 
 
-def test_duplicate_file_emits_file_failed(
+def test_duplicate_file_emits_file_skipped(
         qtbot: QtBot, make_service, tmp_path,
 ) -> None:
-    """An exact-duplicate cached file emits ``file_failed`` with 'duplicate' reason."""
+    """An exact-duplicate cached file emits ``file_skipped`` (not ``file_failed``)."""
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 4).encode()
     )
-    slot_stream = _make_slot_stream("dup.jpg", 4, b"DUP!")
+    meta_stream = _make_meta_stream("dup.jpg", 4)
+    data_stream = _make_data_stream(b"DUP!")
 
     tau = _make_tau({
-        "backup_manifest": manifest_stream,
-        "backup_ready_pc": MagicMock(),
-        "backup_slot_":    slot_stream,
-    })
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
 
     svc = make_service(tau)
-    failed: list[tuple[str, str]] = []
+    skipped: list[str] = []
+    failed: list = []
     done: list = []
+    svc.file_skipped.connect(skipped.append)
     svc.file_failed.connect(lambda p, r: failed.append((p, r)))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
-    with patch("services.backup.is_corrupt", return_value=False), \
-         patch("services.backup.Classifier.classify",
-               return_value=ScreeningOutcome(ClassificationVerdict.REJECTED, 0.0)):
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.REJECTED, 0.0)):
         svc.proceed(tmp_path / "dest")
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
-    assert len(failed) == 1
-    assert "duplicate" in failed[0][1].lower()
+    assert skipped == ["dup.jpg"]
+    assert failed == []
 
 
-def test_unwanted_file_emits_file_failed(
+def test_unwanted_file_emits_file_skipped(
         qtbot: QtBot, make_service, tmp_path,
 ) -> None:
-    """A file rejected by the ML classifier emits ``file_failed`` with 'filtered' reason."""
+    """A file rejected by the ML classifier emits ``file_skipped`` (not ``file_failed``)."""
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 4).encode()
     )
-    slot_stream = _make_slot_stream("nsfw.jpg", 4, b"DATA")
+    meta_stream = _make_meta_stream("nsfw.jpg", 4)
+    data_stream = _make_data_stream(b"DATA")
 
     tau = _make_tau({
-        "backup_manifest": manifest_stream,
-        "backup_ready_pc": MagicMock(),
-        "backup_slot_":    slot_stream,
-    })
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
 
     svc = make_service(tau)
-    failed: list[tuple[str, str]] = []
+    skipped: list[str] = []
+    failed: list = []
     done: list = []
+    svc.file_skipped.connect(skipped.append)
     svc.file_failed.connect(lambda p, r: failed.append((p, r)))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
-    with patch("services.backup.is_corrupt", return_value=False), \
-         patch("services.backup.check_for_duplicates", return_value=False), \
-         patch("services.backup.is_wanted", return_value=False):
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.REJECTED, 0.0)):
         svc.proceed(tmp_path / "dest")
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
-    assert len(failed) == 1
-    assert "filtered" in failed[0][1].lower()
+    assert skipped == ["nsfw.jpg"]
+    assert failed == []
 
 
 # ---------------------------------------------------------------------------
@@ -558,23 +645,23 @@ def test_unwanted_file_emits_file_failed(
 # ---------------------------------------------------------------------------
 
 
-def test_transport_error_on_slot_emits_file_failed(
+def test_transport_error_on_metadata_slot_emits_file_failed(
         qtbot: QtBot, make_service, tmp_path,
 ) -> None:
-    """A transport exception during slot receive emits ``file_failed``."""
+    """A transport exception while reading the metadata channel emits ``file_failed``."""
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 4).encode()
     )
 
-    # Slot stream raises before read_line can return metadata
-    bad_slot = MagicMock()
-    bad_slot.read_line.side_effect = OSError("connection dropped")
+    # Meta stream raises before read_line can return the header
+    bad_meta = MagicMock()
+    bad_meta.read_line.side_effect = OSError("connection dropped")
 
     tau = _make_tau({
-        "backup_manifest": manifest_stream,
-        "backup_ready_pc": MagicMock(),
-        "backup_slot_":    bad_slot,
-    })
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": bad_meta,
+    }, file_count=1)
 
     svc = make_service(tau)
     failed: list[tuple[str, str]] = []
@@ -582,13 +669,13 @@ def test_transport_error_on_slot_emits_file_failed(
     svc.file_failed.connect(lambda p, r: failed.append((p, r)))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
     svc.proceed(tmp_path / "dest")
     qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
-    # Transport error before rel_path is known: file_failed may not fire
-    # (rel_path is empty string); backup_complete still fires.
+    # backup_complete still fires even when transport fails
     assert len(done) == 1
 
 
@@ -604,13 +691,15 @@ def test_file_progress_emitted_at_slot_start_and_end(
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 256).encode()
     )
-    slot_stream = _make_slot_stream("x.jpg", 256, b"D" * 256)
+    meta_stream = _make_meta_stream("x.jpg", 256)
+    data_stream = _make_data_stream(b"D" * 256)
 
     tau = _make_tau({
-        "backup_manifest": manifest_stream,
-        "backup_ready_pc": MagicMock(),
-        "backup_slot_":    slot_stream,
-    })
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
 
     svc = make_service(tau)
     progress: list[tuple[str, int, float]] = []
@@ -618,19 +707,19 @@ def test_file_progress_emitted_at_slot_start_and_end(
     svc.file_progress.connect(lambda p, b, s: progress.append((p, b, s)))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
-    with patch("services.backup.is_corrupt", return_value=False), \
-         patch("services.backup.check_for_duplicates", return_value=False), \
-         patch("services.backup.is_wanted", return_value=True):
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
         svc.proceed(tmp_path / "dest")
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
     paths_in_progress = [p for p, _, _ in progress]
     bytes_in_progress = [b for _, b, _ in progress]
     assert "x.jpg" in paths_in_progress
-    assert 0 in bytes_in_progress      # start tick
-    assert 256 in bytes_in_progress    # end tick
+    assert 0 in bytes_in_progress      # start tick (emitted after meta read)
+    assert 256 in bytes_in_progress    # end tick (emitted during _copy_from_cache)
 
 
 # ---------------------------------------------------------------------------
@@ -645,25 +734,27 @@ def test_clean_file_sends_succ_on_file_result_channel(
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 4, classify=True).encode()
     )
-    slot_stream = _make_slot_stream("img.jpg", 4, b"DATA")
+    meta_stream = _make_meta_stream("img.jpg", 4)
+    data_stream = _make_data_stream(b"DATA")
     result_stream = MagicMock()
 
     tau = _make_tau({
-        "backup_manifest":         manifest_stream,
-        "backup_ready_pc":         MagicMock(),
-        "backup_slot_":            slot_stream,
-        "backup_file_result_":     result_stream,
-    })
+        "backup_manifest":     manifest_stream,
+        "backup_ready_pc":     MagicMock(),
+        "backup_slot_meta_":   meta_stream,
+        "backup_slot_data_":   data_stream,
+        "backup_file_result_": result_stream,
+    }, file_count=1)
 
     svc = make_service(tau)
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
-    with patch("services.backup.is_corrupt", return_value=False), \
-         patch("services.backup.check_for_duplicates", return_value=False), \
-         patch("services.backup.is_wanted", return_value=True):
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
         svc.proceed(tmp_path / "dest")
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
@@ -678,25 +769,27 @@ def test_screened_out_file_still_sends_succ(
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 4, classify=True).encode()
     )
-    slot_stream = _make_slot_stream("bad.jpg", 4, b"DATA")
+    meta_stream = _make_meta_stream("bad.jpg", 4)
+    data_stream = _make_data_stream(b"DATA")
     result_stream = MagicMock()
 
     tau = _make_tau({
-        "backup_manifest":         manifest_stream,
-        "backup_ready_pc":         MagicMock(),
-        "backup_slot_":            slot_stream,
-        "backup_file_result_":     result_stream,
-    })
+        "backup_manifest":     manifest_stream,
+        "backup_ready_pc":     MagicMock(),
+        "backup_slot_meta_":   meta_stream,
+        "backup_slot_data_":   data_stream,
+        "backup_file_result_": result_stream,
+    }, file_count=1)
 
     svc = make_service(tau)
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
-    with patch("services.backup.is_corrupt", return_value=False), \
-         patch("services.backup.check_for_duplicates", return_value=False), \
-         patch("services.backup.is_wanted", return_value=False):
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.REJECTED, 0.0)):
         svc.proceed(tmp_path / "dest")
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
@@ -706,26 +799,27 @@ def test_screened_out_file_still_sends_succ(
 def test_transport_error_sends_fail_on_file_result_channel(
         qtbot: QtBot, make_service, tmp_path,
 ) -> None:
-    """A transport error while receiving a slot reports 'fail' on backup_file_result_0."""
+    """A transport error on the metadata channel reports 'fail' on backup_file_result_0."""
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 4, classify=False).encode()
     )
 
-    bad_slot = MagicMock()
-    bad_slot.read_line.side_effect = OSError("connection dropped")
+    bad_meta = MagicMock()
+    bad_meta.read_line.side_effect = OSError("connection dropped")
     result_stream = MagicMock()
 
     tau = _make_tau({
-        "backup_manifest":      manifest_stream,
-        "backup_ready_pc":      MagicMock(),
-        "backup_slot_":         bad_slot,
-        "backup_file_result_":  result_stream,
-    })
+        "backup_manifest":     manifest_stream,
+        "backup_ready_pc":     MagicMock(),
+        "backup_slot_meta_":   bad_meta,
+        "backup_file_result_": result_stream,
+    }, file_count=1)
 
     svc = make_service(tau)
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
     svc.proceed(tmp_path / "dest")
@@ -741,25 +835,27 @@ def test_file_result_sent_regardless_of_classify_flag(
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 4, classify=False).encode()
     )
-    slot_stream = _make_slot_stream("img.jpg", 4, b"DATA")
+    meta_stream = _make_meta_stream("img.jpg", 4)
+    data_stream = _make_data_stream(b"DATA")
     result_stream = MagicMock()
 
     tau = _make_tau({
-        "backup_manifest":      manifest_stream,
-        "backup_ready_pc":      MagicMock(),
-        "backup_slot_":         slot_stream,
-        "backup_file_result_":  result_stream,
-    })
+        "backup_manifest":     manifest_stream,
+        "backup_ready_pc":     MagicMock(),
+        "backup_slot_meta_":   meta_stream,
+        "backup_slot_data_":   data_stream,
+        "backup_file_result_": result_stream,
+    }, file_count=1)
 
     svc = make_service(tau)
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
-    with patch("services.backup.is_corrupt", return_value=False), \
-         patch("services.backup.check_for_duplicates", return_value=False), \
-         patch("services.backup.is_wanted", return_value=True):
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
         svc.proceed(tmp_path / "dest")
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
@@ -790,23 +886,25 @@ def test_cache_dir_deleted_after_successful_backup(
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 4).encode()
     )
-    slot_stream = _make_slot_stream("f.jpg", 4, b"DATA")
+    meta_stream = _make_meta_stream("f.jpg", 4)
+    data_stream = _make_data_stream(b"DATA")
 
     tau = _make_tau({
-        "backup_manifest": manifest_stream,
-        "backup_ready_pc": MagicMock(),
-        "backup_slot_":    slot_stream,
-    })
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
 
     svc = make_service(tau)
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
-    with patch("services.backup.is_corrupt", return_value=False), \
-         patch("services.backup.check_for_duplicates", return_value=False), \
-         patch("services.backup.is_wanted", return_value=True):
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
         svc.proceed(tmp_path / "dest")
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
@@ -824,34 +922,120 @@ def test_duplicate_dest_filename_gets_counter_suffix(
 ) -> None:
     """If dest_dir already contains a file with the same name a counter is appended."""
     dest_dir = tmp_path / "dest"
-    dest_dir.mkdir()
-    (dest_dir / "photo.jpg").write_bytes(b"EXISTING")
+    # All-media backups land in photos/{year}/{MM-MonthName}/ — mtime=0 (epoch)
+    # maps to photos/1970/01-January/.  Pre-create the file there to force a
+    # collision so the counter-suffix logic is exercised.
+    organized_dir = dest_dir / "photos" / "1970" / "01-January"
+    organized_dir.mkdir(parents=True)
+    (organized_dir / "photo.jpg").write_bytes(b"EXISTING")
 
     manifest_stream = _make_one_shot_manifest(
         _manifest_json(1, 4).encode()
     )
-    slot_stream = _make_slot_stream("photo.jpg", 4, b"NEW!")
+    meta_stream = _make_meta_stream("photo.jpg", 4)
+    data_stream = _make_data_stream(b"NEW!")
 
     tau = _make_tau({
-        "backup_manifest": manifest_stream,
-        "backup_ready_pc": MagicMock(),
-        "backup_slot_":    slot_stream,
-    })
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
 
     svc = make_service(tau)
     complete: list[str] = []
     done: list = []
-    svc.file_complete.connect(complete.append)
+    svc.file_complete.connect(lambda name, path: complete.append(name))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
+    svc.receive_manifest()
     qtbot.wait(200)
 
-    with patch("services.backup.is_corrupt", return_value=False), \
-         patch("services.backup.check_for_duplicates", return_value=False), \
-         patch("services.backup.is_wanted", return_value=True):
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
         svc.proceed(dest_dir)
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
     assert len(complete) == 1
-    assert (dest_dir / "photo.jpg").read_bytes() == b"EXISTING"
-    assert (dest_dir / "photo (1).jpg").exists()
+    assert (organized_dir / "photo.jpg").read_bytes() == b"EXISTING"
+    assert (organized_dir / "photo (1).jpg").exists()
+
+
+# ---------------------------------------------------------------------------
+# All-media organized subdirectory layout
+# ---------------------------------------------------------------------------
+
+
+def test_all_media_photo_organized_into_photos_subdir(
+        qtbot: QtBot, make_service, tmp_path,
+) -> None:
+    """All-media photos are saved under photos/{year}/{MM-MonthName}/.
+
+    Uses noon local-time on the 15th of a month so the expected folder is
+    stable across any UTC offset (no risk of the date rolling into an adjacent
+    month due to timezone arithmetic).
+    """
+    import datetime as _dt
+
+    mtime_ms = int(_dt.datetime(2024, 6, 15, 12, 0, 0).timestamp() * 1000)
+
+    manifest_stream = _make_one_shot_manifest(_manifest_json(1, 8).encode())
+    meta_stream = _make_meta_stream("IMG_001.jpg", 8, mtime=mtime_ms)
+    data_stream = _make_data_stream(b"FAKE_IMG")
+
+    tau = _make_tau({
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
+
+    svc = make_service(tau)
+    dest_dir = tmp_path / "backup"
+    done: list = []
+    svc.backup_complete.connect(lambda: done.append(True))
+    svc.start()
+    svc.receive_manifest()
+    qtbot.wait(200)
+
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
+        svc.proceed(dest_dir)
+        qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
+
+    assert (dest_dir / "photos" / "2024" / "06-June" / "IMG_001.jpg").exists()
+
+
+def test_all_media_video_organized_into_videos_subdir(
+        qtbot: QtBot, make_service, tmp_path,
+) -> None:
+    """All-media videos are saved under videos/{year}/{MM-MonthName}/."""
+    import datetime as _dt
+
+    mtime_ms = int(_dt.datetime(2024, 6, 15, 12, 0, 0).timestamp() * 1000)
+
+    manifest_stream = _make_one_shot_manifest(_manifest_json(1, 16).encode())
+    meta_stream = _make_meta_stream("VID_001.mp4", 16, mtime=mtime_ms)
+    data_stream = _make_data_stream(b"FAKE_VID_DATA___")
+
+    tau = _make_tau({
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
+
+    svc = make_service(tau)
+    dest_dir = tmp_path / "backup"
+    done: list = []
+    svc.backup_complete.connect(lambda: done.append(True))
+    svc.start()
+    svc.receive_manifest()
+    qtbot.wait(200)
+
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
+        svc.proceed(dest_dir)
+        qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
+
+    assert (dest_dir / "videos" / "2024" / "06-June" / "VID_001.mp4").exists()

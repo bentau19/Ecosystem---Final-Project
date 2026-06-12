@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime
 from typing import Final
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
-    QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
+    QListView, QPushButton, QVBoxLayout, QWidget,
 )
 
 from app.theme_manager import theme_manager
@@ -15,215 +14,56 @@ from domain.dto.backup_file import BackupFileDTO
 from resources.colors import BackupReviewColors, LightBackupReviewColors
 from resources.paths import BackupStyles
 from resources.spacing import Spacing
-from utils.file_type import IMAGE_EXTS, file_ext, fmt_size
+from utils.file_type import IMAGE_EXTS, file_ext
 from utils.styles import load_stylesheet, themed
-from views.widgets.backup.helpers import load_thumb
+from views.widgets.backup.backup_review_delegate import BackupFileDelegate
+from views.widgets.backup.backup_review_model import BackupReviewModel, DecisionRole, make_colors
 
 # ── Layout constants ──────────────────────────────────────────────────────────
 _DIALOG_MIN_WIDTH:  Final[int] = 580
 _DIALOG_MIN_HEIGHT: Final[int] = 420
 _DIALOG_MAX_HEIGHT: Final[int] = 700
-_ROW_HEIGHT:        Final[int] = 72   # taller to give the thumbnail room
-_THUMB_SIZE:        Final[int] = 56   # square thumbnail side length (px)
-_BUTTON_HEIGHT:     Final[int] = 30
-_BUTTON_WIDTH:      Final[int] = 88
+_LIST_SPACING:      Final[int] = 4
 
-
-# ── File row widget ───────────────────────────────────────────────────────────
-
-class _BackupFileRow(QFrame):
-    """Single file entry showing name, meta info, and Keep / Delete toggle buttons.
-
-    The row's ``decision`` dynamic property drives the QSS colour state:
-    ``"pending"`` (default) → ``"keep"`` → ``"delete"``.  Clicking an already-
-    active button resets it back to ``"pending"``.
-
-    Emits :attr:`decision_changed` whenever the decision flips so the parent
-    dialog can refresh its footer summary label.
-    """
-
-    decision_changed = Signal(str)  # "pending" | "keep" | "delete"
-
-    def __init__(self, backup_file: BackupFileDTO, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._file: BackupFileDTO = backup_file
-        self._decision: str = "pending"
-
-        self._setup_ui()
-        self._apply_style()
-        self._connect_signals()
-
-    # ── Public API ────────────────────────────────────────────────────────────
-
-    @property
-    def decision(self) -> str:
-        """Get the current decision for this row.
-
-        Returns:
-            ``"pending"``, ``"keep"``, or ``"delete"``.
-        """
-        return self._decision
-
-    @property
-    def file_path(self) -> str:
-        """Get the absolute path of the represented backup file.
-
-        Returns:
-            The backup file's absolute filesystem path.
-        """
-        return self._file.path
-
-    # ── UI construction ───────────────────────────────────────────────────────
-
-    def _setup_ui(self) -> None:
-        self.setObjectName("BackupFileRow")
-        self.setProperty("decision", "pending")
-        self.setFixedHeight(_ROW_HEIGHT)
-        self._create_widgets()
-        self._setup_layout()
-
-    def _create_widgets(self) -> None:
-        self._thumb_label: QLabel      = self._create_thumb_label()
-        self._name_label:  QLabel      = self._create_name_label()
-        self._meta_label:  QLabel      = self._create_meta_label()
-        self._keep_btn:    QPushButton = self._create_keep_button()
-        self._delete_btn:  QPushButton = self._create_delete_button()
-
-    def _create_thumb_label(self) -> QLabel:
-        # Load the image thumbnail; fall back to a cyan "IMG" circle if unreadable.
-        lbl = QLabel()
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setFixedSize(_THUMB_SIZE, _THUMB_SIZE)
-
-        pixmap = load_thumb(self._file.path, _THUMB_SIZE)
-        if pixmap is not None:
-            lbl.setObjectName("FileThumb")
-            lbl.setPixmap(pixmap)
-        else:
-            # File unreadable (missing, corrupt, or unsupported format).
-            lbl.setObjectName("FileThumbFallback")
-            lbl.setText("IMG")
-
-        return lbl
-
-    def _create_name_label(self) -> QLabel:
-        lbl = QLabel(self._file.name)
-        lbl.setObjectName("FileName")
-        lbl.setToolTip(self._file.path)  # full path visible on hover
-        return lbl
-
-    def _create_meta_label(self) -> QLabel:
-        size_str = fmt_size(self._file.size_bytes)
-        if self._file.mtime:
-            date_str = datetime.fromtimestamp(self._file.mtime / 1000).strftime("%b %d, %Y")
-        else:
-            date_str = "—"
-        lbl = QLabel(f"{size_str}  ·  {date_str}")
-        lbl.setObjectName("FileMeta")
-        return lbl
-
-    def _create_keep_button(self) -> QPushButton:
-        btn = QPushButton("✓  Keep")
-        btn.setObjectName("KeepButton")
-        btn.setProperty("active", False)
-        btn.setFixedSize(_BUTTON_WIDTH, _BUTTON_HEIGHT)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        return btn
-
-    def _create_delete_button(self) -> QPushButton:
-        btn = QPushButton("✗  Delete")
-        btn.setObjectName("DeleteButton")
-        btn.setProperty("active", False)
-        btn.setFixedSize(_BUTTON_WIDTH, _BUTTON_HEIGHT)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        return btn
-
-    def _setup_layout(self) -> None:
-        root = QHBoxLayout(self)
-        root.setContentsMargins(Spacing.LG, Spacing.SM, Spacing.LG, Spacing.SM)
-        root.setSpacing(Spacing.MD)
-
-        root.addWidget(self._thumb_label, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        # Filename stacked above meta info, expanding to fill available width
-        info = QVBoxLayout()
-        info.setSpacing(2)
-        info.setContentsMargins(0, 0, 0, 0)
-        info.addWidget(self._name_label)
-        info.addWidget(self._meta_label)
-        root.addLayout(info, 1)
-
-        root.addWidget(self._keep_btn,   0, Qt.AlignmentFlag.AlignVCenter)
-        root.addWidget(self._delete_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-
-    # ── Styling ───────────────────────────────────────────────────────────────
-
-    def _apply_style(self) -> None:
-        # Style cascades from the parent dialog's setStyleSheet — nothing to do here.
-        pass
-
-    def _refresh_decision_style(self) -> None:
-        # Re-polish the row and buttons so QSS dynamic-property selectors update.
-        self.setProperty("decision", self._decision)
-        self.style().unpolish(self)
-        self.style().polish(self)
-
-        for btn, is_active in (
-            (self._keep_btn,   self._decision == "keep"),
-            (self._delete_btn, self._decision == "delete"),
-        ):
-            btn.setProperty("active", is_active)
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
-
-    # ── Signals ───────────────────────────────────────────────────────────────
-
-    def _connect_signals(self) -> None:
-        self._keep_btn.clicked.connect(self._on_keep_clicked)
-        self._delete_btn.clicked.connect(self._on_delete_clicked)
-
-    @Slot()
-    def _on_keep_clicked(self) -> None:
-        # Toggle: clicking an active button resets it back to "pending".
-        self._decision = "pending" if self._decision == "keep" else "keep"
-        self._refresh_decision_style()
-        self.decision_changed.emit(self._decision)
-
-    @Slot()
-    def _on_delete_clicked(self) -> None:
-        self._decision = "pending" if self._decision == "delete" else "delete"
-        self._refresh_decision_style()
-        self.decision_changed.emit(self._decision)
-
-
-# ── Main dialog ───────────────────────────────────────────────────────────────
 
 class BackupReviewDialog(QDialog):
     """Modal dialog for reviewing and approving backup file decisions.
 
-    Shows a scrollable card list of backup image files.  Each row has
-    **✓ Keep** / **✗ Delete** toggle buttons.  A live footer summary counts the
-    current decisions.  Clicking **Apply Decisions** resolves the dialog as
-    ``Accepted``; the caller reads :meth:`get_decisions` to act on the result.
+    Shows a virtualised list of backup image files.  Each row has
+    **✓ Keep** / **✗ Delete** toggle buttons rendered by the delegate.
+    A live footer summary counts the current decisions.
 
-    Non-image files are silently filtered out on construction.  Files still in
-    ``"pending"`` state (no button clicked) are **omitted** from
-    :meth:`get_decisions`.
+    Footer buttons:
+
+    * **Keep All** / **Cancel** — mark every remaining pending file as "keep"
+      and close (``Accepted``).  Both buttons are always enabled.
+    * **Apply Decisions** — commits all currently-decided rows (removes them
+      from the list) and *stays open* so the user can continue reviewing the
+      remaining pending files.  Enabled only when at least one row has been
+      decided.  If the list empties after committing, the dialog closes
+      automatically.
+    * **Auto-dismiss** — fires as soon as the last visible row is decided
+      (pending → 0), without requiring any button press.
+
+    The dialog always resolves as ``Accepted``; there is no rejection path.
+    The caller reads :meth:`get_decisions` to act on the result.  Decisions
+    from rows committed via *Apply Decisions* mid-session are included.
+
+    Non-image files are silently filtered out on construction.  Files still
+    in ``"pending"`` state are **omitted** from :meth:`get_decisions`.
 
     Usage::
 
         from domain.dto.backup_file import BackupFileDTO
         from views.widgets.backup.backup_review_dialog import BackupReviewDialog
 
-        files = [BackupFileDTO(path="C:/...", name="photo.jpg", size_bytes=3_000_000, mtime=1_700_000_000_000)]
+        files = [BackupFileDTO(path="C:/...", name="photo.jpg", size_bytes=3_000_000, mtime=...)]
         dlg = BackupReviewDialog(files, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             decisions = dlg.get_decisions()   # {"C:/.../photo.jpg": "keep"}
 
     Args:
-        files: List of :class:`~domain.dto.backup_file.BackupFileDTO` descriptors
-            to present for review.  ``mtime`` (Unix-ms) is used for the
-            "modified" date label; pass ``0`` to show ``"—"``.
+        files:  List of :class:`~domain.dto.backup_file.BackupFileDTO` descriptors.
         parent: Optional Qt parent widget.
     """
 
@@ -237,8 +77,6 @@ class BackupReviewDialog(QDialog):
         self._files: list[BackupFileDTO] = [
             f for f in files if file_ext(f.name) in IMAGE_EXTS
         ]
-        self._rows: list[_BackupFileRow] = []
-
         self._setup_ui()
         self._apply_style()
         self._connect_signals()
@@ -249,15 +87,8 @@ class BackupReviewDialog(QDialog):
         """Return ``{file_path: decision}`` for every row that has been decided.
 
         Rows still in ``"pending"`` state are excluded.
-
-        Returns:
-            Example: ``{"C:/backup/photo.jpg": "keep", "C:/backup/old.jpg": "delete"}``
         """
-        return {
-            row.file_path: row.decision
-            for row in self._rows
-            if row.decision != "pending"
-        }
+        return self._model.get_decisions()
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -272,13 +103,13 @@ class BackupReviewDialog(QDialog):
 
     def _create_widgets(self) -> None:
         self._header:        QWidget     = self._create_header()
-        self._scroll_area:   QScrollArea = self._create_scroll_area()
+        self._list_view:     QListView   = self._create_list_view()
         self._summary_label: QLabel      = self._create_summary_label()
+        self._keep_all_btn:  QPushButton = self._create_keep_all_button()
         self._cancel_btn:    QPushButton = self._create_cancel_button()
         self._apply_btn:     QPushButton = self._create_apply_button()
 
     def _create_header(self) -> QWidget:
-        # Build the icon + title + subtitle header bar.
         container = QWidget()
         container.setObjectName("BackupReviewHeader")
 
@@ -290,9 +121,10 @@ class BackupReviewDialog(QDialog):
         title = QLabel("Review Backup Files")
         title.setObjectName("HeaderTitle")
 
+        n = len(self._files)
         subtitle = QLabel(
-            f"Approve which of the {len(self._files)} "
-            f"image{'s' if len(self._files) != 1 else ''} to keep or delete."
+            f"Approve which of the {n} "
+            f"image{'s' if n != 1 else ''} to keep or delete."
         )
         subtitle.setObjectName("HeaderSubtitle")
 
@@ -309,41 +141,44 @@ class BackupReviewDialog(QDialog):
         row.addLayout(text_col, 1)
         return container
 
-    def _create_scroll_area(self) -> QScrollArea:
-        # Build the scrollable file list, creating one _BackupFileRow per file.
-        content = QWidget()
-        content.setObjectName("ScrollContent")
+    def _create_list_view(self) -> QListView:
+        colors = make_colors(theme_manager.is_dark)
+        self._model    = BackupReviewModel(self._files, parent=self)
+        self._delegate = BackupFileDelegate(colors, parent=self)
 
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(Spacing.LG, Spacing.MD, Spacing.LG, Spacing.MD)
-        layout.setSpacing(Spacing.SM)
-        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        list_view = QListView()
+        list_view.setObjectName("FileListView")
+        list_view.setModel(self._model)
+        list_view.setItemDelegate(self._delegate)
+        list_view.setUniformItemSizes(True)
+        list_view.setSpacing(_LIST_SPACING)
+        list_view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        list_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        list_view.setFrameShape(QFrame.Shape.NoFrame)
+        list_view.setMouseTracking(True)
+        list_view.viewport().setMouseTracking(True)
 
-        if self._files:
-            for f in self._files:
-                row = _BackupFileRow(f, parent=content)
-                self._rows.append(row)
-                layout.addWidget(row)
+        if not self._files:
+            list_view.setVisible(False)
+            self._empty_label: QLabel | None = QLabel("No image files to review.")
+            self._empty_label.setObjectName("EmptyLabel")
+            self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         else:
-            # Zero-state: no images were passed (or all were filtered out).
-            empty = QLabel("No image files to review.")
-            empty.setObjectName("EmptyLabel")
-            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(empty)
+            self._empty_label = None
 
-        scroll = QScrollArea()
-        scroll.setObjectName("FileScrollArea")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setWidget(content)
-        return scroll
+        return list_view
 
     def _create_summary_label(self) -> QLabel:
         lbl = QLabel(self._build_summary_text())
         lbl.setObjectName("SummaryLabel")
         return lbl
+
+    def _create_keep_all_button(self) -> QPushButton:
+        btn = QPushButton("Keep All")
+        btn.setObjectName("KeepAllButton")
+        btn.setFixedHeight(36)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        return btn
 
     def _create_cancel_button(self) -> QPushButton:
         btn = QPushButton("Cancel")
@@ -357,18 +192,27 @@ class BackupReviewDialog(QDialog):
         btn = QPushButton("Apply Decisions")
         btn.setObjectName("ApplyButton")
         btn.setFixedHeight(36)
+        btn.setEnabled(False)   # enabled only once ≥1 file has been decided
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         return btn
 
     def _setup_layout(self) -> None:
-        # Root: header | divider | scroll area | divider | footer
         root = QVBoxLayout(self)
         root.setContentsMargins(Spacing.NONE, Spacing.NONE, Spacing.NONE, Spacing.NONE)
         root.setSpacing(Spacing.NONE)
 
         root.addWidget(self._header)
         root.addWidget(self._create_h_divider())
-        root.addWidget(self._scroll_area, 1)
+
+        if self._empty_label is not None:
+            empty_wrap = QWidget()
+            empty_wrap.setObjectName("ScrollContent")
+            wl = QVBoxLayout(empty_wrap)
+            wl.addWidget(self._empty_label)
+            root.addWidget(empty_wrap, 1)
+        else:
+            root.addWidget(self._list_view, 1)
+
         root.addWidget(self._create_h_divider())
         root.addLayout(self._create_footer_layout())
 
@@ -384,18 +228,21 @@ class BackupReviewDialog(QDialog):
         footer = QHBoxLayout()
         footer.setContentsMargins(Spacing.XXL, Spacing.MD, Spacing.XXL, Spacing.LG)
         footer.setSpacing(Spacing.SM)
+        footer.addWidget(self._keep_all_btn)   # bulk-keep action on the left
         footer.addWidget(self._summary_label, 1)
         footer.addWidget(self._cancel_btn)
         footer.addWidget(self._apply_btn)
         return footer
 
-    # ── Summary helpers ───────────────────────────────────────────────────────
+    # ── Summary ───────────────────────────────────────────────────────────────
 
     def _build_summary_text(self) -> str:
-        total   = len(self._rows)
-        keep    = sum(1 for r in self._rows if r.decision == "keep")
-        delete  = sum(1 for r in self._rows if r.decision == "delete")
-        pending = total - keep - delete
+        if not self._files:
+            return "No files"
+        keep, delete, pending = self._model.decision_counts()
+        total = keep + delete + pending   # live count — shrinks as Apply commits rows
+        if total == 0:
+            return "All files processed"
         parts: list[str] = [f"{total} file{'s' if total != 1 else ''}"]
         if keep:    parts.append(f"{keep} to keep")
         if delete:  parts.append(f"{delete} to delete")
@@ -410,28 +257,58 @@ class BackupReviewDialog(QDialog):
             themed([BackupReviewColors], [LightBackupReviewColors], theme_manager.is_dark),
         )
         self.setStyleSheet(qss)
+        self._delegate.update_colors(make_colors(theme_manager.is_dark))
+        self._list_view.viewport().update()
 
     # ── Signals ───────────────────────────────────────────────────────────────
 
     def _connect_signals(self) -> None:
-        self._apply_btn.clicked.connect(self.accept)
-        self._cancel_btn.clicked.connect(self.reject)
+        # Apply commits decided rows and stays open; Keep All / Cancel both keep-all and close.
+        self._apply_btn.clicked.connect(self._on_apply_clicked)
+        self._cancel_btn.clicked.connect(self._on_keep_all_clicked)
+        self._keep_all_btn.clicked.connect(self._on_keep_all_clicked)
         theme_manager.theme_changed.connect(self._apply_style)
-        for row in self._rows:
-            row.decision_changed.connect(self._on_decision_changed)
+        self._model.dataChanged.connect(self._on_decision_changed)
 
-    @Slot(str)
-    def _on_decision_changed(self, _: str) -> None:
-        # Refresh the footer summary whenever any row decision flips.
+    @Slot()
+    def _on_apply_clicked(self) -> None:
+        """Commit decided rows (remove from list) and stay open.
+
+        If no rows remain after committing, the dialog auto-accepts.
+        """
+        self._model.apply_decided()
         self._summary_label.setText(self._build_summary_text())
+        keep, delete, _ = self._model.decision_counts()
+        self._apply_btn.setEnabled((keep + delete) > 0)
+        if self._model.rowCount() == 0:
+            self.accept()
+
+    @Slot()
+    def _on_keep_all_clicked(self) -> None:
+        """Mark every remaining pending file as 'keep'.
+
+        Triggers _on_decision_changed for each row; auto-dismiss fires when
+        the last pending row is flipped (pending → 0).
+        """
+        for row in range(self._model.rowCount()):
+            if self._model.data(self._model.index(row), DecisionRole) == "pending":
+                self._model.set_decision(row, "keep")
+
+    @Slot()
+    def _on_decision_changed(self, *_) -> None:
+        self._summary_label.setText(self._build_summary_text())
+        keep, delete, pending = self._model.decision_counts()
+        self._apply_btn.setEnabled((keep + delete) > 0)
+        # Auto-dismiss once every visible row has a decision.
+        if pending == 0 and self._model.rowCount() > 0:
+            self.accept()
 
 
 # ── Standalone preview ────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import resources_qrc  # noqa: F401 — registers Qt virtual paths
+    import resources_qrc  # noqa: F401
 
-    # Mix of images and non-images — non-images are silently dropped by the dialog.
     sample_files = [
         BackupFileDTO(r"C:\Users\Public\Pictures\vacation_photo.webp",
                       "vacation_photo.webp",  3_456_000, mtime=1_710_460_800_000),

@@ -153,8 +153,8 @@ public class FileTransferViewModelTest {
 
         ReceiveFileRequest exposed = viewModel.getPendingRequest().getValue();
         assertNotNull(exposed);
-        assertEquals("archive.zip", exposed.getFileName());
-        assertEquals(2_048_000L, exposed.getFileSizeBytes());
+        assertEquals("archive.zip", exposed.fileName());
+        assertEquals(2_048_000L, exposed.fileSizeBytes());
     }
 
     @Test

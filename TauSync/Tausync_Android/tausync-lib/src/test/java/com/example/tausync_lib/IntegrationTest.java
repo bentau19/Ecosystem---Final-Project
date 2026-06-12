@@ -2,6 +2,9 @@ package com.example.tausync_lib;
 
 import com.example.tausync_lib.core.CoreConfig;
 import com.example.tausync_lib.implementations.management.BackBufferedInputStream;
+import com.example.tausync_lib.implementations.management.ConnectionContext;
+import com.example.tausync_lib.implementations.management.ConnectionManager;
+import com.example.tausync_lib.implementations.management.TauSyncStream;
 import com.example.tausync_lib.implementations.protocol.ProtocolHandler;
 import com.example.tausync_lib.implementations.transport.SocketTransport;
 import com.example.tausync_lib.interfaces.IProtocolHandler;
@@ -15,7 +18,9 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -407,7 +412,6 @@ public class IntegrationTest {
         assertEquals(30, CoreConfig.HANDSHAKE_TIMEOUT_SECONDS);
         assertEquals(8888, CoreConfig.DEFAULT_PORT);
         assertEquals(2, CoreConfig.CLIENT_CONNECT_RETRY_DELAY_SECONDS);
-        assertEquals(2000, CoreConfig.ID_RECYCLE_DELAY_MS);
         assertEquals(64, CoreConfig.MAX_PENDING_DISCOVERY_PER_WORD);
         assertEquals(1, CoreConfig.MIN_ID);
         assertEquals(0xFFFFFF, CoreConfig.MAX_ID);
@@ -450,6 +454,66 @@ public class IntegrationTest {
         SocketTransport transport = new SocketTransport();
         transport.close();
         transport.close();
+    }
+
+    // ── ConnectionManager concurrent same-word guard ──────────────────
+
+    @Test
+    public void connectionManager_concurrentSameWordConnect_throwsAndAllowsSequentialReuse() throws Exception {
+        int port = findFreePort();
+        ServerSocket serverSocket = new ServerSocket(port);
+        Thread serverThread = new Thread(() -> {
+            try (Socket client = serverSocket.accept()) {
+                // Hold the TCP connection open but never speak TauSync — every
+                // handshake attempt stays pending until its own timeout.
+                Thread.sleep(30_000);
+            } catch (Exception ignored) {}
+        });
+        serverThread.setDaemon(true);
+        serverThread.start();
+
+        ConnectionContext ctx = ConnectionContext.getInstance();
+        ctx.getWifiTransportAsSocket().setPort(port);
+        ctx.initializeTransports("127.0.0.1", 5);
+        ConnectionManager manager = new ConnectionManager();
+        try {
+            CompletableFuture<TauSyncStream> first = manager.connect("GUARD_WORD", 2);
+
+            // A second concurrent connect() with the same word must fail fast
+            // instead of silently clobbering the in-flight handshake.
+            try {
+                manager.connect("GUARD_WORD", 2);
+                fail("Expected IllegalStateException for concurrent same-word connect");
+            } catch (IllegalStateException expected) {
+                assertTrue(expected.getMessage().contains("already in progress"));
+            }
+
+            // A different word is not blocked by the guard (it times out
+            // normally because there is no TauSync peer behind the socket).
+            CompletableFuture<TauSyncStream> otherWord = manager.connect("OTHER_WORD", 1);
+
+            try {
+                first.get(15, TimeUnit.SECONDS);
+                fail("Expected handshake timeout for the first connect");
+            } catch (ExecutionException expectedTimeout) {}
+            try {
+                otherWord.get(15, TimeUnit.SECONDS);
+                fail("Expected handshake timeout for the other-word connect");
+            } catch (ExecutionException expectedTimeout) {}
+
+            // Sequential reuse of the same word is allowed again once the
+            // previous attempt has resolved (success or failure).
+            CompletableFuture<TauSyncStream> second = manager.connect("GUARD_WORD", 1);
+            try {
+                second.get(15, TimeUnit.SECONDS);
+                fail("Expected handshake timeout for the sequential-reuse connect");
+            } catch (ExecutionException expectedTimeout) {}
+        } finally {
+            manager.close();
+            ctx.getWifiTransportAsSocket().disconnect();
+            serverSocket.close();
+            serverThread.interrupt();
+        }
     }
 
     private static int findFreePort() throws IOException {
