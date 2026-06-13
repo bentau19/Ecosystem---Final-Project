@@ -24,7 +24,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 
-import com.example.android.data.VideoTranscoder;
+import com.example.android.utils.VideoTranscoder;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -673,7 +673,7 @@ public class BackupTransferUseCase {
 
         // ── Video path: Storage Saver re-encode ──────────────────────────────
         // Mirrors the image path above: transcode to H.264 at a lower bitrate / capped
-        // frame-rate via VideoTranscoder (MediaCodec + MediaExtractor + MediaMuxer).
+        // frame-rate via VideoEncoder (MediaCodec + MediaExtractor + MediaMuxer).
         // Falls back silently to the raw path on OOM, null output, or any exception
         // so a transcode failure never aborts the slot.
         if (storageSaver && isTranscodableVideo(fileName)) {

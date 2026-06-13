@@ -89,6 +89,8 @@ class DashboardScreen(QWidget):
         # Stop the device-info overlay once fresh data arrives — guarded so a
         # stale queued update cannot kill the "Disconnecting…" overlay.
         vm.device_infos_updated.connect(self._on_device_infos_updated)
+        # Stop the overlay on a channel-read error so the spinner never hangs.
+        vm.device_info_error.connect(self._on_device_info_error)
         # Logout: show overlay and set guard when disconnect starts.
         vm.device_disconnecting.connect(self._on_device_disconnecting)
         # device_disconnected → navigation (Topbar._move_to_login) → hideEvent
@@ -102,6 +104,15 @@ class DashboardScreen(QWidget):
         # A queued device_infos_updated from the showEvent fetch could arrive
         # after device_disconnecting starts the logout overlay; the
         # _is_disconnecting flag blocks that race.
+        if not self._is_disconnecting:
+            self._loading_overlay.stop()
+
+    @Slot(str)
+    def _on_device_info_error(self, _error: str) -> None:
+        # Stop the overlay so the user isn't left staring at a spinner.
+        # The error is already logged by DeviceInfoService; the dashboard will
+        # show stale DB data from the previous fetch which is preferable to
+        # an indefinitely spinning overlay.
         if not self._is_disconnecting:
             self._loading_overlay.stop()
 

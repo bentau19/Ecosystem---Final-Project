@@ -109,11 +109,13 @@ class MainWindow(QMainWindow):
         # Wire navigation, file-transfer, backup, and theme signals to their slots.
         self._navigation_manager.navigate.connect(self._change_page)
         self._file_transfer_vm.receive_error.connect(self._on_file_receive_error)
+        self._file_transfer_vm.send_error.connect(self._on_file_send_error)
         self._file_transfer_vm.metadata_received.connect(self._on_file_received_metadata)
         self._backup_vm.dest_dir_requested.connect(self._on_dest_dir_requested)
         self._backup_vm.backup_ready.connect(self._on_backup_ready)
         self._backup_vm.backup_session_result.connect(self._on_backup_session_result)
         self._backup_vm.device_ready_changed.connect(self._on_backup_device_ready_changed)
+        app_state.device_viewmodel.connection_error.connect(self._on_connection_error)
         theme_manager.theme_changed.connect(self._restyle_tray)
 
     def changeEvent(self, event: QEvent) -> None:
@@ -283,7 +285,23 @@ class MainWindow(QMainWindow):
             self._backup_progress_win.force_close()
             self._backup_progress_win = None
 
-    @Slot()
+    @Slot(str)
     def _on_file_receive_error(self, error: str) -> None:
         # Show the generic transfer-error dialog; error string is displayed inside it.
         TransferErrorDialog()
+
+    @Slot(str)
+    def _on_file_send_error(self, error: str) -> None:
+        # Mirror of _on_file_receive_error for the outbound direction.
+        TransferErrorDialog()
+
+    @Slot(str)
+    def _on_connection_error(self, error: str) -> None:
+        # Non-blocking tray notification — the listener retries automatically
+        # so no dialog is needed; the user just needs to know something went wrong.
+        self._tray_icon.showMessage(
+            "Connection Error",
+            f"Could not listen for connections: {error}\nRetrying…",
+            QSystemTrayIcon.MessageIcon.Warning,
+            4000,
+        )

@@ -51,6 +51,10 @@ class DeviceViewModel(QObject):
     device_disconnecting: Signal = Signal()
     """Emitted immediately when a PC-initiated disconnect begins."""
     device_disconnected: Signal = Signal()
+    device_info_error: Signal = Signal(str)
+    """Emitted when device-info channel reads fail — forwarded from DeviceInfoService.read_error."""
+    connection_error: Signal = Signal(str)
+    """Emitted when the TCP listener crashes — forwarded from ConnectivityService.connection_error."""
 
     _TEN_MINUTES: int = 10 * 60 * 1000
 
@@ -77,9 +81,11 @@ class DeviceViewModel(QObject):
         self._connectivity_service.device_connected.connect(self._on_device_connected)
         self._connectivity_service.device_disconnecting.connect(self.device_disconnecting.emit)
         self._connectivity_service.device_disconnected.connect(self._on_device_disconnected)
+        self._connectivity_service.connection_error.connect(self.connection_error.emit)
         self._device_info_service.device_info_ready.connect(self._on_device_info_ready)
         self._device_info_service.device_fetched.connect(self._on_device_fetched)
         self._device_info_service.all_devices_fetched.connect(self._on_all_devices_fetched)
+        self._device_info_service.read_error.connect(self.device_info_error.emit)
 
         # Start connectivity immediately so it listens before any device connects.
         # DeviceInfoService also starts at launch — its DB read methods

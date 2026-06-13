@@ -67,6 +67,7 @@ public class BackupDataSource {
      * @return Sorted list of {@link BackupFileEntry} objects; empty if the folder
      * is empty or unreadable.
      */
+
     public List<BackupFileEntry> scanFolderByPath(@NonNull File folder) {
         Log.d(TAG, "scanFolderByPath: starting recursive scan of " + folder.getAbsolutePath());
         List<BackupFileEntry> results = new ArrayList<>();

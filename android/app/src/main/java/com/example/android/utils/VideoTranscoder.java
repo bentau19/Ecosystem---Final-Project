@@ -1,4 +1,4 @@
-package com.example.android.data;
+package com.example.android.utils;
 
 import android.content.Context;
 import android.media.MediaMetadataRetriever;
