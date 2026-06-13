@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QCoreApplication
 
 from domain.entities.device_info import DeviceEntity
 
@@ -23,15 +24,23 @@ if "QT_QPA_PLATFORM" not in os.environ:
 
 @pytest.fixture(scope="session")
 def qapp() -> QApplication:
-    """Ensure a QApplication exists for all tests.
+    """Ensure a QApplication exists for all tests with proper cleanup.
 
     This fixture is auto-used by pytestqt; providing it explicitly ensures
-    we control initialization and avoid race conditions during test startup.
+    we control initialization, avoid race conditions during test startup,
+    and properly tear down Qt after all tests complete.
     """
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
-    return app
+
+    yield app  # Tests run here
+
+    # Cleanup after all tests complete
+    # Process any remaining events in the Qt event loop
+    QCoreApplication.processEvents()
+    # Quit the application to release resources and allow pytest to exit
+    app.quit()
 
 
 # ---------------------------------------------------------------------------
