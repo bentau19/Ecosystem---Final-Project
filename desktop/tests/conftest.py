@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 from datetime import date
 from pathlib import Path
 
@@ -41,6 +42,49 @@ def qapp() -> QApplication:
     QCoreApplication.processEvents()
     # Quit the application to release resources and allow pytest to exit
     app.quit()
+
+
+@pytest.fixture(autouse=True)
+def _drain_leaked_service_executors():
+    """Force-stop background service executors a test left running.
+
+    Every services.* class (ConnectivityService, FileTransferService, …) owns a
+    NON-daemon ``concurrent.futures.ThreadPoolExecutor``.  The connectivity
+    listener loops in ``_listen`` while ``_is_running`` is set.  Tests that start
+    a listener (``svc._start()``) to assert a signal fires but never call
+    ``stop()`` leak a worker thread stuck in that loop.
+
+    At interpreter shutdown ``concurrent.futures`` installs an atexit hook that
+    *joins* every executor worker — daemon flag is irrelevant, the join is
+    explicit — and a worker still spinning in the listen loop never returns.  So
+    the suite prints "N passed" and then hangs forever in CI.
+
+    Clearing ``_is_running`` after each test lets the loop exit at its next
+    iteration (mocks park with ``timeout<=5s``); shutting the executor down
+    releases its workers.  By interpreter-exit time every worker has drained, so
+    the atexit join returns immediately and pytest exits cleanly.
+
+    ``__dict__.get`` is used rather than ``getattr`` so ``MagicMock`` instances
+    don't fabricate attributes and no ``__getattr__`` side effects fire while
+    scanning live objects.
+    """
+    yield
+
+    import gc
+    from concurrent.futures import ThreadPoolExecutor
+
+    for obj in gc.get_objects():
+        d = getattr(obj, "__dict__", None)
+        if not isinstance(d, dict):
+            continue
+        running = d.get("_is_running")
+        if isinstance(running, threading.Event):
+            running.clear()
+        # Shut down every executor on the instance (BackupService owns two:
+        # _executor and _slot_executor).
+        for value in d.values():
+            if isinstance(value, ThreadPoolExecutor):
+                value.shutdown(wait=False, cancel_futures=True)
 
 
 # ---------------------------------------------------------------------------
