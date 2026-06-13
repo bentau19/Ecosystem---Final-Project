@@ -95,9 +95,16 @@ def test_connection_error_emitted_when_listen_raises_while_running(qtbot: QtBot)
         park.wait(timeout=5)
 
     mock_tau.listen.side_effect = _raise_once
-    svc = _start_service(mock_tau)
-    received: list[str] = []
-    svc.connection_error.connect(lambda msg: received.append(msg))
+
+    # Wire the signal BEFORE _start() so the emission is never missed.
+    # _start_service() connects and starts in the wrong order — by the time
+    # the test calls .connect(), the listener thread has already raised and
+    # emitted connection_error (the executor can start _listen immediately).
+    with patch("services.connectivity.TauSync", return_value=mock_tau):
+        svc = ConnectivityService()
+        received: list[str] = []
+        svc.connection_error.connect(lambda msg: received.append(msg))
+        svc._start()
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
     assert received == ["connection refused"]

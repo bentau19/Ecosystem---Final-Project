@@ -1039,3 +1039,452 @@ def test_all_media_video_organized_into_videos_subdir(
         qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
 
     assert (dest_dir / "videos" / "2024" / "06-June" / "VID_001.mp4").exists()
+
+
+# ---------------------------------------------------------------------------
+# Pure-function unit tests — _data_timeout
+# ---------------------------------------------------------------------------
+
+
+def test_data_timeout_zero_bytes_returns_baseline_offset() -> None:
+    """_data_timeout(0) returns exactly the baseline offset constant."""
+    from services.backup import _BACKUP_DATA_TIMEOUT_OFFSET_S
+    assert BackupService._data_timeout(0) == _BACKUP_DATA_TIMEOUT_OFFSET_S
+
+
+def test_data_timeout_scales_with_file_size() -> None:
+    """_data_timeout grows proportionally — 300 MB at 3 MB/s ≈ 100 s + offset."""
+    import math
+    from services.backup import _BACKUP_DATA_TIMEOUT_MULT, _BACKUP_DATA_TIMEOUT_OFFSET_S
+    size = 300_000_000  # 300 MB
+    expected = math.ceil(_BACKUP_DATA_TIMEOUT_MULT * size) + _BACKUP_DATA_TIMEOUT_OFFSET_S
+    assert BackupService._data_timeout(size) == expected
+
+
+def test_data_timeout_returns_int() -> None:
+    """_data_timeout always returns an int (math.ceil + int offset)."""
+    assert isinstance(BackupService._data_timeout(99_999), int)
+
+
+# ---------------------------------------------------------------------------
+# Pure-function unit tests — _media_subdir
+# ---------------------------------------------------------------------------
+
+
+def test_media_subdir_photo_extension_routes_to_photos_dir() -> None:
+    """A HEIC file is routed to photos/{year}/{MM-MonthName}/."""
+    import datetime as _dt
+    mtime = int(_dt.datetime(2024, 3, 15, 12, 0, 0).timestamp() * 1000)
+    result = BackupService._media_subdir("pic.heic", mtime)
+    assert result == Path("photos") / "2024" / "03-March" / "pic.heic"
+
+
+def test_media_subdir_video_extension_routes_to_videos_dir() -> None:
+    """An MKV file is routed to videos/{year}/{MM-MonthName}/."""
+    import datetime as _dt
+    mtime = int(_dt.datetime(2023, 11, 5, 12, 0, 0).timestamp() * 1000)
+    result = BackupService._media_subdir("clip.mkv", mtime)
+    assert result == Path("videos") / "2023" / "11-November" / "clip.mkv"
+
+
+def test_media_subdir_unknown_extension_returns_flat_path() -> None:
+    """An unknown extension (e.g. .pdf) produces a flat Path with no subdirectory."""
+    result = BackupService._media_subdir("document.pdf", 0)
+    assert result == Path("document.pdf")
+
+
+def test_media_subdir_zero_mtime_maps_to_epoch_folder() -> None:
+    """mtime=0 (epoch) maps to .../1970/01-January/ for photo extensions."""
+    result = BackupService._media_subdir("img.jpg", 0)
+    assert result == Path("photos") / "1970" / "01-January" / "img.jpg"
+
+
+# ---------------------------------------------------------------------------
+# Pure-function unit tests — _unique_dest
+# ---------------------------------------------------------------------------
+
+
+def test_unique_dest_no_collision_returns_original(tmp_path: Path) -> None:
+    """_unique_dest returns the path unchanged when the target does not exist."""
+    result = BackupService._unique_dest(tmp_path / "file.txt")
+    assert result == tmp_path / "file.txt"
+
+
+def test_unique_dest_single_collision_appends_counter_1(tmp_path: Path) -> None:
+    """_unique_dest appends ' (1)' when the target already exists."""
+    (tmp_path / "file.txt").write_bytes(b"existing")
+    result = BackupService._unique_dest(tmp_path / "file.txt")
+    assert result == tmp_path / "file (1).txt"
+
+
+def test_unique_dest_multiple_collisions_increments_to_2(tmp_path: Path) -> None:
+    """_unique_dest keeps incrementing past ' (1)' when both already exist."""
+    (tmp_path / "file.txt").write_bytes(b"a")
+    (tmp_path / "file (1).txt").write_bytes(b"b")
+    result = BackupService._unique_dest(tmp_path / "file.txt")
+    assert result == tmp_path / "file (2).txt"
+
+
+def test_unique_dest_extensionless_file(tmp_path: Path) -> None:
+    """_unique_dest handles files with no extension (no dot in name)."""
+    (tmp_path / "noext").write_bytes(b"x")
+    result = BackupService._unique_dest(tmp_path / "noext")
+    assert result == tmp_path / "noext (1)"
+
+
+# ---------------------------------------------------------------------------
+# receive_manifest guard — must be started first
+# ---------------------------------------------------------------------------
+
+
+def test_receive_manifest_noop_when_not_started(
+        qtbot: QtBot, make_service,
+) -> None:
+    """receive_manifest() before start() silently does nothing (_is_running guard)."""
+    tau = MagicMock()
+    svc = make_service(tau)
+
+    received: list = []
+    svc.manifest_received.connect(lambda n, s, c, ss: received.append((n, s, c, ss)))
+
+    # Deliberately do NOT call svc.start()
+    svc.receive_manifest()
+    qtbot.wait(300)
+
+    assert received == []
+    tau.connect.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Manifest transport error — connect() raises before read
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_connect_error_does_not_emit(
+        qtbot: QtBot, make_service,
+) -> None:
+    """If tau.connect() raises while reading the manifest, manifest_received is not emitted."""
+    tau = MagicMock()
+    tau.connect.side_effect = OSError("connection refused")
+
+    svc = make_service(tau)
+    received: list = []
+    svc.manifest_received.connect(lambda n, s, c, ss: received.append((n, s, c, ss)))
+
+    svc.start()
+    svc.receive_manifest()
+    qtbot.wait(400)
+
+    assert received == []
+
+
+# ---------------------------------------------------------------------------
+# storage_saver field in manifest
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_received_storage_saver_true(
+        qtbot: QtBot, make_service,
+) -> None:
+    """storage_saver=true in the manifest is forwarded as the fourth arg of manifest_received."""
+    payload = json.dumps({
+        "file_count": 1,
+        "files_bytes": 512,
+        "classify": True,
+        "storage_saver": True,
+    })
+    manifest_stream = _make_one_shot_manifest(payload.encode())
+    tau = _make_tau({"backup_manifest": manifest_stream}, file_count=1)
+
+    svc = make_service(tau)
+    received: list[tuple] = []
+    svc.manifest_received.connect(lambda n, s, c, ss: received.append((n, s, c, ss)))
+
+    svc.start()
+    svc.receive_manifest()
+
+    qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
+    _, _, _, storage_saver = received[0]
+    assert storage_saver is True
+
+
+def test_manifest_received_storage_saver_defaults_to_false(
+        qtbot: QtBot, make_service,
+) -> None:
+    """When storage_saver is absent from the manifest it defaults to False."""
+    # _manifest_json() does not include storage_saver — exercises the default
+    manifest_stream = _make_one_shot_manifest(
+        _manifest_json(file_count=1, files_bytes=128, classify=True).encode()
+    )
+    tau = _make_tau({"backup_manifest": manifest_stream}, file_count=1)
+
+    svc = make_service(tau)
+    received: list[tuple] = []
+    svc.manifest_received.connect(lambda n, s, c, ss: received.append((n, s, c, ss)))
+
+    svc.start()
+    svc.receive_manifest()
+
+    qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
+    _, _, _, storage_saver = received[0]
+    assert storage_saver is False
+
+
+# ---------------------------------------------------------------------------
+# orig_size in per-slot metadata — file_registered third argument
+# ---------------------------------------------------------------------------
+
+
+def test_file_registered_carries_orig_size_for_storage_saver(
+        qtbot: QtBot, make_service, tmp_path: Path,
+) -> None:
+    """file_registered(rel_path, size_bytes, orig_size_bytes) carries the pre-compression size."""
+    manifest_stream = _make_one_shot_manifest(_manifest_json(1, 500).encode())
+
+    meta_stream = MagicMock()
+    header = json.dumps({
+        "name":      "photo.jpg",
+        "size":      500,
+        "mtime":     0,
+        "orig_size": 1000,
+    }).encode() + b"\n"
+    meta_stream.read_line.return_value = header
+    data_stream = _make_data_stream(b"X" * 500)
+
+    tau = _make_tau({
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
+
+    svc = make_service(tau)
+    registered: list[tuple[str, int, int]] = []
+    done: list = []
+    svc.file_registered.connect(lambda p, s, orig_s: registered.append((p, s, orig_s)))
+    svc.backup_complete.connect(lambda: done.append(True))
+    svc.start()
+    svc.receive_manifest()
+    qtbot.wait(200)
+
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
+        svc.proceed(tmp_path / "dest")
+        qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
+
+    assert len(registered) == 1
+    assert registered[0] == ("photo.jpg", 500, 1000)
+
+
+# ---------------------------------------------------------------------------
+# Transport error on the DATA channel (not metadata)
+# ---------------------------------------------------------------------------
+
+
+def test_transport_error_on_data_slot_emits_file_failed(
+        qtbot: QtBot, make_service, tmp_path: Path,
+) -> None:
+    """OSError raised during data-channel read emits file_failed (transport error)."""
+    manifest_stream = _make_one_shot_manifest(_manifest_json(1, 4).encode())
+    meta_stream = _make_meta_stream("f.jpg", 4)
+
+    bad_data = MagicMock()
+    bad_data.read.side_effect = OSError("pipe broken mid-transfer")
+
+    tau = _make_tau({
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": bad_data,
+    }, file_count=1)
+
+    svc = make_service(tau)
+    failed: list[tuple[str, str]] = []
+    skipped: list[str] = []
+    done: list = []
+    svc.file_failed.connect(lambda p, r: failed.append((p, r)))
+    svc.file_skipped.connect(skipped.append)
+    svc.backup_complete.connect(lambda: done.append(True))
+    svc.start()
+    svc.receive_manifest()
+    qtbot.wait(200)
+
+    svc.proceed(tmp_path / "dest")
+    qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
+
+    assert len(failed) == 1
+    assert failed[0][0] == "f.jpg"
+    assert skipped == []
+
+
+# ---------------------------------------------------------------------------
+# Folder-mode backup — rel_path preserved in dest hierarchy
+# ---------------------------------------------------------------------------
+
+
+def test_folder_mode_rel_path_preserves_directory_structure(
+        qtbot: QtBot, make_service, tmp_path: Path,
+) -> None:
+    """Folder-mode: rel_path in slot metadata routes the file to dest_dir / rel_path."""
+    manifest_stream = _make_one_shot_manifest(_manifest_json(1, 8).encode())
+
+    meta_stream = MagicMock()
+    header = json.dumps({
+        "name":     "photo.jpg",
+        "size":     8,
+        "mtime":    0,
+        "rel_path": "DCIM/Camera/photo.jpg",
+    }).encode() + b"\n"
+    meta_stream.read_line.return_value = header
+    data_stream = _make_data_stream(b"FAKE_IMG")
+
+    tau = _make_tau({
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
+
+    svc = make_service(tau)
+    dest_dir = tmp_path / "dest"
+    done: list = []
+    svc.backup_complete.connect(lambda: done.append(True))
+    svc.start()
+    svc.receive_manifest()
+    qtbot.wait(200)
+
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
+        svc.proceed(dest_dir)
+        qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
+
+    # rel_path drives placement — NOT the photo/{year}/… organization logic
+    assert (dest_dir / "DCIM" / "Camera" / "photo.jpg").exists()
+
+
+# ---------------------------------------------------------------------------
+# NEEDS_REVIEW verdict — user keeps the file
+# ---------------------------------------------------------------------------
+
+
+def test_needs_review_user_keeps_does_not_emit_file_skipped(
+        qtbot: QtBot, make_service, tmp_path: Path,
+) -> None:
+    """NEEDS_REVIEW + user keeps: file_complete fires, file_skipped is NOT emitted, file stays."""
+    manifest_stream = _make_one_shot_manifest(_manifest_json(1, 8).encode())
+    meta_stream = _make_meta_stream("review.jpg", 8)
+    data_stream = _make_data_stream(b"FAKE_IMG")
+
+    tau = _make_tau({
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
+
+    svc = make_service(tau)
+    dest_dir = tmp_path / "dest"
+
+    skipped: list[str] = []
+    complete: list[str] = []
+    review_prompts: list = []
+    done: list = []
+
+    svc.file_skipped.connect(skipped.append)
+    svc.file_complete.connect(lambda name, path: complete.append(name))
+    svc.review_required.connect(lambda dto: review_prompts.append(dto))
+    svc.backup_complete.connect(lambda: done.append(True))
+
+    svc.start()
+    svc.receive_manifest()
+    qtbot.wait(200)
+
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.NEEDS_REVIEW, 0.65)):
+        svc.proceed(dest_dir)
+        # backup_complete fires after _finish() — the NEEDS_REVIEW prompt is async
+        qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
+
+    # review_required is emitted after backup_complete
+    qtbot.waitUntil(lambda: len(review_prompts) > 0, timeout=3000)
+
+    # Resolve: user keeps the file
+    svc.resolve_review(review_prompts[0].channel, keep=True)
+    qtbot.wait(400)
+
+    assert complete == ["review.jpg"]
+    assert skipped == []
+    dest_file = dest_dir / "photos" / "1970" / "01-January" / "review.jpg"
+    assert dest_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# NEEDS_REVIEW verdict — user discards the file
+# ---------------------------------------------------------------------------
+
+
+def test_needs_review_user_discards_emits_file_skipped_and_deletes_file(
+        qtbot: QtBot, make_service, tmp_path: Path,
+) -> None:
+    """NEEDS_REVIEW + user discards: file_skipped fires and the saved file is deleted."""
+    manifest_stream = _make_one_shot_manifest(_manifest_json(1, 8).encode())
+    meta_stream = _make_meta_stream("review.jpg", 8)
+    data_stream = _make_data_stream(b"FAKE_IMG")
+
+    tau = _make_tau({
+        "backup_manifest":   manifest_stream,
+        "backup_ready_pc":   MagicMock(),
+        "backup_slot_meta_": meta_stream,
+        "backup_slot_data_": data_stream,
+    }, file_count=1)
+
+    svc = make_service(tau)
+    dest_dir = tmp_path / "dest"
+
+    skipped: list[str] = []
+    review_prompts: list = []
+    done: list = []
+
+    svc.file_skipped.connect(skipped.append)
+    svc.review_required.connect(lambda dto: review_prompts.append(dto))
+    svc.backup_complete.connect(lambda: done.append(True))
+
+    svc.start()
+    svc.receive_manifest()
+    qtbot.wait(200)
+
+    with patch.object(Classifier, "classify",
+                      return_value=ClassificationResult(ClassificationVerdict.NEEDS_REVIEW, 0.72)):
+        svc.proceed(dest_dir)
+        qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
+
+    # Wait for the async review prompt
+    qtbot.waitUntil(lambda: len(review_prompts) > 0, timeout=3000)
+
+    dest_file = dest_dir / "photos" / "1970" / "01-January" / "review.jpg"
+    assert dest_file.exists()  # file was saved before review
+
+    # Resolve: user discards
+    svc.resolve_review(review_prompts[0].channel, keep=False)
+    qtbot.wait(400)
+
+    assert "review.jpg" in skipped
+    assert not dest_file.exists()  # file removed after discard decision
+
+
+# ---------------------------------------------------------------------------
+# resolve_review — unknown channel is a no-op
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_review_unknown_channel_is_noop(
+        make_service,
+) -> None:
+    """resolve_review() with a channel that has no pending review is a silent no-op."""
+    tau = MagicMock()
+    svc = make_service(tau)
+    svc._is_running.set()  # simulate started state without spawning threads
+
+    # Must not raise KeyError or any other exception
+    svc.resolve_review("backup_slot_meta_999", keep=True)
+    svc.resolve_review("backup_slot_meta_999", keep=False)
