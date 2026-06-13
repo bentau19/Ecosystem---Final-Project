@@ -1,10 +1,38 @@
+import os
 import sys
 from datetime import date
 from pathlib import Path
 
 import pytest
+from PySide6.QtWidgets import QApplication
 
 from domain.entities.device_info import DeviceEntity
+
+# ---------------------------------------------------------------------------
+# Qt Platform Configuration
+# ---------------------------------------------------------------------------
+# For headless CI environments (GitHub Actions), ensure Qt uses offscreen rendering.
+# This must be set BEFORE any Qt imports to take effect.
+if "QT_QPA_PLATFORM" not in os.environ:
+    # Try to detect if we have a display; if not, use offscreen
+    has_display = os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    if not has_display and sys.platform != "win32":
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    # On Windows CI, offscreen is set explicitly in the workflow
+
+
+@pytest.fixture(scope="session")
+def qapp() -> QApplication:
+    """Ensure a QApplication exists for all tests.
+
+    This fixture is auto-used by pytestqt; providing it explicitly ensures
+    we control initialization and avoid race conditions during test startup.
+    """
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
+
 
 # ---------------------------------------------------------------------------
 # Torch stub — must run BEFORE FileDetection is added to sys.path

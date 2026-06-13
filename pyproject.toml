@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecosystem"
+version = "0.1.0"
+
+[tool.pytest.ini_options]
+# Qt headless mode (automatically detect display; use offscreen if unavailable)
+addopts = "--timeout=300 -v"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+
+# pytestqt: use offscreen platform when QT_QPA_PLATFORM is not set
+# This ensures tests work in CI environments without a display
+testpaths = ["desktop/tests", "FileDetection/tests"]

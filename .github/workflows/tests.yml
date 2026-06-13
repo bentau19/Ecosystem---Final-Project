@@ -54,7 +54,7 @@ jobs:
           pip install -r TauSync/windows/requirements.txt
           pip install -r desktop/requirements.txt
           pip install TauSync/windows
-          pip install pytest
+          pip install pytest pytest-timeout
 
       - uses: ilammy/msvc-dev-cmd@v1
 
@@ -70,7 +70,9 @@ jobs:
             desktop/native/windows/pipe/
 
       - name: Run tests
-        run: pytest desktop/
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest desktop/ --timeout=300 -v
 
 
   # =========================
@@ -91,4 +93,4 @@ jobs:
 
       - name: Run FileDetection tests
         working-directory: FileDetection
-        run: pytest tests/ -v
+        run: pytest tests/ --timeout=300 -v
