@@ -7,6 +7,67 @@ import pytest
 from domain.entities.device_info import DeviceEntity
 
 # ---------------------------------------------------------------------------
+# Torch stub — must run BEFORE FileDetection is added to sys.path
+# ---------------------------------------------------------------------------
+# image_classifer.py has `import torch` at module level.  On the desktop CI
+# runner torch is not installed (only the FileDetection job installs it).
+# Installing stubs here prevents an ImportError during test collection for
+# test_backup.py and test_phone_request.py (which both import BackupService →
+# classifer → image_classifer → torch).
+#
+# The stub only activates when torch is absent; machines with a real torch
+# installation are unaffected.
+#
+# nn.Module must be a *real* Python class — not a MagicMock — because
+# `class ImageClassifier(nn.Module)` is evaluated at class-definition time and
+# Python's metaclass machinery raises TypeError for non-type bases.
+
+
+def _ensure_torch_stub() -> None:
+    if "torch" in sys.modules:
+        return  # real torch (or a prior stub) already present
+
+    from unittest.mock import MagicMock
+
+    class _FakeNNModule:
+        """Minimal nn.Module stand-in so ImageClassifier can be defined."""
+
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__()
+
+        def to(self, device: object) -> "_FakeNNModule":
+            return self
+
+        def parameters(self):  # noqa: ANN201
+            return iter([])
+
+        def train(self, mode: bool = True) -> "_FakeNNModule":
+            return self
+
+        def eval(self) -> "_FakeNNModule":
+            return self
+
+    nn_stub = MagicMock()
+    nn_stub.Module = _FakeNNModule
+
+    torch_stub = MagicMock()
+    torch_stub.nn = nn_stub
+    torch_stub.device = MagicMock(return_value="cpu")
+    torch_stub.cuda.is_available = MagicMock(return_value=False)
+
+    sys.modules["torch"] = torch_stub
+    sys.modules["torch.nn"] = nn_stub
+    sys.modules["torch.nn.functional"] = MagicMock()
+    sys.modules["torch.utils"] = MagicMock()
+    sys.modules["torch.utils.data"] = MagicMock()
+    sys.modules["torchvision"] = MagicMock()
+    sys.modules["torchvision.models"] = MagicMock()
+    sys.modules["torchvision.transforms"] = MagicMock()
+
+
+_ensure_torch_stub()
+
+# ---------------------------------------------------------------------------
 # FileDetection sys.path injection
 # ---------------------------------------------------------------------------
 # BackupService (and its tests) import from classifer, image_classifer, etc.
