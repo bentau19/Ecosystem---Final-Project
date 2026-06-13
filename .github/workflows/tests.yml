@@ -72,7 +72,7 @@ jobs:
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest desktop/ --timeout=300 -v --forceExit
+        run: pytest desktop/ --timeout=300 -v
 
 
   # =========================
