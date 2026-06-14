@@ -44,7 +44,7 @@ def qapp() -> QApplication:
     app.quit()
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="session", autouse=True)
 def _drain_leaked_service_executors():
     """Force-stop background service executors a test left running.
 
@@ -55,14 +55,17 @@ def _drain_leaked_service_executors():
     ``stop()`` leak a worker thread stuck in that loop.
 
     At interpreter shutdown ``concurrent.futures`` installs an atexit hook that
-    *joins* every executor worker — daemon flag is irrelevant, the join is
+    *joins* every executor worker — the daemon flag is irrelevant, the join is
     explicit — and a worker still spinning in the listen loop never returns.  So
     the suite prints "N passed" and then hangs forever in CI.
 
-    Clearing ``_is_running`` after each test lets the loop exit at its next
-    iteration (mocks park with ``timeout<=5s``); shutting the executor down
-    releases its workers.  By interpreter-exit time every worker has drained, so
-    the atexit join returns immediately and pytest exits cleanly.
+    This runs once after the whole session (pytest finalizers run before the
+    interpreter's atexit hooks).  Clearing ``_is_running`` lets each leaked loop
+    exit at its next iteration; shutting the executor down releases its workers,
+    so the atexit join returns immediately and pytest exits cleanly.  Session
+    scope (vs per-test) keeps the suite fast: the leaked listeners merely sleep
+    on bounded mock waits (``timeout<=5s``) in the meantime — they never
+    busy-spin — so there is nothing to clean up until the very end.
 
     ``__dict__.get`` is used rather than ``getattr`` so ``MagicMock`` instances
     don't fabricate attributes and no ``__getattr__`` side effects fire while
