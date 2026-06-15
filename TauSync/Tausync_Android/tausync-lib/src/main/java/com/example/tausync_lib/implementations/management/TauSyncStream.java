@@ -1,5 +1,6 @@
 package com.example.tausync_lib.implementations.management;
 
+import com.example.tausync_lib.core.CoreConfig;
 import com.example.tausync_lib.interfaces.IConnectionManager;
 
 import java.io.BufferedInputStream;
@@ -13,6 +14,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Bidirectional stream returned by {@code connect(word)}.
@@ -38,7 +40,7 @@ public final class TauSyncStream implements Closeable {
     private final TauSyncOutputStream outputStream;
     private final int localId;
     private final IConnectionManager connectionManager;
-    private volatile boolean closed;
+    private final AtomicBoolean closed = new AtomicBoolean(false);  // flipped atomically so only one thread sends FIN
     private volatile boolean finSent;
 
     public TauSyncStream(InputStream readStream, int localId, IConnectionManager connectionManager) {
@@ -292,8 +294,8 @@ public final class TauSyncStream implements Closeable {
      */
     @Override
     public void close() throws IOException {
-        if (closed) return;
-        closed = true;
+        if (!closed.compareAndSet(false, true))
+            return;  // Already closed by another thread — don't send a second FIN.
 
         if (!finSent) {
             finSent = true;
@@ -308,7 +310,7 @@ public final class TauSyncStream implements Closeable {
     // ── Internals ─────────────────────────────────────────────────────
 
     private void checkOpen() throws IOException {
-        if (closed) throw new IOException("Stream is closed");
+        if (closed.get()) throw new IOException("Stream is closed");
     }
 
     private static void validateChunkSize(int chunkSize) {
@@ -330,7 +332,7 @@ public final class TauSyncStream implements Closeable {
 
         @Override
         public void write(byte[] buffer, int offset, int count) throws IOException {
-            if (closed) throw new IOException("Stream closed");
+            if (closed.get()) throw new IOException("Stream closed");
             if (finSent) return;
             if (buffer == null) throw new NullPointerException("buffer");
             if (offset < 0 || count < 0 || offset + count > buffer.length) {
@@ -338,7 +340,13 @@ public final class TauSyncStream implements Closeable {
             }
             if (count == 0) return;
 
-            connectionManager.sendStreamData(localId, buffer, offset, count);
+            // Split into STREAM_CHUNK_SIZE slices so no single frame ever exceeds MAX_PAYLOAD_SIZE.
+            int sent = 0;
+            while (sent < count) {
+                int slice = Math.min(CoreConfig.STREAM_CHUNK_SIZE, count - sent);
+                connectionManager.sendStreamData(localId, buffer, offset + sent, slice);
+                sent += slice;
+            }
         }
 
         @Override

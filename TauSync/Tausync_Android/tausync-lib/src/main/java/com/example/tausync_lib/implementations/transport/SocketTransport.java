@@ -213,7 +213,7 @@ public class SocketTransport implements ITransport {
                 if (headerRead != headerSize) break;
 
                 int payloadLength = protocolHandler.getPayloadLength(headerBuffer);
-                if (payloadLength < 0) break;
+                if (payloadLength < 0 || payloadLength > CoreConfig.MAX_PAYLOAD_SIZE) break;
 
                 int totalFrameSize = headerSize + payloadLength;
                 byte[] frame = new byte[totalFrameSize];

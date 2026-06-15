@@ -10,6 +10,8 @@ import com.google.gson.Gson;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -287,13 +289,18 @@ public class ConnectionManager implements IConnectionManager {
                             + ". Handshake may not have completed; do not write before connect(word) finishes.");
         }
 
-        byte[] chunk = new byte[count];
-        System.arraycopy(buffer, offset, chunk, 0, count);
-        byte[] frame = protocolHandler.buildFrame(peerId, chunk, (byte) 0);
-        try {
-            wifiTransport.sendRaw(frame).get();
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to send stream data", e);
+        int sent = 0;
+        while (sent < count) {
+            int sliceLen = Math.min(CoreConfig.STREAM_CHUNK_SIZE, count - sent);
+            byte[] chunk = new byte[sliceLen];
+            System.arraycopy(buffer, offset + sent, chunk, 0, sliceLen);
+            byte[] frame = protocolHandler.buildFrame(peerId, chunk, (byte) 0);
+            try {
+                wifiTransport.sendRaw(frame).get();
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to send stream data", e);
+            }
+            sent += sliceLen;
         }
     }
 
@@ -319,10 +326,20 @@ public class ConnectionManager implements IConnectionManager {
                     "No peer route for localId " + localId));
         }
 
-        byte[] chunk = new byte[count];
-        System.arraycopy(buffer, offset, chunk, 0, count);
-        byte[] frame = protocolHandler.buildFrame(peerId, chunk, (byte) 0);
-        return wifiTransport.sendRaw(frame);
+        List<byte[]> frames = new ArrayList<>();
+        int sent = 0;
+        while (sent < count) {
+            int sliceLen = Math.min(CoreConfig.STREAM_CHUNK_SIZE, count - sent);
+            byte[] chunk = new byte[sliceLen];
+            System.arraycopy(buffer, offset + sent, chunk, 0, sliceLen);
+            frames.add(protocolHandler.buildFrame(peerId, chunk, (byte) 0));
+            sent += sliceLen;
+        }
+        CompletableFuture<Void> result = CompletableFuture.completedFuture(null);
+        for (byte[] frame : frames) {
+            result = result.thenCompose(ignored -> wifiTransport.sendRaw(frame));
+        }
+        return result;
     }
 
     @Override

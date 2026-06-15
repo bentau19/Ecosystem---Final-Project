@@ -52,4 +52,11 @@ public final class CoreConfig {
 
     /** Maximum valid local ID (3-byte uint24). */
     public static final int MAX_ID = 0xFFFFFF;
+
+    /**
+     * Maximum accepted payload size per frame (16 MB). A peer can advertise any 32-bit
+     * payload length in the header; without this cap a crafted header could trigger a
+     * multi-gigabyte allocation and OOM the receiver.
+     */
+    public static final int MAX_PAYLOAD_SIZE = 16 * 1024 * 1024;
 }

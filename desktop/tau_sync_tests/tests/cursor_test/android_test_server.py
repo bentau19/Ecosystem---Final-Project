@@ -39,11 +39,16 @@ Every automated test below is paired with a matching handler in
     15. test_raw_stream         getInputStream()/getOutputStream() adapters
 
   GROUP F — File transfer
-    16. test_file_pc_to_android 5 MB file PC→Android, SHA-256 verified
-    17. test_file_android_to_pc 2 MB file Android→PC, SHA-256 verified
+    16. test_file_pc_to_android 20 MB file PC→Android, SHA-256 verified
+    17. test_file_android_to_pc 20 MB file Android→PC, SHA-256 verified
 
   GROUP G — Failure & recovery
     18. test_peer_close         Server closes before sending; client sees EOF
+
+  GROUP H — Bugfix validation
+    19. test_large_write        5 MB sent in ONE write() — auto-chunking splits into ≤64 KB frames
+    20. test_cid_00…09          10 channels opened simultaneously — unique IDs, no cross-talk
+    21. test_conc_close         Both sides close at the same time; next channel still works
 
   Plus the MANUAL CHANNELS panel in the GUI: open any meeting word to get a
   live two-way chat with the phone (Send, Spam xN, optional Echo-back).  Open
@@ -83,10 +88,12 @@ BIDIR_MESSAGE_COUNT = 50
 LONG_LINE_LENGTH = 500_000
 SMALL_FRAME_TOTAL = 204_800            # 200 KB
 SMALL_FRAME_CHUNK = 100                # bytes per write — forces many frames
-FILE_PC_TO_ANDROID_SIZE = 5 * 1024 * 1024
+FILE_PC_TO_ANDROID_SIZE = 20 * 1024 * 1024
 PEER_WORDS_WAIT_SECONDS = 45           # generous: Android may reach test 12 late
 UNICODE_PAYLOAD = "שלום_世界_\U0001f30d"
 TEST_TIMEOUT_SECONDS = 180
+LARGE_WRITE_SIZE = 5 * 1024 * 1024    # 5 MB in one write() — auto-chunking must split it
+CONCURRENT_ID_COUNT = 10               # simultaneous channels for ID-race regression test
 
 
 # ── Small helpers ────────────────────────────────────────────────────
@@ -373,7 +380,7 @@ def serve_raw_stream(tau):
 # ── Group F: file transfer ───────────────────────────────────────────
 
 def serve_file_pc_to_android(tau):
-    """Test 16: stream a 5 MB file to the client and have it verify SHA-256."""
+    """Test 16: stream a 20 MB file to the client and have it verify SHA-256."""
     stream = tau.connect("test_file_pc_to_android")
     temp_path = None
     try:
@@ -420,6 +427,67 @@ def serve_peer_close(tau):
     stream = tau.connect("test_peer_close")
     stream.close()
     print("  [test_peer_close] paired and closed without sending")
+
+
+# ── Group H: bugfix validation ───────────────────────────────────────
+
+def serve_large_write(tau):
+    """Test 19: send 5 MB in a single write() — auto-chunking must split it into ≤64 KB frames."""
+    stream = tau.connect("test_large_write")
+    try:
+        data = os.urandom(LARGE_WRITE_SIZE)
+        expected_sha = hashlib.sha256(data).hexdigest()
+        stream.write_string(f"{len(data)}\n")
+        stream.write_string(f"{expected_sha}\n")
+        stream.write(data)  # ONE write call — sender auto-chunking handles splitting
+        passed = read_text_line(stream) == "PASS"
+        print(f"  [test_large_write] {'PASS' if passed else 'FAIL'}  ({LARGE_WRITE_SIZE} bytes, 1 write call)")
+    finally:
+        stream.close()
+
+
+def _serve_single_id_channel(tau, word, expected_payload):
+    """Helper for test 20: echo back PASS/FAIL for one concurrent channel."""
+    stream = tau.connect(word)
+    try:
+        line = read_text_line(stream)
+        passed = (line == expected_payload)
+        send_verdict(stream, passed)
+        if not passed:
+            print(f"  [{word}] FAIL  expected={expected_payload!r} got={line!r}")
+    finally:
+        stream.close()
+
+
+def serve_concurrent_ids(tau):
+    """Test 20: open CONCURRENT_ID_COUNT channels simultaneously — IDs must be unique, no cross-talk."""
+    threads = [
+        run_test_on_thread(_serve_single_id_channel,
+                           (tau, f"test_cid_{i:02d}", f"payload_{i:02d}"))
+        for i in range(CONCURRENT_ID_COUNT)
+    ]
+    for thread in threads:
+        thread.join(timeout=30)
+    print(f"  [test_concurrent_ids] served {CONCURRENT_ID_COUNT} concurrent channels")
+
+
+def serve_concurrent_close(tau):
+    """Test 21: both sides close at the same time; the next channel must still work cleanly."""
+    # Round 1: Android signals 'ready' then closes; we close at the same time.
+    stream = tau.connect("test_conc_close")
+    try:
+        read_text_line(stream)  # blocks until Android writes 'ready\n' and closes
+    finally:
+        stream.close()
+
+    # Round 2: verify the transport is clean — if double-FIN corrupted ID state this echo fails.
+    stream2 = tau.connect("test_conc_close_verify")
+    try:
+        line = read_text_line(stream2)
+        stream2.write_string(line + "\n")
+        print(f"  [test_conc_close]  verify echo: {line!r}")
+    finally:
+        stream2.close()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -470,6 +538,9 @@ def serve_all_tests(tau):
         run_test_on_thread(serve_file_pc_to_android, (tau,)),
         run_test_on_thread(serve_file_android_to_pc, (tau,)),
         run_test_on_thread(serve_peer_close, (tau,)),
+        run_test_on_thread(serve_large_write, (tau,)),
+        run_test_on_thread(serve_concurrent_ids, (tau,)),
+        run_test_on_thread(serve_concurrent_close, (tau,)),
     ]
 
     for thread in threads:

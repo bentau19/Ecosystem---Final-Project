@@ -342,7 +342,7 @@ namespace TauSync.Implementations.Transport
                 return ReadFrameResult.Failed;
 
             int payloadLength = _protocolHandler.GetPayloadLength(headerBuffer);
-            if (payloadLength < 0)
+            if (payloadLength < 0 || payloadLength > CoreConfig.MaxPayloadSize)
                 return ReadFrameResult.Failed;
 
             int totalFrameSize = headerSize + payloadLength;

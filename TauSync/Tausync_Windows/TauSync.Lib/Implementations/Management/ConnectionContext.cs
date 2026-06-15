@@ -28,6 +28,9 @@ namespace TauSync.Implementations.Management
 
         private int _nextCorrelationId = MinId;
 
+        /// <summary>Guards the wrap-around increment in <see cref="ReserveId"/> so two threads cannot both reset to MinId and hand out a duplicate ID.</summary>
+        private readonly object _idLock = new object();
+
         /// <summary>
         /// IDs eligible for reuse, keyed for idempotent add (prevents double-recycle when both
         /// FIN-dispatch and <see cref="ConnectionManager.CompleteStream"/> release the same ID).
@@ -90,13 +93,14 @@ namespace TauSync.Implementations.Management
                     return key;
             }
 
-            int id = Interlocked.Increment(ref _nextCorrelationId) - 1;
-            if (id < MinId || id > MaxId)
+            lock (_idLock)
             {
-                Interlocked.Exchange(ref _nextCorrelationId, MinId + 1);
-                id = MinId;
+                int id = _nextCorrelationId;
+                _nextCorrelationId++;
+                if (_nextCorrelationId > MaxId)
+                    _nextCorrelationId = MinId;
+                return id;
             }
-            return id;
         }
 
 

@@ -34,6 +34,9 @@ public final class ConnectionContext {
 
     private final AtomicInteger nextCorrelationId = new AtomicInteger(CoreConfig.MIN_ID);
 
+    /** Guards the wrap-around increment in {@link #reserveId()} so two threads cannot both reset to MIN_ID and hand out a duplicate ID. */
+    private final Object idLock = new Object();
+
     /**
      * IDs eligible for reuse. Uses ConcurrentHashMap as a set (value is always 0)
      * for idempotent add — safe when both FIN-dispatch and completeStream release
@@ -118,12 +121,13 @@ public final class ConnectionContext {
             }
         }
 
-        int id = nextCorrelationId.getAndIncrement();
-        if (id < CoreConfig.MIN_ID || id > CoreConfig.MAX_ID) {
-            nextCorrelationId.set(CoreConfig.MIN_ID + 1);
-            id = CoreConfig.MIN_ID;
+        synchronized (idLock) {
+            int id = nextCorrelationId.get();
+            int next = id + 1;
+            if (next > CoreConfig.MAX_ID) next = CoreConfig.MIN_ID;
+            nextCorrelationId.set(next);
+            return id;
         }
-        return id;
     }
 
     /**

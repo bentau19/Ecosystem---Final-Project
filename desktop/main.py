@@ -5,6 +5,9 @@ the application instance exists, then shows the main window.
 """
 
 import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "domain"))
 
 from PySide6.QtWidgets import QApplication
 

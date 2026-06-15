@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Channels;
 using TauSync.Core;
 using TauSync.Implementations.Protocol;
@@ -259,10 +260,16 @@ namespace TauSync.Implementations.Management
                 throw new InvalidOperationException(
                     $"No peer route for localId {localId}. Handshake may not have completed; do not write before Connect(word) finishes.");
 
-            byte[] chunk = new byte[count];
-            Buffer.BlockCopy(buffer, offset, chunk, 0, count);
-            byte[] frame = _protocolHandler.BuildFrame(peerId.Value, chunk, 0);
-            _wifiTransport.SendRaw(frame).GetAwaiter().GetResult();
+            int sent = 0;
+            while (sent < count)
+            {
+                int sliceLen = Math.Min(CoreConfig.StreamChunkSize, count - sent);
+                byte[] chunk = new byte[sliceLen];
+                Buffer.BlockCopy(buffer, offset + sent, chunk, 0, sliceLen);
+                byte[] frame = _protocolHandler.BuildFrame(peerId.Value, chunk, 0);
+                _wifiTransport.SendRaw(frame).GetAwaiter().GetResult();
+                sent += sliceLen;
+            }
         }
 
         /// <inheritdoc />
@@ -284,11 +291,17 @@ namespace TauSync.Implementations.Management
                 throw new InvalidOperationException(
                     $"No peer route for localId {localId}. Handshake may not have completed; do not write before Connect(word) finishes.");
 
-            cancellationToken.ThrowIfCancellationRequested();
-            byte[] chunk = new byte[count];
-            Buffer.BlockCopy(buffer, offset, chunk, 0, count);
-            byte[] frame = _protocolHandler.BuildFrame(peerId.Value, chunk, 0);
-            await _wifiTransport.SendRaw(frame).ConfigureAwait(false);
+            int sent = 0;
+            while (sent < count)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int sliceLen = Math.Min(CoreConfig.StreamChunkSize, count - sent);
+                byte[] chunk = new byte[sliceLen];
+                Buffer.BlockCopy(buffer, offset + sent, chunk, 0, sliceLen);
+                byte[] frame = _protocolHandler.BuildFrame(peerId.Value, chunk, 0);
+                await _wifiTransport.SendRaw(frame).ConfigureAwait(false);
+                sent += sliceLen;
+            }
         }
 
         /// <inheritdoc />
@@ -362,7 +375,8 @@ namespace TauSync.Implementations.Management
         private readonly Stream _readStream;
         private readonly int _localId;
         private readonly IConnectionManager _connectionManager;
-        private bool _disposed;
+        private int _disposeState;  // 0 = live, 1 = disposed; flipped atomically so only one thread sends FIN
+        private bool _disposed => Volatile.Read(ref _disposeState) != 0;
         private bool _finSent;
 
         public DuplexStream(Stream readStream, int localId, IConnectionManager connectionManager)
@@ -398,28 +412,42 @@ namespace TauSync.Implementations.Management
         {
             if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
             if (_finSent) return;
-            _connectionManager.SendStreamData(_localId, buffer, offset, count);
+            int sent = 0;
+            while (sent < count)
+            {
+                int slice = Math.Min(CoreConfig.StreamChunkSize, count - sent);
+                _connectionManager.SendStreamData(_localId, buffer, offset + sent, slice);
+                sent += slice;
+            }
         }
 
         public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
             if (_finSent) return;
-            await _connectionManager.SendStreamDataAsync(_localId, buffer, offset, count, cancellationToken).ConfigureAwait(false);
+            int sent = 0;
+            while (sent < count)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int slice = Math.Min(CoreConfig.StreamChunkSize, count - sent);
+                await _connectionManager.SendStreamDataAsync(_localId, buffer, offset + sent, slice, cancellationToken).ConfigureAwait(false);
+                sent += slice;
+            }
         }
 
         public override void Flush() => _readStream?.Flush();
 
         protected override void Dispose(bool disposing)
         {
-            if (_disposed) return;
-            if (disposing && !_finSent)
+            if (Interlocked.Exchange(ref _disposeState, 1) != 0)
+                return;  // Already disposed by another thread — don't send a second FIN.
+
+            if (disposing)
             {
                 _finSent = true;
                 _connectionManager.CompleteStream(_localId);
                 _readStream?.Dispose();
             }
-            _disposed = true;
             base.Dispose(disposing);
         }
     }

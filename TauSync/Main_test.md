@@ -4,7 +4,7 @@
 
 This suite validates the TauSync protocol end-to-end between a Windows PC
 (Python server) and an Android device (Java client). The PC is the server;
-the Android app connects and drives **18 automated tests** plus an
+the Android app connects and drives **21 automated tests** plus an
 interactive **manual mode**.
 
 The two halves are paired by **meeting word** (the channel name). Each test on
@@ -70,13 +70,13 @@ on the console to run the whole suite again.
 
 ## Running the Automated Tests
 
-Tap **Run All Tests**. The app runs all 18 tests sequentially and logs
+Tap **Run All Tests**. The app runs all 21 tests sequentially and logs
 `PASS`/`FAIL` with timing for each in the **Log** section at the bottom.
 
 When the run finishes, a single **clear banner** appears above the log:
 
-- **`✔ ALL 18 TESTS PASSED`** in green — everything is fine, or
-- **`✘ 15 / 18 PASSED — FAILED: Test 5, Test 12, …`** in red — listing exactly
+- **`✔ ALL 21 TESTS PASSED`** in green — everything is fine, or
+- **`✘ 18 / 21 PASSED — FAILED: Test 5, Test 12, …`** in red — listing exactly
   which tests failed so you can scroll the log to those entries.
 
 This banner is the at-a-glance regression gate: green means a code change broke
@@ -120,13 +120,20 @@ nothing; red names what to investigate.
 ### Group F — File transfer
 | # | Channel | What it verifies |
 |---|---------|-----------------|
-| 16 | `test_file_pc_to_android` | 5 MB file PC→Android via `write_file`/`readToFile`, SHA-256 |
-| 17 | `test_file_android_to_pc` | 2 MB file Android→PC via `writeFile`/`read_to_file`, SHA-256 |
+| 16 | `test_file_pc_to_android` | 20 MB file PC→Android via `write_file`/`readToFile`, SHA-256 |
+| 17 | `test_file_android_to_pc` | 20 MB file Android→PC via `writeFile`/`read_to_file`, SHA-256 |
 
 ### Group G — Failure & recovery
 | # | Channel | What it verifies |
 |---|---------|-----------------|
 | 18 | `test_peer_close` | Server closes before sending — client `readLine()` returns `null` (EOF) |
+
+### Group H — Bugfix validation
+| # | Channel | What it verifies |
+|---|---------|-----------------|
+| 19 | `test_large_write` | PC sends 5 MB in **one** `write()` call — auto-chunking splits into ≤64 KB frames, SHA-256 verified end-to-end |
+| 20 | `test_cid_00`…`test_cid_09` | 10 channels opened simultaneously — each receives its own unique payload with no cross-talk (ID reservation race fix) |
+| 21 | `test_conc_close` + `test_conc_close_verify` | Both sides close a channel at the same time — the next channel on the same socket still works (close TOCTOU fix) |
 
 > **Note on Test 12 (timing-sensitive):** the PC polls `get_peer_waiting_words()`
 > for up to 45 s while the Android side holds two pending `connect()` calls open.

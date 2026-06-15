@@ -14,6 +14,9 @@
 *.suo
 *.jpg
 *.png
+*.dll
+*.pdb
+
 ### --- Python Specific --- ###
 __pycache__/
 *.py[cod]

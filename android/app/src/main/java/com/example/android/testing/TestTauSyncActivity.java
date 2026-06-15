@@ -80,10 +80,14 @@ import java.util.concurrent.atomic.AtomicReference;
  *    14 test_small_frames        200 KB in 100-byte frames (reassembly)
  *    15 test_raw_stream          getInputStream()/getOutputStream()
  *   ─ Group F: file transfer ────────────────────────────────────────
- *    16 test_file_pc_to_android  5 MB PC→Android, SHA-256
- *    17 test_file_android_to_pc  2 MB Android→PC, SHA-256
+ *    16 test_file_pc_to_android  20 MB PC→Android, SHA-256
+ *    17 test_file_android_to_pc  20 MB Android→PC, SHA-256
  *   ─ Group G: failure & recovery ───────────────────────────────────
  *    18 test_peer_close          server closes before sending; EOF
+ *   ─ Group H: bugfix validation ────────────────────────────────────
+ *    19 test_large_write         5 MB in one write() — auto-chunking splits into ≤64 KB frames
+ *    20 test_cid_00…09           10 simultaneous channels — unique IDs, no cross-talk
+ *    21 test_conc_close          both sides close at once; next channel still works
  * </pre>
  *
  * <h3>How to add your own test</h3>
@@ -99,7 +103,9 @@ import java.util.concurrent.atomic.AtomicReference;
 public class TestTauSyncActivity extends AppCompatActivity {
 
     private static final int LONG_LINE_LENGTH = 500_000;
-    private static final long ANDROID_FILE_SIZE = 2L * 1024 * 1024;
+    private static final long ANDROID_FILE_SIZE = 20L * 1024 * 1024;
+    private static final int LARGE_WRITE_SIZE = 5 * 1024 * 1024;  // 5 MB — sent by PC in one write()
+    private static final int CONCURRENT_ID_COUNT = 10;             // simultaneous channels for ID-race test
     private static final int COLOR_PASS = 0xFF1B7F32;
     private static final int COLOR_FAIL = 0xFFC62828;
     private static final int COLOR_NEUTRAL = 0xFF555555;
@@ -167,7 +173,7 @@ public class TestTauSyncActivity extends AppCompatActivity {
     private void addConnectionSection(LinearLayout parent) {
         parent.addView(newSectionTitle("Connection"));
 
-        ipAddressInput = newEditText("Server IP", "192.168.1.76");
+        ipAddressInput = newEditText("Server IP", "192.168.1.60");
         parent.addView(ipAddressInput);
 
         connectButton = new Button(this);
@@ -516,6 +522,9 @@ public class TestTauSyncActivity extends AppCompatActivity {
             runFilePcToAndroidTest();
             runFileAndroidToPcTest();
             runPeerCloseTest();
+            runLargeWriteTest();
+            runConcurrentIdsTest();
+            runConcurrentCloseTest();
             runOnUiThread(this::publishSummary);
         });
     }
@@ -1040,6 +1049,104 @@ public class TestTauSyncActivity extends AppCompatActivity {
                     passed ? "EOF detected" : "expected null got='" + line + "'");
         } catch (Exception exception) {
             recordResult("Test 18", false, elapsed(startTime), "ERROR: " + exception.getMessage());
+        }
+    }
+
+    // ── Test 19: Large write — auto-chunking ────────────────────────────
+
+    private void runLargeWriteTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[Test 19] Large Write (auto-chunk): PC sends " + LARGE_WRITE_SIZE / (1024 * 1024) + " MB in one write()...");
+        try {
+            TauSyncStream stream = tauSync.connect("test_large_write");
+
+            String sizeLine = stream.readLine();
+            if (sizeLine == null) throw new Exception("EOF before size header");
+            int size = Integer.parseInt(sizeLine.trim());
+
+            String expectedSha = stream.readLine();
+            if (expectedSha == null) throw new Exception("EOF before SHA header");
+
+            byte[] data = stream.readExactly(size);
+            String actualSha = computeSha256Hex(data);
+
+            boolean passed = expectedSha.trim().equals(actualSha);
+            stream.writeString(passed ? "PASS\n" : "FAIL\n");
+            stream.close();
+
+            recordResult("Test 19", passed, elapsed(startTime),
+                    size + " bytes received from a single PC write()");
+        } catch (Exception e) {
+            recordResult("Test 19", false, elapsed(startTime), "ERROR: " + e.getMessage());
+        }
+    }
+
+    // ── Test 20: Concurrent channels — ID uniqueness ─────────────────────
+
+    private void runConcurrentIdsTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[Test 20] Concurrent IDs: opening " + CONCURRENT_ID_COUNT + " channels simultaneously...");
+
+        AtomicBoolean allPassed = new AtomicBoolean(true);
+        CountDownLatch allDone = new CountDownLatch(CONCURRENT_ID_COUNT);
+
+        for (int i = 0; i < CONCURRENT_ID_COUNT; i++) {
+            final int index = i;
+            final String word = String.format(Locale.US, "test_cid_%02d", i);
+            final String payload = String.format(Locale.US, "payload_%02d", i);
+            backgroundExecutor.execute(() -> {
+                try {
+                    TauSyncStream stream = tauSync.connect(word);
+                    stream.writeString(payload + "\n");
+                    String verdict = stream.readLine();
+                    stream.close();
+                    if (!"PASS".equals(verdict)) {
+                        allPassed.set(false);
+                        appendLog("  [cid_" + String.format(Locale.US, "%02d", index)
+                                + "] FAIL: verdict=" + verdict);
+                    }
+                } catch (Exception e) {
+                    allPassed.set(false);
+                    appendLog("  [cid_" + String.format(Locale.US, "%02d", index)
+                            + "] ERROR: " + e.getMessage());
+                } finally {
+                    allDone.countDown();
+                }
+            });
+        }
+
+        try {
+            allDone.await(30, TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {}
+
+        recordResult("Test 20", allPassed.get(), elapsed(startTime),
+                CONCURRENT_ID_COUNT + " concurrent channels, no cross-talk");
+    }
+
+    // ── Test 21: Concurrent close — no double-FIN corruption ─────────────
+
+    private void runConcurrentCloseTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[Test 21] Concurrent Close: simultaneous close, then verify next channel...");
+        try {
+            // Signal PC to close too, then close our end — both sides close at the same time.
+            TauSyncStream stream = tauSync.connect("test_conc_close");
+            stream.writeString("ready\n");
+            stream.close();
+
+            // If double-FIN corrupted the ID/routing state the echo below will fail.
+            TauSyncStream verify = tauSync.connect("test_conc_close_verify");
+            String payload = "verify_ok";
+            verify.writeString(payload + "\n");
+            String reply = verify.readLine();
+            verify.close();
+
+            boolean passed = payload.equals(reply);
+            recordResult("Test 21", passed, elapsed(startTime),
+                    passed ? "no corruption after concurrent close"
+                           : "expected=" + payload + " got=" + reply);
+        } catch (Exception e) {
+            recordResult("Test 21", false, elapsed(startTime), "ERROR: " + e.getMessage());
         }
     }
 
