@@ -1,0 +1,17 @@
+{
+  "name": "BackupFileResult",
+  "description": "Per-file transfer result tokens written by the PC on BACKUP_FILE_RESULT channels. Both PC and Android must write and compare these exact strings — define them here once and generate both sides.",
+  "type": "string",
+  "members": [
+    {
+      "name": "SUCCESS",
+      "value": "succ",
+      "description": "The file was received and saved (or correctly screened out) by the PC — the transfer itself completed without error."
+    },
+    {
+      "name": "FAILURE",
+      "value": "fail",
+      "description": "A transport/IO problem occurred while receiving or saving the file on the PC."
+    }
+  ]
+}

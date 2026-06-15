@@ -13,12 +13,22 @@ import java.util.concurrent.CompletableFuture;
 public interface ITransport extends AutoCloseable {
 
     /**
-     * Establishes the transport connection.
+     * Establishes the transport connection with no timeout (waits indefinitely).
      *
      * @param targetId peer IP for client mode; null or empty for server mode
      * @return future that completes when the connection is established
      */
     CompletableFuture<Void> connect(String targetId);
+
+    /**
+     * Establishes the transport connection, giving up after the timeout.
+     *
+     * @param targetId       peer IP for client mode; null or empty for server mode
+     * @param timeoutSeconds max seconds to wait for the connection; null = wait forever
+     * @return future that completes when connected, or completes exceptionally with
+     *         {@link java.util.concurrent.TimeoutException} when the timeout elapses
+     */
+    CompletableFuture<Void> connect(String targetId, Integer timeoutSeconds);
 
     /**
      * Sends a complete TPack frame (header + payload) over the wire.

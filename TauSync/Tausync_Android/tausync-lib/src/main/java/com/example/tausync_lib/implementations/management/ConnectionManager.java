@@ -12,6 +12,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -19,6 +20,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Connection manager per TauSync v3: both sides call {@link #connect(String)} with the
@@ -33,9 +35,20 @@ public class ConnectionManager implements IConnectionManager {
     private final IProtocolHandler protocolHandler;
     private final Gson gson = new Gson();
 
-    /** Per-word queue of incoming connections (peer sent REQ before us or simultaneously). */
+    /**
+     * Per-word queue of incoming connections (peer sent REQ before us or simultaneously).
+     */
     private final ConcurrentHashMap<String, LinkedBlockingQueue<TauSyncStream>> incomingByWord =
             new ConcurrentHashMap<>();
+
+    /**
+     * Words with an unresolved connect() in flight. Guards against concurrent same-word
+     * handshakes, which would clobber the single service-registry slot and orphan one of
+     * the paired streams on the peer side (silent hang, no error). Keyed by trimmed word,
+     * case-sensitive — matching how {@code ConnectionContext.registerService} keys.
+     * Mirrors C# {@code _inFlightWords}.
+     */
+    private final Set<String> inFlightWords = ConcurrentHashMap.newKeySet();
 
     /**
      * Dedicated pool for blocking handshake operations. Avoids starving the
@@ -69,13 +82,18 @@ public class ConnectionManager implements IConnectionManager {
 
     @Override
     public CompletableFuture<Void> connectTransport(String targetId) {
+        return connectTransport(targetId, null);
+    }
+
+    @Override
+    public CompletableFuture<Void> connectTransport(String targetId, Integer timeoutSeconds) {
         return CompletableFuture.runAsync(() -> {
             try {
-                ConnectionContext.getInstance().initializeTransports(targetId);
+                ConnectionContext.getInstance().initializeTransports(targetId, timeoutSeconds);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
-        });
+        }, HANDSHAKE_POOL);
     }
 
     @Override
@@ -85,9 +103,34 @@ public class ConnectionManager implements IConnectionManager {
 
     @Override
     public CompletableFuture<TauSyncStream> connect(String word) {
+        return connect(word, CoreConfig.HANDSHAKE_TIMEOUT_SECONDS);
+    }
+
+    @Override
+    public CompletableFuture<TauSyncStream> connect(String word, int timeoutSec) {
         validateConnectState(word);
         String wordTrimmed = word.trim();
 
+        // Reject a second connect() while one is still in flight for the same word.
+        // Two concurrent same-word handshakes clobber the single service-registry slot
+        // and leave the peer with an orphaned stream that hangs forever — fail loud instead.
+        if (!inFlightWords.add(wordTrimmed)) {
+            throw new IllegalStateException(
+                    "Connect already in progress for word '" + wordTrimmed
+                            + "'. Wait for it to resolve or use a distinct word.");
+        }
+        try {
+            return connectCore(wordTrimmed, timeoutSec);
+        } catch (RuntimeException | Error e) {
+            // A synchronous failure means whenComplete below never runs — release the
+            // guard here so the word is not permanently blocked.
+            inFlightWords.remove(wordTrimmed);
+            throw e;
+        }
+    }
+
+    /** Runs the actual handshake for an already guard-acquired word. */
+    private CompletableFuture<TauSyncStream> connectCore(String wordTrimmed, int timeoutSec) {
         LinkedBlockingQueue<TauSyncStream> wordChannel = getOrCreateWordChannel(wordTrimmed);
         registerWordListener(wordTrimmed, wordChannel);
 
@@ -95,7 +138,30 @@ public class ConnectionManager implements IConnectionManager {
         ConnectAttempt attempt = createConnectAttempt(ctx);
 
         return sendWordRequestAsync(wordTrimmed, attempt.localId)
-                .thenCompose(ignored -> resolveConnectRaceAsync(ctx, wordChannel, attempt));
+                .thenCompose(ignored -> resolveConnectRaceAsync(ctx, wordChannel, attempt, timeoutSec, wordTrimmed))
+                .whenComplete((stream, ex) -> {
+                    // Unregister the service listener after the connection resolves (success or failure).
+                    //
+                    // Without this cleanup, the callback registered by registerWordListener stays in
+                    // ConnectionContext.serviceRegistry after the first use. On a second transfer using
+                    // the same word, the incoming REQ is handled directly (bypassing pendingDiscoveryByWord),
+                    // so getPeerWaitingWords() never surfaces the word again and the app's polling loop
+                    // cannot trigger a second connect() call — causing the desktop to hang forever.
+                    ConnectionContext.getInstance().unregisterService(wordTrimmed);
+                    // Remove the word channel (mirrors C# _incomingByWord.TryRemove). Without this,
+                    // a stale stream offered after a timed-out attempt stayed queued and was handed
+                    // to the NEXT connect(word) call, pairing it with dead routing state.
+                    incomingByWord.remove(wordTrimmed);
+                    if (ex != null) {
+                        // Both race paths failed (typically a double timeout) — release the outgoing
+                        // attempt's id/handler and close its stream. cleanup is idempotent, so it is
+                        // safe even when the peer path already cleaned the attempt up.
+                        cleanupLosingOutgoingAttempt(ctx, attempt, wordTrimmed);
+                    }
+                    // Release the in-flight guard last, so the word only becomes reusable after
+                    // all per-word state (service registry, word channel) is torn down.
+                    inFlightWords.remove(wordTrimmed);
+                });
     }
 
     // ── Connect internals ─────────────────────────────────────────────
@@ -147,16 +213,24 @@ public class ConnectionManager implements IConnectionManager {
      * TCP client prefers the outgoing (own REQ->OK) path,
      * TCP server prefers the incoming (peer REQ->service callback) path.
      * Falls back to the other path if the preferred one fails.
+     *
+     * @param timeoutSec how long to wait for the peer before giving up on each path
      */
     private CompletableFuture<TauSyncStream> resolveConnectRaceAsync(
             ConnectionContext ctx,
             LinkedBlockingQueue<TauSyncStream> channel,
-            ConnectAttempt attempt) {
+            ConnectAttempt attempt,
+            int timeoutSec,
+            String word) {
 
-        int timeoutSec = CoreConfig.HANDSHAKE_TIMEOUT_SECONDS;
-
+        // Arm the own-path timeout HERE — at race start — so both paths share a single
+        // wall-clock budget (mirrors the C# shared timeoutCts). Arming it lazily inside
+        // the fallback branch let the server role wait peerPath(timeoutSec) +
+        // ownPath(timeoutSec) = 2x the requested timeout, overrunning the caller's
+        // outer .get(timeoutSec + 5) guard in sdk.TauSync.connect().
         CompletableFuture<TauSyncStream> ownPath =
-                waitForOkAndBuildStreamAsync(attempt.responseFuture, ctx, attempt.localId, attempt.backStream);
+                waitForOkAndBuildStreamAsync(attempt.responseFuture, ctx, attempt.localId, attempt.backStream)
+                        .orTimeout(timeoutSec, TimeUnit.SECONDS);
 
         CompletableFuture<TauSyncStream> peerPath = CompletableFuture.supplyAsync(() -> {
             try {
@@ -183,10 +257,9 @@ public class ConnectionManager implements IConnectionManager {
 
         if (preferOwnPath) {
             return ownPath
-                    .orTimeout(timeoutSec, TimeUnit.SECONDS)
                     .handle((stream, ex) -> {
                         if (ex == null) return CompletableFuture.completedFuture(stream);
-                        cleanupLosingOutgoingAttempt(ctx, attempt);
+                        cleanupLosingOutgoingAttempt(ctx, attempt, word);
                         return peerPath;
                     })
                     .thenCompose(f -> f);
@@ -195,18 +268,62 @@ public class ConnectionManager implements IConnectionManager {
         return peerPath
                 .handle((stream, ex) -> {
                     if (ex == null) {
-                        cleanupLosingOutgoingAttempt(ctx, attempt);
+                        cleanupLosingOutgoingAttempt(ctx, attempt, word);
                         return CompletableFuture.completedFuture(stream);
                     }
-                    return ownPath.orTimeout(timeoutSec, TimeUnit.SECONDS);
+                    // ownPath's timeout was armed at race start, so this fallback expires at
+                    // the same wall-clock deadline instead of granting a fresh budget.
+                    return ownPath;
                 })
                 .thenCompose(f -> f);
     }
 
-    private static void cleanupLosingOutgoingAttempt(ConnectionContext ctx, ConnectAttempt attempt) {
+    /**
+     * Tears down an outgoing connect attempt whose REQ ended up unused — either the
+     * connect failed (timeout / double timeout) or it resolved via the peer path.
+     *
+     * <p>Besides the local cleanup, sends a best-effort CANCEL frame (spec §7.8) so the
+     * peer removes the now-orphaned REQ from its pending-discovery queue — or, if the
+     * peer already handshook it into an incoming channel, aborts that channel with a
+     * synthetic FIN. Without the CANCEL, one-shot meeting words leak a "peer waiting"
+     * entry on the peer for the rest of the session (re-reported by
+     * {@code getPeerWaitingWords()} on every poll tick).
+     */
+    private void cleanupLosingOutgoingAttempt(ConnectionContext ctx, ConnectAttempt attempt, String word) {
+        // One-shot: cleanup can run more than once for the same attempt (e.g. the
+        // whenComplete failure path after a race branch already cleaned up) — the
+        // CANCEL must be sent exactly once per abandoned REQ.
+        if (attempt.cancelSent.compareAndSet(false, true)) {
+            trySendWordCancel(word, attempt.localId);
+        }
         ctx.releaseId(attempt.localId);
         ctx.unregisterHandler(attempt.localId);
-        try { attempt.backStream.close(); } catch (Exception ignored) {}
+        try {
+            attempt.backStream.close();
+        } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * Sends a best-effort CANCEL discovery frame for an abandoned REQ. Fire-and-forget:
+     * failures are swallowed because cancellation is an optimisation (the transport may
+     * already be dead, and an old peer simply drops unknown discovery statuses).
+     */
+    private void trySendWordCancel(String word, int localId) {
+        try {
+            TransferRequest cancel = new TransferRequest();
+            cancel.setMagicBytes(CoreConfig.MAGIC_BYTES);
+            cancel.setSenderID(localId);
+            cancel.setType(word);
+            cancel.setStatus("CANCEL");
+
+            String json = gson.toJson(cancel);
+            byte[] body = json.getBytes(StandardCharsets.UTF_8);
+            byte[] frame = protocolHandler.buildFrame(CoreConfig.CONTROL_CHANNEL_ID, body, CoreConfig.FLAG_CONTROL);
+            wifiTransport.sendRaw(frame);
+        } catch (Exception ignored) {
+            // Best-effort — never let a failed CANCEL break the connect cleanup path.
+        }
     }
 
     private void handleWordRequest(String wordKey, LinkedBlockingQueue<TauSyncStream> channel,
@@ -262,7 +379,10 @@ public class ConnectionManager implements IConnectionManager {
                     || !response.getStatus().trim().equalsIgnoreCase("OK")) {
                 ctx.releaseId(localId);
                 ctx.unregisterHandler(localId);
-                try { backStream.close(); } catch (Exception ignored) {}
+                try {
+                    backStream.close();
+                } catch (Exception ignored) {
+                }
                 throw new RuntimeException("Connect rejected by peer.");
             }
             ctx.setTargetForSend(localId, response.getSenderID());
@@ -352,7 +472,8 @@ public class ConnectionManager implements IConnectionManager {
             byte[] finFrame = protocolHandler.buildFrame(peerId, new byte[0], CoreConfig.FLAG_FIN);
             try {
                 wifiTransport.sendRaw(finFrame).get();
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
         ConnectionContext.getInstance().releaseId(localId);
     }
@@ -395,6 +516,12 @@ public class ConnectionManager implements IConnectionManager {
         final int localId;
         final BackBufferedInputStream backStream;
         final CompletableFuture<byte[]> responseFuture;
+
+        /**
+         * One-shot guard so the CANCEL frame for this attempt's abandoned REQ is sent
+         * exactly once, even when cleanup runs from more than one race/cleanup path.
+         */
+        final AtomicBoolean cancelSent = new AtomicBoolean(false);
 
         ConnectAttempt(int localId, BackBufferedInputStream backStream,
                        CompletableFuture<byte[]> responseFuture) {

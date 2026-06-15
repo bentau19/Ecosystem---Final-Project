@@ -1,9 +1,15 @@
 package com.example.tausync_lib.sdk;
 
+import static android.content.ContentValues.TAG;
+
+import android.util.Log;
+
+import com.example.tausync_lib.core.CoreConfig;
 import com.example.tausync_lib.implementations.management.ConnectionContext;
 import com.example.tausync_lib.implementations.management.ConnectionManager;
 import com.example.tausync_lib.implementations.management.TauSyncStream;
 
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -38,7 +44,7 @@ public final class TauSync {
     private volatile boolean disposed;
 
     /**
-     * Starts listening for incoming connections (server mode, blocking).
+     * Starts listening for incoming connections (server mode, blocking, no timeout).
      *
      * <p>Blocks until a remote peer connects on the default port (8888).
      * Only needs to be called once per process -- the underlying transport
@@ -48,6 +54,19 @@ public final class TauSync {
      *                               or this instance is disposed
      */
     public void listen() {
+        listen(null);
+    }
+
+    /**
+     * Starts listening for incoming connections (server mode, blocking).
+     *
+     * @param timeoutSeconds max seconds to wait for a client; null = wait forever
+     * @throws RuntimeException      wrapping {@link java.util.concurrent.TimeoutException}
+     *                               when no client connects within the timeout
+     * @throws IllegalStateException if the transport is already in client mode
+     *                               or this instance is disposed
+     */
+    public void listen(Integer timeoutSeconds) {
         checkNotDisposed();
         synchronized (roleLock) {
             if (globalRole == ROLE_CLIENT) {
@@ -62,7 +81,7 @@ public final class TauSync {
         }
 
         try {
-            ConnectionContext.getInstance().initializeTransports(null);
+            ConnectionContext.getInstance().initializeTransports(null, timeoutSeconds);
             manager = new ConnectionManager();
         } catch (Exception e) {
             synchronized (roleLock) {
@@ -74,7 +93,7 @@ public final class TauSync {
     }
 
     /**
-     * Connects to a remote TauSync server (client mode, blocking).
+     * Connects to a remote TauSync server (client mode, blocking, no timeout).
      *
      * <p>Blocks until the TCP connection is established. Retries
      * automatically every 2 seconds until success.
@@ -85,6 +104,25 @@ public final class TauSync {
      *                                  already connected to a different IP, or disposed
      */
     public void connectTo(String ip) {
+        connectTo(ip, null);
+    }
+
+    /**
+     * Connects to a remote TauSync server (client mode, blocking).
+     *
+     * <p>Retries automatically every 2 seconds until success or until the
+     * timeout elapses. Each individual TCP attempt is also bounded by the
+     * remaining budget, so a black-holed IP cannot overrun the timeout.
+     *
+     * @param ip             the server's IP address (e.g. "192.168.1.100")
+     * @param timeoutSeconds max seconds to keep retrying; null = retry forever
+     * @throws RuntimeException         wrapping {@link java.util.concurrent.TimeoutException}
+     *                                  when the timeout elapses before connecting
+     * @throws IllegalArgumentException if ip is null or blank
+     * @throws IllegalStateException    if the transport is already in server mode,
+     *                                  already connected to a different IP, or disposed
+     */
+    public void connectTo(String ip, Integer timeoutSeconds) {
         checkNotDisposed();
         if (ip == null || ip.trim().isEmpty()) {
             throw new IllegalArgumentException("ip must not be null or blank");
@@ -111,7 +149,7 @@ public final class TauSync {
         }
 
         try {
-            ConnectionContext.getInstance().initializeTransports(trimmed);
+            ConnectionContext.getInstance().initializeTransports(trimmed, timeoutSeconds);
             manager = new ConnectionManager();
         } catch (Exception e) {
             synchronized (roleLock) {
@@ -135,7 +173,7 @@ public final class TauSync {
      * @throws IllegalStateException    if not connected or disposed
      */
     public TauSyncStream connect(String word) {
-        return connect(word, 30);
+        return connect(word, CoreConfig.HANDSHAKE_TIMEOUT_SECONDS);
     }
 
     /**
@@ -160,8 +198,16 @@ public final class TauSync {
         }
 
         try {
-            return manager.connect(word).get(timeoutSec, TimeUnit.SECONDS);
+            // Pass timeoutSec into the manager so the internal ownPath/peerPath race
+            // uses the caller's budget, not the hardcoded CoreConfig.HANDSHAKE_TIMEOUT_SECONDS.
+            // Both race paths share a single wall-clock budget armed at race start
+            // (see ConnectionManager.resolveConnectRaceAsync), so the worst case is
+            // ~timeoutSec; the 5-second buffer on the outer get() ensures the inner
+            // future expires first and its cleanup (unregisterService, word-channel
+            // removal, attempt release) always runs.
+            return manager.connect(word, timeoutSec).get(timeoutSec + 5L, TimeUnit.SECONDS);
         } catch (Exception e) {
+            Log.d(TAG, "connect: timeout is:" + timeoutSec);
             throw new RuntimeException("connect(\"" + word + "\") failed", e);
         }
     }
@@ -205,14 +251,69 @@ public final class TauSync {
     }
 
     /**
-     * Disposes the underlying ConnectionManager.
+     * Closes the TCP transport and resets the process-wide role so that
+     * {@link #connectTo(String)} or {@link #listen()} can be called again on
+     * this instance (or a new one).
+     *
+     * <p>Unlike {@link #dispose()}, this instance is NOT marked as permanently
+     * dead after this call. Safe to call when already disconnected (no-op if
+     * the instance is disposed).
+     *
+     * <p>Mirrors the Python {@code tausync_py.TauSync.disconnect()} contract.
+     */
+    public void disconnect() {
+        if (disposed) return;
+
+        // 1. Close the TCP socket. SocketTransport.disconnect() closes streams/socket
+        //    but does NOT set disposed=true, so the transport can accept a new connection.
+        ConnectionContext.getInstance().getWifiTransportAsSocket().disconnect();
+
+        // 2. Clear all in-flight routing, service registry, and pending discovery
+        //    frames so the next connection starts from a clean state.
+        ConnectionContext.getInstance().reset();
+
+        // 3. Close and release the ConnectionManager.
+        if (manager != null) {
+            try {
+                manager.close();
+            } catch (Exception ignored) {
+            }
+            manager = null;
+        }
+
+        // 4. Reset global role so connectTo()/listen() can proceed on the next call.
+        synchronized (roleLock) {
+            globalRole = ROLE_NONE;
+            globalTarget = null;
+        }
+    }
+
+    /**
+     * Permanently disposes this instance and the underlying ConnectionManager.
      * Safe to call multiple times.
+     *
+     * <p>Also resets the process-wide role, mirroring Python {@code tausync_py.TauSync.dispose()}.
+     * Create a new {@link TauSync} instance if you need to reconnect after disposal.
      */
     public void dispose() {
         if (disposed) return;
         disposed = true;
+
+        // Close socket and clear session state (same as disconnect, but instance is now dead).
+        ConnectionContext.getInstance().getWifiTransportAsSocket().disconnect();
+        ConnectionContext.getInstance().reset();
+
         if (manager != null) {
-            try { manager.close(); } catch (Exception ignored) {}
+            try {
+                manager.close();
+            } catch (Exception ignored) {
+            }
+        }
+
+        // Reset global role so a new TauSync() created afterwards can connect.
+        synchronized (roleLock) {
+            globalRole = ROLE_NONE;
+            globalTarget = null;
         }
     }
 

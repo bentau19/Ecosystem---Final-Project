@@ -29,8 +29,15 @@ class DeviceViewModel(QObject):
             ``list[DeviceInfoDTO]`` whenever the current device's data changes.
         previous_devices_updated (Signal[list]): Emitted with
             ``list[PreviousDeviceDTO]`` when the full device history is loaded.
+        device_connecting (Signal): Emitted at the very start of any connection
+            attempt — from ``connect_to_device`` (button path) **and** from
+            ``_on_device_connected`` (QR/listener path) — so the UI can show a
+            loading state before the TCP handshake or channel reads complete.
         device_connected (Signal): Emitted when the connectivity service
             reports a successful device connection.
+        device_disconnecting (Signal): Emitted immediately when
+            ``disconnect_device`` is called, before the background tear-down
+            begins, so the UI can show a "Disconnecting…" state.
         device_disconnected (Signal): Forwarded from the connectivity service
             after the device is disconnected.
     """
@@ -38,8 +45,16 @@ class DeviceViewModel(QObject):
     device_infos_updated: Signal = Signal(object)
     previous_devices_updated: Signal = Signal(list)
 
+    device_connecting: Signal = Signal()
+    """Emitted at the start of any connection attempt (button or QR path)."""
     device_connected: Signal = Signal()
+    device_disconnecting: Signal = Signal()
+    """Emitted immediately when a PC-initiated disconnect begins."""
     device_disconnected: Signal = Signal()
+    device_info_error: Signal = Signal(str)
+    """Emitted when device-info channel reads fail — forwarded from DeviceInfoService.read_error."""
+    connection_error: Signal = Signal(str)
+    """Emitted when the TCP listener crashes — forwarded from ConnectivityService.connection_error."""
 
     _TEN_MINUTES: int = 10 * 60 * 1000
 
@@ -64,13 +79,22 @@ class DeviceViewModel(QObject):
         self._device_info_service: DeviceInfoService = device_info_service
 
         self._connectivity_service.device_connected.connect(self._on_device_connected)
+        self._connectivity_service.device_disconnecting.connect(self.device_disconnecting.emit)
         self._connectivity_service.device_disconnected.connect(self._on_device_disconnected)
+        self._connectivity_service.connection_error.connect(self.connection_error.emit)
         self._device_info_service.device_info_ready.connect(self._on_device_info_ready)
         self._device_info_service.device_fetched.connect(self._on_device_fetched)
         self._device_info_service.all_devices_fetched.connect(self._on_all_devices_fetched)
+        self._device_info_service.read_error.connect(self.device_info_error.emit)
 
-        # Start both services so DB reads (fetch_device_by_id / fetch_all_devices)
-        # are available immediately at app startup, before any device connects.
+        # Start connectivity immediately so it listens before any device connects.
+        # DeviceInfoService also starts at launch — its DB read methods
+        # (fetch_all_devices, fetch_device_by_id) are needed by the login screen
+        # before a connection exists.  The network path (fetch_device_info) is
+        # self-guarded by tau.is_connected and is safe to call on a live service.
+        # All other services (FileTransferService, PhoneRequestService) start only
+        # in _on_device_connected and stop in _on_device_disconnected.
+
         self._connectivity_service.start()
         self._device_info_service.start()
 
@@ -82,7 +106,7 @@ class DeviceViewModel(QObject):
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def load_device_info(self) -> None:
+    def load_current_device_info(self) -> None:
         """Request the current device from the service on a background thread.
 
         The result arrives asynchronously via :attr:`device_infos_updated`
@@ -93,6 +117,7 @@ class DeviceViewModel(QObject):
             device_infos_updated: Asynchronously, with ``list[DeviceInfoDTO]``
                 if the current device is found in the repository.
         """
+
         self._device_info_service.fetch_device_by_id(self._current_device_connected_id)
 
     def load_devices(self) -> None:
@@ -120,15 +145,26 @@ class DeviceViewModel(QObject):
     def connect_to_device(self, device: PreviousDeviceDTO) -> None:
         """Initiate a connection to a previously paired device.
 
+        Emits :attr:`device_connecting` immediately so the UI can show a
+        loading state before the TCP handshake completes.
+
         Args:
-            device: The DTO of the device to connect to. Its ``id`` is passed
-                to the connectivity service for identification.
+            device: The DTO of the device to connect to. Its ``name`` is
+                passed to the connectivity service as the target hostname.
         """
+        self.device_connecting.emit()
         self._connectivity_service.connect_to_device(device.name)
 
     def disconnect_device(self) -> None:
-        """Disconnect the currently connected device via the connectivity service."""
-        self._connectivity_service.disconnect_device()
+        """Disconnect the currently connected device via the connectivity service.
+
+        Delegates to :meth:`~services.connectivity.ConnectivityService.stop`
+        which emits ``device_disconnecting`` before any teardown begins.  The
+        forwarding wire in ``__init__`` propagates that signal to this
+        ViewModel's own ``device_disconnecting`` — no direct emit here to avoid
+        the signal firing twice on the PC-initiated path.
+        """
+        self._connectivity_service.stop()
 
     # ── Private helpers ────────────────────────────────────────────────────────
 
@@ -142,7 +178,6 @@ class DeviceViewModel(QObject):
     def _on_device_info_ready(self, entity: DeviceEntity) -> None:
         # Track the connected device ID so load_device_info() fetches the right entity.
         self._current_device_connected_id = entity.id
-        print(entity)
         self.device_infos_updated.emit(self._to_device_info_dtos(entity))
 
     @Slot(object)
@@ -165,6 +200,9 @@ class DeviceViewModel(QObject):
 
     @Slot()
     def _on_device_connected(self) -> None:
+        # Emit device_connecting so the login-screen overlay starts for the QR
+        # path too (connect_to_device() handles the button path separately).
+        self.device_connecting.emit()
         # Start the info service so channel reads can proceed, then fetch immediately.
         self._device_info_service.start()
         self._device_info_service.fetch_device_info()
@@ -172,8 +210,19 @@ class DeviceViewModel(QObject):
 
     @Slot()
     def _on_device_disconnected(self) -> None:
-        # Stop info reads, restart the listener so the next device can connect.
-        self._device_info_service.stop()
+        # Only connectivity and device-info restart after a disconnect; every
+        # other service (backup, phone-request, file-transfer) is stopped via
+        # the device_disconnected wiring and starts again on the next connect.
+        #
+        # restart() runs stop-then-start sequentially on one thread, joining
+        # any lingering network threads from the previous session before
+        # re-enabling DB reads (fetch_all_devices / fetch_device_by_id are
+        # needed by the login screen before the next connection exists).
+        #
+        # connectivity.start() is safe here: ConnectivityService emits
+        # device_disconnected only after its own executor is fully drained,
+        # so this restart can never race the previous shutdown.
+        self._device_info_service.restart()
         self._connectivity_service.start()
         self.device_disconnected.emit()
 

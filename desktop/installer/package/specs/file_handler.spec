@@ -1,7 +1,7 @@
 import os
 
 a = Analysis(
-    ['../../../core/pipe_client.py'],
+    ['../../../core/file_handler.py'],
     # SPECPATH = desktop/installer/Package/specs  →  ../../ = desktop/
     # Needed so PyInstaller can find the `native`, `views`, etc. packages
     # whose root is desktop/, not desktop/core/ (the entry-script dir).
@@ -23,7 +23,7 @@ exe = EXE(
     pyz,
     a.scripts,
     exclude_binaries=True,
-    name='file',
+    name='FileHandler',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

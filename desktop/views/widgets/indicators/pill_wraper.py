@@ -5,18 +5,17 @@ from views.widgets.indicators.connection_pill import ConnectionPill
 
 
 class PillWrapper(QWidget):
-    """
-    A wrapper widget that holds one or more connection indicator pills in a
+    """A wrapper widget that holds one or more connection indicator pills in a
     vertical layout with predefined spacing and margins.
     """
 
     def __init__(self, minimum_height: int = 55, parent: QWidget | None = None) -> None:
-        """
-        Initialize the PillWrapper.
+        """Initialize the PillWrapper.
 
         Args:
-            minimum_height (int, optional): Minimum height of the PillWrapper. Defaults to 55.
-            parent (Optional[QWidget], optional): Parent widget. Defaults to None.
+            minimum_height: Minimum height of the PillWrapper, in pixels.
+                Defaults to ``55``.
+            parent: Optional parent widget. Defaults to ``None``.
         """
         super().__init__(parent)
 

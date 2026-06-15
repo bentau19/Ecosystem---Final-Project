@@ -65,11 +65,12 @@ class ToolViewModel(QObject):
         self.tools_changed.emit(self._enabled_tools)
 
     def load_enabled_tools(self) -> None:
-        """Emit the current enabled-tool list and the total count.
+        """Emit the current enabled-tool list to all subscribers.
 
         Emits:
             tools_loaded: With the in-memory ``list[ToolDTO]`` of enabled tools.
-            tool_count_changed: With the number of enabled tools as an ``int``.
+            tools_changed: With the same ``list[ToolDTO]``, for subscribers that
+                only care about change notifications.
         """
         self.tools_loaded.emit(self._enabled_tools)
         self.tools_changed.emit(self._enabled_tools)

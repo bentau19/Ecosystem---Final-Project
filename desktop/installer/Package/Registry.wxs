@@ -7,7 +7,7 @@
     When a user right-clicks any file in Windows Explorer and chooses
     "Send with SyncDose", Windows executes:
 
-        "[FILEHANDLERFOLDER]file.exe" "%1"
+        "[FILEHANDLERFOLDER]FileHandler.exe" "%1"
 
     where %1 is the full path of the selected file.
 
@@ -47,7 +47,7 @@
                     <RegistryValue
                             Name="Icon"
                             Type="string"
-                            Value='"[FILEHANDLERFOLDER]file.exe",0'/>
+                            Value='"[FILEHANDLERFOLDER]FileHandler.exe",0'/>
                 </RegistryKey>
 
                 <!--
@@ -58,7 +58,7 @@
                 <RegistryKey Root="HKCR" Key="*\shell\SendWithSyncDose\command">
                     <RegistryValue
                             Type="string"
-                            Value='"[FILEHANDLERFOLDER]file.exe" "%1"'/>
+                            Value='"[FILEHANDLERFOLDER]FileHandler.exe" "%1"'/>
                 </RegistryKey>
 
             </Component>

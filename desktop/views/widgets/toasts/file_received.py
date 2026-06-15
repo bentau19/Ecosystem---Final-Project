@@ -1,14 +1,3 @@
-"""
-File-received toast notification widget.
-
-A frameless, always-on-top banner that appears at the top-center of the
-primary screen and stays visible until the user acts.  The user either picks
-a save location (triggering :meth:`~viewmodels.file_transfer.FileTransferViewModel.receive_file`)
-or cancels (triggering :meth:`~viewmodels.file_transfer.FileTransferViewModel.reject_receive`).
-
-Intentionally **app-state-aware** only through ``app_state.file_transfer_viewmodel``
-so the widget stays decoupled from service internals.
-"""
 import platform
 import subprocess
 import sys
@@ -36,6 +25,8 @@ _ICON_SIZE: int = 32
 _SCREEN_MARGIN: int = 20
 
 
+# Best-effort cross-platform notification sound; falls back to the system
+# beep if no platform-specific player is available.
 def _play_notification_sound() -> None:
     system = platform.system()
     if system == "Windows":
@@ -63,6 +54,9 @@ class FileReceivedToast(QWidget):
     :meth:`~viewmodels.file_transfer.FileTransferViewModel.receive_file` is
     called.  Clicking **Cancel download** (or closing the dialog without saving)
     calls :meth:`~viewmodels.file_transfer.FileTransferViewModel.reject_receive`.
+
+    Intentionally **app-state-aware** only through ``app_state.file_transfer_viewmodel``
+    so the widget stays decoupled from service internals.
 
     Args:
         filename: Name of the incoming file shown in the toast body.
@@ -212,6 +206,7 @@ class FileReceivedToast(QWidget):
         self._download_button.clicked.connect(self._on_download_requested)
         self._cancel_button.clicked.connect(self._on_cancel_requested)
         self._cancel_button.clicked.connect(self._close_with_animation)
+        self._file_transfer_vm.receive_complete.connect(self._close_with_animation)
         self._file_transfer_vm.receive_error.connect(self.close)
         theme_manager.theme_changed.connect(self._apply_style)
 

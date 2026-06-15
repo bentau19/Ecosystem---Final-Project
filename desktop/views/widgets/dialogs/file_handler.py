@@ -1,10 +1,3 @@
-"""
-File-handler error dialogs for the SyncDose file-send shell extension.
-
-These dialogs run inside a **standalone PyInstaller executable** that has no
-access to the main app's Qt virtual resource filesystem.  QSS is therefore
-loaded from the bundled filesystem via :func:`utils.styles.load_stylesheet_disk`.
-"""
 import sys
 from typing import Final
 
@@ -12,7 +5,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout, QWidget, QApplication
 
 from app.theme_manager import theme_manager
-from resources.colors import HandlerDialogColors, LightHandlerDialogColors, Palette
+from resources.colors import HandlerDialogColors, LightHandlerDialogColors
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet_disk, themed
 
@@ -30,6 +23,11 @@ class _BaseHandlerDialog(QDialog):
 
     Clicking **Try Again** resolves the dialog as :attr:`QDialog.Accepted`.
     Clicking **Dismiss** resolves it as :attr:`QDialog.Rejected`.
+
+    This dialog runs inside a **standalone PyInstaller executable** that has
+    no access to the main app's Qt virtual resource filesystem.  QSS is
+    therefore loaded from the bundled filesystem via
+    :func:`utils.styles.load_stylesheet_disk`.
 
     Args:
         accent: Six-digit hex color string (e.g. ``"#22D3EE"``) applied to
@@ -188,9 +186,13 @@ class PhoneNotDetectedDialog(_BaseHandlerDialog):
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialize with the phone-not-detected copy and cyan accent."""
+        """Initialize with the phone-not-detected copy and cyan accent.
+
+        Args:
+            parent: Optional Qt parent widget.
+        """
         super().__init__(
-            accent=Palette.CYAN_400,
+            accent=HandlerDialogColors.ACCENT,
             icon_char="⊗",
             title="Phone Not Detected",
             message=(
@@ -209,9 +211,13 @@ class TransferErrorDialog(_BaseHandlerDialog):
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialize with the generic-error copy and cyan accent."""
+        """Initialize with the generic-error copy and cyan accent.
+
+        Args:
+            parent: Optional Qt parent widget.
+        """
         super().__init__(
-            accent=Palette.CYAN_400,
+            accent=HandlerDialogColors.ACCENT,
             icon_char="!",
             title="An Error Occurred",
             message="Something went wrong while sending the file. Please try again.",

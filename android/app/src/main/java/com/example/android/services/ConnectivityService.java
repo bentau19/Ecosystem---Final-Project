@@ -9,22 +9,42 @@ import android.os.IBinder;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.Observer;
+import androidx.lifecycle.ProcessLifecycleOwner;
 
+import com.example.android.data.datasource.BackupDataSource;
 import com.example.android.data.datasource.SystemDataSource;
 import com.example.android.domain.entities.RemoteDeviceInfo;
+import com.example.android.domain.enums.BackupTransferStatus;
 import com.example.android.domain.enums.ConnectionStatus;
+import com.example.android.domain.enums.SendFileStatus;
 import com.example.android.domain.enums.ConnectionType;
-import com.example.android.enums.Channel;
 import com.example.android.enums.DeviceInfoChannels;
+import com.example.android.enums.FileTransferChannels;
 import com.example.android.enums.SessionChannels;
+import com.example.android.enums.BackupChannels;
+import com.example.android.network.handlers.BackupControlChannelHandler;
 import com.example.android.network.handlers.ChannelHandlerRegistry;
 import com.example.android.network.handlers.DeviceInfoChannelHandler;
+import com.example.android.domain.usecases.BackupTransferUseCase;
+import com.example.android.domain.usecases.ReceiveFileUseCase;
+import com.example.android.domain.usecases.RespondToFileTransferUseCase;
+import com.example.android.domain.usecases.SendFileUseCase;
+import com.example.android.repositories.BackupRepository;
+import com.example.android.repositories.SendFileRepository;
+import com.example.android.network.handlers.FileDataChannelHandler;
+import com.example.android.network.handlers.FileMetadataChannelHandler;
 import com.example.android.network.handlers.PCNameChannelHandler;
 import com.example.android.network.handlers.DisconnectChannelHandler;
+import com.example.android.repositories.ReceiveFileRepository;
 import com.example.android.network.transport.TransportManager;
 import com.example.android.network.transport.TransportStatus;
 import com.example.android.network.transport.TauSyncTransportManager;
 import com.example.android.repositories.DeviceRepository;
+
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * ConnectivityService - Thin Orchestrator for managing remote PC connections.
@@ -42,6 +62,31 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     private SystemDataSource systemDataSource;
     private DeviceRepository deviceRepository;
     private AppNotificationManager notificationManager;
+
+    // File transfer UseCases — initialized after transportManager is ready
+    private RespondToFileTransferUseCase respondToFileTransferUseCase;
+    private ReceiveFileUseCase receiveFileUseCase;
+    private SendFileUseCase sendFileUseCase;
+    private BackupTransferUseCase backupTransferUseCase;
+
+    // Observer for outgoing file transfer notifications — kept so we can remove it in onDestroy
+    private Observer<SendFileStatus> sendFileStatusObserver;
+
+    // Observer for backup transfer progress notifications — kept for removal in onDestroy
+    private Observer<BackupTransferStatus> backupTransferStatusObserver;
+
+    // Observer for the per-file sent counter — drives the progress notification ticker.
+    // Kept as a field so it can be removed in onDestroy; without this it leaks one
+    // observer per ConnectivityService instance across reconnects.
+    private Observer<Integer> transferSentObserver;
+
+    // Observer for backup scan failures — kept for removal in onDestroy
+    private Observer<com.example.android.domain.enums.BackupScanStatus> backupScanStatusObserver;
+
+    // Channels currently being handled by a PeerRequestHandler thread. Prevents the
+    // poll loop from spawning a second handler for the same channel while a prior
+    // writeToChannel() call is still blocking inside tauSync.connect().
+    private final Set<String> inProgressChannels = ConcurrentHashMap.newKeySet();
 
     @Override
     public void onCreate() {
@@ -68,7 +113,24 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
         transportManager = new TauSyncTransportManager();
         handlerRegistry = new ChannelHandlerRegistry();
+
+        // Initialize file transfer UseCases before registering handlers —
+        // FileDataChannelHandler takes a direct reference to receiveFileUseCase.
+        respondToFileTransferUseCase = new RespondToFileTransferUseCase(transportManager);
+        receiveFileUseCase = new ReceiveFileUseCase(transportManager, ReceiveFileRepository.getInstance(), this);
+        sendFileUseCase = new SendFileUseCase(transportManager, SendFileRepository.getInstance(), this);
+        backupTransferUseCase = new BackupTransferUseCase(
+                transportManager, BackupRepository.getInstance(), this, new BackupDataSource());
+
         registerChannelHandlers();
+        registerFileTransferActionListener();
+        registerIncomingRequestListener();
+        registerSendFileActionListener();
+        registerSendFileStatusObserver();
+        registerBackupTransferActionListener();
+        registerBackupTransferProgressObserver();
+        registerBackupScanStatusObserver();
+        registerBackupControlActionListener();
 
         Log.d(TAG, "Service initialization complete");
     }
@@ -89,6 +151,27 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         handlerRegistry.registerHandler(
                 SessionChannels.DISCONNECT_FROM_PC.getValue(),
                 new DisconnectChannelHandler(deviceRepository, transportManager, this::cleanup)
+        );
+
+        // FILE_METADATA_PC_TO_ANDROID handles incoming file transfer requests from the PC
+        handlerRegistry.registerHandler(
+                FileTransferChannels.REGULAR_FILE_METADATA_PC_TO_ANDROID.getValue(),
+                new FileMetadataChannelHandler(transportManager, ReceiveFileRepository.getInstance())
+        );
+
+        // FILE_DATA_PC_TO_ANDROID receives the actual file bytes — triggered by the polling loop.
+        // Desktop opens this channel only after receiving ACCEPT, so there is no simultaneous-connect
+        handlerRegistry.registerHandler(
+                FileTransferChannels.REGULAR_FILE_DATA_PC_TO_ANDROID.getValue(),
+                new FileDataChannelHandler(receiveFileUseCase, ReceiveFileRepository.getInstance())
+        );
+
+        // BACKUP_CONTROL_FROM_PC — PC-initiated pause/resume/stop during an active backup session.
+        // Registered once at startup; the UseCase's public methods guard against being called
+        // outside an active session, so stray commands when no transfer is running are safe no-ops.
+        handlerRegistry.registerHandler(
+                BackupChannels.BACKUP_CONTROL_FROM_PC.getValue(),
+                new BackupControlChannelHandler(transportManager, backupTransferUseCase)
         );
 
         // All other device telemetry data types are registered inline as Getters using generic Lambda functional interfaces
@@ -121,7 +204,49 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // Check if this is a disconnect request action
         if (intent != null && "com.example.android.ACTION_SEND_DISCONNECT".equals(intent.getAction())) {
             Log.d(TAG, "Received disconnect action, sending disconnect notification to PC");
+            // Post DISCONNECTING immediately so the UI disables the button before the
+            // background thread fires. The final DISCONNECTED post comes from cleanup().
+            deviceRepository.updateConnectionStatus(ConnectionStatus.DISCONNECTING);
             sendDisconnectToPC();
+            return START_NOT_STICKY;
+        }
+
+        // Backup transfer control actions from the sticky progress notification —
+        // fire immediately, no confirmation, and don't disturb the connection lifecycle.
+        if (intent != null && AppNotificationManager.ACTION_BACKUP_PAUSE.equals(intent.getAction())) {
+            Log.d(TAG, "Received backup pause action");
+            if (backupTransferUseCase != null) {
+                backupTransferUseCase.pauseTransfer();
+            }
+            return START_NOT_STICKY;
+        }
+        if (intent != null && AppNotificationManager.ACTION_BACKUP_RESUME.equals(intent.getAction())) {
+            Log.d(TAG, "Received backup resume action");
+            if (backupTransferUseCase != null) {
+                backupTransferUseCase.resumeTransfer();
+            }
+            return START_NOT_STICKY;
+        }
+        if (intent != null && AppNotificationManager.ACTION_BACKUP_STOP.equals(intent.getAction())) {
+            Log.d(TAG, "Received backup stop action");
+            if (backupTransferUseCase != null) {
+                backupTransferUseCase.stopTransfer();
+            }
+            return START_NOT_STICKY;
+        }
+
+        // URI permission delegation + send trigger from ShareReceiverActivity.
+        // By the time onStartCommand runs, Android has already registered the URI grant
+        // for this service (FLAG_GRANT_READ_URI_PERMISSION on the incoming Intent).
+        // Starting the send flow from here guarantees the grant is fully active before
+        // any ContentResolver I/O runs in SendFileUseCase.
+        if (intent != null && "com.example.android.ACTION_GRANT_FILE_URI".equals(intent.getAction())) {
+            android.net.Uri fileUri = intent.getData();
+            String fileName = intent.getStringExtra("FILE_NAME");
+            Log.d(TAG, "URI grant received, starting send: " + fileName);
+            if (fileUri != null && fileName != null) {
+                SendFileRepository.getInstance().requestSend(fileUri, fileName);
+            }
             return START_NOT_STICKY;
         }
 
@@ -172,6 +297,18 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         if (notificationManager != null) {
             notificationManager.stopListeningToConnectionChanges();
         }
+        if (sendFileStatusObserver != null) {
+            SendFileRepository.getInstance().getSendStatus().removeObserver(sendFileStatusObserver);
+        }
+        if (backupTransferStatusObserver != null) {
+            BackupRepository.getInstance().getTransferStatus().removeObserver(backupTransferStatusObserver);
+        }
+        if (transferSentObserver != null) {
+            BackupRepository.getInstance().getTransferSent().removeObserver(transferSentObserver);
+        }
+        if (backupScanStatusObserver != null) {
+            BackupRepository.getInstance().getScanStatus().removeObserver(backupScanStatusObserver);
+        }
         cleanup();
         super.onDestroy();
     }
@@ -192,6 +329,16 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             deviceRepository.disconnect();
         }
 
+        // Reset file transfer repositories so stale status isn't shown after reconnect
+        ReceiveFileRepository.getInstance().reset();
+        SendFileRepository.getInstance().reset();
+
+        // Reset backup repository — clears any in-flight scan (scanActiveForTransfer=false)
+        // so a scan that completes after reconnect does NOT auto-send the manifest on the
+        // new connection session. Also clears stale transfer progress counters/status.
+        BackupRepository.getInstance().reset();
+        BackupRepository.getInstance().resetTransfer();
+
         // Remove the foreground notification so it doesn't stay in the status bar
         Log.d(TAG, "Removing foreground notification");
         stopForeground(Service.STOP_FOREGROUND_REMOVE);
@@ -210,7 +357,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // Map transport status to domain status
         ConnectionStatus connectionStatus = mapTransportStatusToConnectionStatus(status);
 
-        // ◄ הגנה: אם המצב הנוכחי באפליקציה הוא כבר FAILED, אל תיתן לשום סטטוס משני לדרוס אותו
+        // Guard: if the app has already reached FAILED, ignore any secondary status update.
         if (deviceRepository.getCurrentConnectionStatus() == ConnectionStatus.FAILED) {
             Log.w(TAG, "Connection already marked as FAILED. Ignoring secondary status: " + status);
             return;
@@ -218,8 +365,6 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
         if (status == TransportStatus.CONNECTED) {
             deviceRepository.updateConnectionStatus(ConnectionStatus.CONNECTED);
-            // send initial device info
-            new Thread(this::sendInitialDeviceInfo, "InitialDeviceSenderThread").start();
         } else if (status == TransportStatus.CONNECTING || status == TransportStatus.RECONNECTING) {
             deviceRepository.updateConnectionStatus(connectionStatus);
         } else if (status == TransportStatus.FAILED) {
@@ -231,12 +376,57 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     public void onPeerRequestsAvailable(java.util.List<String> channels) {
         Log.d(TAG, "Peer requests available for channels: " + channels);
 
-        // Handle sequential polling requests from the desktop server on a dedicated worker thread to maintain thread safety
-        new Thread(() -> {
-            for (String channel : channels) {
-                handlerRegistry.handlePeerRequest(channel);
+        // Called on the main thread via mainHandler.post(). Each channel gets its own
+        // daemon thread so device-info channels respond in parallel (matching the PC's
+        // concurrent ThreadPoolExecutor reads). inProgressChannels prevents duplicate
+        // dispatches: the poll loop fires every 2 s regardless of how long a handler
+        // blocks inside writeToChannel(), so without this guard each poll tick would
+        // spawn a new thread that collides with the still-running one and throws
+        // IllegalStateException: "Connect already in progress for word '...'".
+        for (String channel : channels) {
+            // Backup channels below are consumed directly by BackupTransferUseCase
+            // threads (readFromChannel / writeToChannel / streamInputStreamToChannel),
+            // never via the registry — skip them to avoid spurious "No handler
+            // registered" warnings. This includes backup_manifest, which the PC's
+            // listener loop keeps pending almost continuously by design.
+            // backup_ctrl_pc is NOT skipped: it has a real registered handler
+            // (BackupControlChannelHandler).
+            if (isDirectlyConsumedBackupChannel(channel)) continue;
+
+            // Atomically claim the channel. If another thread is already inside
+            // handlePeerRequest() for this word, skip — the poll will retry it next tick.
+            if (!inProgressChannels.add(channel)) {
+                Log.d(TAG, "Channel already in progress, skipping: " + channel);
+                continue;
             }
-        }, "PeerRequestHandlerThread").start();
+
+            new Thread(() -> {
+                try {
+                    handlerRegistry.handlePeerRequest(channel);
+                } finally {
+                    inProgressChannels.remove(channel);
+                }
+            }, "PeerRequestHandler-" + channel).start();
+        }
+    }
+
+    /**
+     * Returns {@code true} for backup channels that are consumed directly by
+     * {@code BackupTransferUseCase} threads rather than dispatched through the
+     * {@code ChannelHandlerRegistry}. These channels legitimately appear in the
+     * peer-waiting list (the PC opens them and blocks until Android connects the same
+     * word), so reporting "No handler registered" for them is pure noise — by design
+     * no handler will ever exist.
+     *
+     * @param channel Full channel name from the peer-waiting snapshot.
+     * @return {@code true} if the registry should not be consulted for this channel.
+     */
+    private static boolean isDirectlyConsumedBackupChannel(String channel) {
+        return channel.startsWith(BackupChannels.BACKUP_FILE_RESULT.getValue())
+                || channel.startsWith(BackupChannels.BACKUP_FILE_DATA_SLOT.getValue())
+                || channel.startsWith(BackupChannels.BACKUP_FILE_META_SLOT.getValue())
+                || channel.equals(BackupChannels.BACKUP_READY_FROM_PC.getValue())
+                || channel.equals(BackupChannels.BACKUP_MANIFEST_FROM_ANDROID.getValue());
     }
 
     @Override
@@ -273,55 +463,25 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     }
 
     /**
-     * Collects active hardware telemetry from system resources and transmits it sequentially as a handshake packet.
-     */
-    private void sendInitialDeviceInfo() {
-        Log.d(TAG, "Sending initial device info");
-        try {
-            sendDeviceInfo(DeviceInfoChannels.NAME_FROM_ANDROID.getValue(), systemDataSource.getDeviceModel());
-            sendDeviceInfo(DeviceInfoChannels.OS_FROM_ANDROID.getValue(), "Android " + Build.VERSION.RELEASE);
-            sendDeviceInfo(DeviceInfoChannels.ID.getValue(), systemDataSource.getDeviceId());
-            sendDeviceInfo(DeviceInfoChannels.IP_FROM_ANDROID.getValue(), systemDataSource.getLocalIp());
-            sendDeviceInfo(DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.getBattery()));
-            sendDeviceInfo(DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.isDeviceCharging()));
-            sendDeviceInfo(DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.getRawStorageStats().getTotal()));
-            sendDeviceInfo(DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.getValue(), String.valueOf(systemDataSource.getRawStorageStats().getUsed()));
-
-        } catch (Exception e) {
-            Log.e(TAG, "Error sending initial device info: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Executes the standard write wrapper to push localized values into specific connection tracks.
-     */
-    private void sendDeviceInfo(String channel, String value) {
-        try {
-            Log.v(TAG, "Sending [" + channel + "]: " + value);
-            transportManager.writeToChannel(channel, value);
-        } catch (Exception e) {
-            Log.e(TAG, "Error writing [" + channel + "]: " + e.getMessage());
-        }
-    }
-
-    /**
      * Sends a disconnect notification to the PC when the user initiates a disconnect on the phone.
-     * Uses the DISCONNECT_FROM_PHONE channel to signal the PC to clean up.
+     *
+     * <p>Writes to the {@code DISCONNECT_FROM_PHONE} TauSync channel, then stops this service.
+     * {@code stopSelf()} triggers {@link #onDestroy()} → {@link #cleanup()}, which shuts down
+     * the transport and resets the repository — no explicit sleep is needed because
+     * {@code writeToChannel} closes the stream (and flushes data) before returning.
      */
     private void sendDisconnectToPC() {
         new Thread(() -> {
             try {
-                // send disconnect signal to PC
                 if (transportManager != null && transportManager.isConnected()) {
-                    transportManager.writeToChannel(SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect");
+                    transportManager.writeToChannel(
+                            SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect");
                     Log.d(TAG, "Disconnect signal sent to PC");
                 }
-                Thread.sleep(200);
             } catch (Exception e) {
                 Log.e(TAG, "Failed to send disconnect signal: " + e.getMessage());
             } finally {
-                // final cleanup and stop service
-                stopSelf();
+                stopSelf();  // → onDestroy → cleanup → transportManager.shutdown + repository.disconnect
             }
         }).start();
     }
@@ -361,10 +521,318 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     }
 
     private String getStorageTotal() {
-        return String.valueOf(systemDataSource.getRawStorageStats().getTotal());
+        return String.valueOf(systemDataSource.getRawStorageStats().total());
     }
 
     private String getStorageUsed() {
-        return String.valueOf(systemDataSource.getRawStorageStats().getUsed());
+        return String.valueOf(systemDataSource.getRawStorageStats().used());
+    }
+
+    // ============ File Transfer Action Listener ============
+
+    /**
+     * Observes SendFileRepository.getSendStatus() for the lifetime of this service.
+     * Drives the send-progress notification directly — bypassing LiveData lifecycle
+     * restrictions so notifications work even when no Activity is in the foreground.
+     *
+     * Must be called on the main thread (onCreate runs on main thread).
+     */
+    private void registerSendFileStatusObserver() {
+        SendFileRepository repo = SendFileRepository.getInstance();
+        sendFileStatusObserver = status -> {
+            if (status == null) return;
+            String fileName = repo.getCurrentFileName().getValue();
+            String displayName = (fileName != null) ? fileName : "file";
+            switch (status) {
+                case WAITING_FOR_RESPONSE:
+                    notificationManager.showSendFileProgressNotification(
+                            "Waiting for PC to accept…  " + displayName);
+                    break;
+                case SENDING:
+                    notificationManager.showSendFileProgressNotification(
+                            "Sending " + displayName + "…");
+                    break;
+                case COMPLETED:
+                    notificationManager.showSendFileResultNotification("File sent ✓", displayName);
+                    repo.reset();
+                    break;
+                case REJECTED:
+                    notificationManager.showSendFileResultNotification(
+                            "Transfer rejected", "PC declined " + displayName);
+                    repo.reset();
+                    break;
+                case FAILED:
+                    notificationManager.showSendFileResultNotification(
+                            "Transfer failed", "Could not send " + displayName);
+                    repo.reset();
+                    break;
+                case IDLE:
+                default:
+                    break;
+            }
+        };
+        repo.getSendStatus().observeForever(sendFileStatusObserver);
+    }
+
+    /**
+     * Registers ConnectivityService as the SendFileActionListener on SendFileRepository.
+     * When the user shares a file, the ViewModel calls repository.requestSend(uri),
+     * which fires this listener on the main thread. We immediately spawn a dedicated
+     * background thread so the blocking network I/O never touches the main thread.
+     */
+    private void registerSendFileActionListener() {
+        SendFileRepository.getInstance().setActionListener(uri -> {
+            new Thread(() -> {
+                try {
+                    sendFileUseCase.execute(uri);
+                } catch (Exception e) {
+                    Log.e(TAG, "Unexpected error in SendFileThread: " + e.getMessage());
+                    SendFileRepository.getInstance().onSendFailed();
+                }
+            }, "SendFileThread").start();
+        });
+    }
+
+    /**
+     * Registers ConnectivityService as the IncomingRequestListener on the Repository.
+     * This fires immediately when a transfer request arrives — bypassing LiveData's
+     * lifecycle-awareness so the heads-up notification is shown even when the Activity
+     * is paused/stopped (app in background).
+     */
+    private void registerIncomingRequestListener() {
+        ReceiveFileRepository.getInstance().setIncomingRequestListener(request -> {
+            Log.d(TAG, "Incoming request arrived: " + request.fileName());
+
+            // Show a notification only when the app is in the background.
+            // When the app is in the foreground, MainActivity's LiveData observer
+            // handles the request by showing an in-app AlertDialog instead.
+            boolean appInForeground = ProcessLifecycleOwner.get()
+                    .getLifecycle()
+                    .getCurrentState()
+                    .isAtLeast(Lifecycle.State.STARTED);
+
+            if (!appInForeground) {
+                notificationManager.showFileTransferApprovalNotification(
+                        request.fileName(),
+                        request.getFormattedSize()
+                );
+            }
+        });
+    }
+
+    // ============ Backup Transfer ============
+
+    /**
+     * Registers ConnectivityService as the {@link BackupRepository.TransferActionListener}.
+     *
+     * <p>When the scan completes and the ViewModel calls
+     * {@link BackupRepository#requestTransfer}, this listener fires and spawns a
+     * dedicated background thread that runs {@link BackupTransferUseCase#execute}.
+     * Mirrors {@link #registerSendFileActionListener} exactly.
+     */
+    private void registerBackupTransferActionListener() {
+        BackupRepository.getInstance().setTransferActionListener((files, options) -> {
+            new Thread(() -> {
+                try {
+                    backupTransferUseCase.execute(files, options);
+                } catch (Exception e) {
+                    Log.e(TAG, "Unexpected error in BackupTransferThread: " + e.getMessage());
+                    BackupRepository.getInstance().onTransferFailed();
+                }
+            }, "BackupTransferThread").start();
+        });
+    }
+
+    /**
+     * Observes {@link BackupRepository#getTransferStatus()} for the lifetime of this
+     * service and drives the sticky progress notification.
+     *
+     * <p>Mirrors {@link #registerSendFileStatusObserver} — must be called on the main
+     * thread (onCreate runs on main thread) because LiveData.observeForever requires it.
+     */
+    private void registerBackupTransferProgressObserver() {
+        BackupRepository repo = BackupRepository.getInstance();
+        backupTransferStatusObserver = status -> {
+            if (status == null) return;
+
+            switch (status) {
+                case SENDING: {
+                    // Read the current progress values from the LiveData
+                    Integer sent  = repo.getTransferSent().getValue();
+                    Integer total = repo.getTransferTotal().getValue();
+                    int s = (sent  != null) ? sent  : 0;
+                    int t = (total != null) ? total : 0;
+                    notificationManager.showBackupProgressNotification(s, t);
+                    break;
+                }
+                case PAUSED: {
+                    Integer sent  = repo.getTransferSent().getValue();
+                    Integer total = repo.getTransferTotal().getValue();
+                    int s = (sent  != null) ? sent  : 0;
+                    int t = (total != null) ? total : 0;
+                    notificationManager.showBackupPausedNotification(s, t);
+                    break;
+                }
+                case COMPLETED: {
+                    Integer total  = repo.getTransferTotal().getValue();
+                    Integer failed = repo.getFailedCount().getValue();
+                    int t = (total  != null) ? total  : 0;
+                    int f = (failed != null) ? failed : 0;
+                    int succeeded = Math.max(0, t - f);
+                    // One-time success/error summary — replaces the sticky progress
+                    // notification (same BACKUP_PROGRESS_NOTIFICATION_ID).
+                    notificationManager.showBackupCompleteNotification(succeeded, f);
+                    // BackupFragment is no longer on screen to acknowledge this state —
+                    // reset the repository here so the next backup starts cleanly.
+                    repo.resetTransfer();
+                    break;
+                }
+                case STOPPED:
+                    // User tapped Stop in the notification — replace the sticky
+                    // progress notification with a brief "Backup stopped" notice.
+                    notificationManager.showBackupStoppedNotification();
+                    repo.resetTransfer();
+                    break;
+                case CANCELED_BY_PC:
+                    // PC dismissed the folder picker before any file was sent.
+                    // BackupFragment is still on-screen and shows a Toast — no
+                    // notification banner needed; just dismiss the progress icon.
+                    notificationManager.dismissBackupProgressNotification();
+                    repo.resetTransfer();
+                    break;
+                case FAILED:
+                    // BackupFragment is gone — replace the sticky notification with a
+                    // brief "Backup failed" notice instead of dismissing silently.
+                    notificationManager.showBackupFailedNotification();
+                    repo.resetTransfer();
+                    break;
+                case IDLE:
+                default:
+                    break;
+            }
+        };
+        repo.getTransferStatus().observeForever(backupTransferStatusObserver);
+
+        // Also observe transferSent so the notification counter ticks on every file.
+        // Skip the final tick (sent == total): the COMPLETED transition that follows
+        // immediately after replaces this notification with the one-time success/error
+        // summary, so rendering "X / X files" here would only flicker or get stuck.
+        // Stored in transferSentObserver so it is removed in onDestroy — without this
+        // each service instance leaks one anonymous observer per reconnect.
+        transferSentObserver = sent -> {
+            Integer total = repo.getTransferTotal().getValue();
+            int s = (sent  != null) ? sent  : 0;
+            int t = (total != null) ? total : 0;
+            if (BackupTransferStatus.SENDING.equals(
+                    repo.getTransferStatus().getValue()) && s < t) {
+                notificationManager.showBackupProgressNotification(s, t);
+            }
+        };
+        repo.getTransferSent().observeForever(transferSentObserver);
+    }
+
+    /**
+     * Observes {@link BackupRepository#getScanStatus()} for the lifetime of this
+     * service so that scan failures (e.g. permission errors while enumerating
+     * files) surface to the user even though {@code BackupFragment} has already
+     * returned to the dashboard by the time the scan finishes.
+     *
+     * <p>Mirrors {@link #registerBackupTransferProgressObserver} — must be called
+     * on the main thread (onCreate runs on main thread) because
+     * {@code LiveData.observeForever} requires it.
+     */
+    private void registerBackupScanStatusObserver() {
+        BackupRepository repo = BackupRepository.getInstance();
+        backupScanStatusObserver = status -> {
+            if (status == null) return;
+
+            if (status == com.example.android.domain.enums.BackupScanStatus.FAILED) {
+                notificationManager.showBackupScanFailedNotification();
+                repo.reset();
+            }
+        };
+        repo.getScanStatus().observeForever(backupScanStatusObserver);
+    }
+
+    /**
+     * Registers ConnectivityService as the {@link BackupRepository.ControlActionListener}.
+     *
+     * <p>{@code BackupTransferUseCase} is only accessible here (in the service), so
+     * pause/resume/stop requests originating from the in-app UI (BackupViewModel) or
+     * from the sticky notification actions are routed through this listener to reach
+     * the running use case on its background thread.
+     */
+    private void registerBackupControlActionListener() {
+        BackupRepository.getInstance().setControlActionListener(
+                new BackupRepository.ControlActionListener() {
+                    @Override
+                    public void onPauseRequested() {
+                        if (backupTransferUseCase != null) {
+                            backupTransferUseCase.pauseTransfer();
+                        }
+                    }
+
+                    @Override
+                    public void onResumeRequested() {
+                        if (backupTransferUseCase != null) {
+                            backupTransferUseCase.resumeTransfer();
+                        }
+                    }
+
+                    @Override
+                    public void onStopRequested() {
+                        if (backupTransferUseCase != null) {
+                            backupTransferUseCase.stopTransfer();
+                        }
+                    }
+                }
+        );
+    }
+
+    /**
+     * Registers ConnectivityService as the FileTransferActionListener on the Repository.
+     * This is the bridge between the user's Accept/Reject decision (ViewModel/UI layer)
+     * and the actual network operations (Transport layer).
+     *
+     * The listener runs on a dedicated background thread to avoid blocking the main thread.
+     */
+    private void registerFileTransferActionListener() {
+        ReceiveFileRepository.getInstance().setActionListener(
+                new ReceiveFileRepository.ReceiveFileActionListener() {
+
+                    @Override
+                    public void onUserAccepted(String fileName) {
+                        new Thread(() -> {
+                            try {
+                                // Tell the PC we accept.
+                                // We do NOT call receiveFileUseCase.execute() here anymore.
+                                // Desktop will open file_data_pc after receiving ACCEPT,
+                                // and the polling loop will trigger FileDataChannelHandler,
+                                // which calls receiveFileUseCase — eliminating the race condition.
+                                respondToFileTransferUseCase.accept();
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error sending accept to PC: " + e.getMessage());
+                                ReceiveFileRepository.getInstance().onTransferFailed();
+                            } finally {
+                                // Dismiss the approval notification — it has served its purpose.
+                                notificationManager.dismissFileTransferNotification();
+                            }
+                        }, "FileTransferAcceptThread").start();
+                    }
+
+                    @Override
+                    public void onUserRejected() {
+                        new Thread(() -> {
+                            try {
+                                respondToFileTransferUseCase.reject();
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error sending reject to PC: " + e.getMessage());
+                            } finally {
+                                notificationManager.dismissFileTransferNotification();
+                            }
+                        }, "FileTransferRejectThread").start();
+                    }
+                }
+        );
     }
 }

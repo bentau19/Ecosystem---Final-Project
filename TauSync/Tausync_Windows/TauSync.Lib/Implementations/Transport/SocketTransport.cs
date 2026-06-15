@@ -83,6 +83,7 @@ namespace TauSync.Implementations.Transport
             int delayMs = CoreConfig.ClientConnectRetryDelaySeconds * 1000;
             var tryLock = new SemaphoreSlim(1, 1);
 
+            _timeoutCts?.Dispose();
             _timeoutCts = new CancellationTokenSource(GetTimeout(timeoutSeconds));
 
             _ = RunConnectRetryLoopAsync(host, connectedTcs, delayMs, tryLock, _timeoutCts.Token);
@@ -197,10 +198,18 @@ namespace TauSync.Implementations.Transport
 
             _receiveCts = new CancellationTokenSource();
 
+            _timeoutCts?.Dispose();
             _timeoutCts = new CancellationTokenSource(GetTimeout(timeoutSeconds));
 
             var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_receiveCts.Token, _timeoutCts.Token);
-            _acceptTask = Task.Run(() => AcceptLoopAsync(linkedCts.Token));
+            _acceptTask = Task.Run(async () =>
+            {
+                // Own the linked CTS for the lifetime of the accept loop so it is always disposed.
+                using (linkedCts)
+                {
+                    await AcceptLoopAsync(linkedCts.Token).ConfigureAwait(false);
+                }
+            });
         }
 
         /// <summary>
@@ -244,6 +253,7 @@ namespace TauSync.Implementations.Transport
         public void Disconnect()
         {
             if (!_isConnected) return;
+            _isConnected = false;
            _receiveCts?.Cancel();
             try { _receiveTask?.Wait(TimeSpan.FromSeconds(2)); } catch { }
                 try { _acceptTask?.Wait(TimeSpan.FromSeconds(1)); } catch { }
@@ -251,11 +261,17 @@ namespace TauSync.Implementations.Transport
              _stream?.Close();
             _tcpClient?.Close();
 
+            // Unblock every reader stuck on an open channel stream. The peer is gone, so no
+            // FIN will ever arrive — deliver a synthetic FIN to each handler so blocked
+            // Read() calls return EOF instead of hanging forever.
+            ConnectionContext.Instance.AbortAllChannels();
+
              _tcpListener = null;
             _stream = null;
              _tcpClient = null;
-             _isConnected = false;
+            _receiveCts?.Dispose();
             _receiveCts = null;
+            _timeoutCts?.Dispose();
              _timeoutCts = null;
             _receiveTask = null;
             _acceptTask = null;
@@ -288,7 +304,19 @@ namespace TauSync.Implementations.Transport
                     }
                     break;
                 }
-                catch (Exception) { break; }
+                catch (Exception ex)
+                {
+                    // The listener died for a non-cancellation reason. Clean up the listener and
+                    // fault the connection TCS: leaving _tcpListener non-null made the next
+                    // Connect("") return early from StartListeningInternal (never arming the new
+                    // timeout) and await this stale TCS forever.
+                    _tcpClient?.Close();
+                    _tcpClient = null;
+                    _tcpListener?.Stop();
+                    _tcpListener = null;
+                    _connectionTcs?.TrySetException(ex);
+                    break;
+                }
             }
         }
 

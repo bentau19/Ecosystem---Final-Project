@@ -1,0 +1,419 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background_main">
+
+    <!-- ── Top bar ────────────────────────────────────────────────────────── -->
+
+    <!-- Back button: 48×48dp minimum touch target -->
+    <ImageButton
+        android:id="@+id/btnBack"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginStart="8dp"
+        android:layout_marginTop="40dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/backup_back_desc"
+        android:padding="12dp"
+        android:scaleX="-1"
+        android:src="@drawable/ic_chevron_right"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:tint="@color/text_primary" />
+
+    <TextView
+        android:id="@+id/tvTitle"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:text="@string/backup_title"
+        android:textColor="@color/text_primary"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        app:layout_constraintBottom_toBottomOf="@id/btnBack"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toEndOf="@id/btnBack"
+        app:layout_constraintTop_toTopOf="@id/btnBack" />
+
+    <!-- Invisible right-side spacer keeps the title visually centred -->
+    <View
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginEnd="8dp"
+        app:layout_constraintBottom_toBottomOf="@id/btnBack"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="@id/btnBack" />
+
+    <!-- ── Scrollable content ─────────────────────────────────────────────── -->
+
+    <androidx.core.widget.NestedScrollView
+        android:id="@+id/scrollContent"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:fillViewport="true"
+        app:layout_constraintBottom_toTopOf="@id/btnStart"
+        app:layout_constraintTop_toBottomOf="@id/btnBack">
+
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="24dp"
+            android:paddingBottom="16dp">
+
+            <!-- Section label: backup type -->
+            <TextView
+                android:id="@+id/tvSectionType"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="24dp"
+                android:letterSpacing="0.08"
+                android:text="@string/backup_section_type"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toTopOf="parent" />
+
+            <!-- Card: Backup All Photos & Videos ──────────────────────────── -->
+            <!--
+                Acts as a radio-button card. Selected state: 2dp accent_cyan stroke
+                (toggled in BackupFragment.selectMode). Default: stroke_card.
+            -->
+            <FrameLayout
+                android:id="@+id/cardAllMedia"
+                android:layout_width="0dp"
+                android:layout_height="80dp"
+                android:layout_marginHorizontal="24dp"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/backup_card_default"
+                android:clickable="true"
+                android:contentDescription="@string/backup_btn_all_media"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/tvSectionType">
+
+                <!-- Icon -->
+                <ImageView
+                    android:id="@+id/iconAllMedia"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_gravity="center_vertical"
+                    android:layout_marginStart="20dp"
+                    android:src="@drawable/ic_photo_library"
+                    app:tint="@color/icon_blue" />
+
+                <!-- Text block -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_vertical"
+                    android:layout_marginStart="64dp"
+                    android:layout_marginEnd="16dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/backup_btn_all_media"
+                        android:textColor="@color/text_primary"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/backup_btn_all_media_sub"
+                        android:textColor="@color/text_muted"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <!-- Selection indicator dot (visible when selected) -->
+                <View
+                    android:id="@+id/dotAllMedia"
+                    android:layout_width="8dp"
+                    android:layout_height="8dp"
+                    android:layout_gravity="end|center_vertical"
+                    android:layout_marginEnd="20dp"
+                    android:background="@drawable/green_dot"
+                    android:visibility="gone" />
+            </FrameLayout>
+
+            <!-- Card: Backup Folder Files ──────────────────────────────────── -->
+            <FrameLayout
+                android:id="@+id/cardFolder"
+                android:layout_width="0dp"
+                android:layout_height="80dp"
+                android:layout_marginHorizontal="24dp"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/backup_card_default"
+                android:clickable="true"
+                android:contentDescription="@string/backup_btn_folder"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/cardAllMedia">
+
+                <ImageView
+                    android:id="@+id/iconFolder"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_gravity="center_vertical"
+                    android:layout_marginStart="20dp"
+                    android:src="@drawable/ic_folder"
+                    app:tint="@color/icon_blue" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_vertical"
+                    android:layout_marginStart="64dp"
+                    android:layout_marginEnd="16dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/backup_btn_folder"
+                        android:textColor="@color/text_primary"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tvFolderSubtitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/backup_btn_folder_sub"
+                        android:textColor="@color/text_muted"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <View
+                    android:id="@+id/dotFolder"
+                    android:layout_width="8dp"
+                    android:layout_height="8dp"
+                    android:layout_gravity="end|center_vertical"
+                    android:layout_marginEnd="20dp"
+                    android:background="@drawable/green_dot"
+                    android:visibility="gone" />
+            </FrameLayout>
+
+            <!-- Section label: options ─────────────────────────────────────── -->
+            <TextView
+                android:id="@+id/tvSectionOptions"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="24dp"
+                android:layout_marginTop="28dp"
+                android:letterSpacing="0.08"
+                android:text="@string/backup_section_options"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/cardFolder" />
+
+            <!-- Options card: two checkboxes inside a dark card ───────────── -->
+            <LinearLayout
+                android:id="@+id/optionsCard"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="24dp"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/backup_card_default"
+                android:orientation="vertical"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/tvSectionOptions">
+
+                <!-- Checkbox: Don't classify junk files -->
+                <CheckBox
+                    android:id="@+id/cbNoJunk"
+                    android:layout_width="match_parent"
+                    android:layout_height="56dp"
+                    android:layout_marginStart="12dp"
+                    android:buttonTint="@color/accent_cyan"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp"
+                    android:text="@string/backup_opt_no_junk"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp" />
+
+                <!-- Full-width divider — aligns with the card border, not the checkbox icon -->
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="@color/stroke_card" />
+
+                <!-- Checkbox: Delete originals after backup -->
+                <CheckBox
+                    android:id="@+id/cbDeleteAfter"
+                    android:layout_width="match_parent"
+                    android:layout_height="56dp"
+                    android:layout_marginStart="12dp"
+                    android:buttonTint="@color/accent_cyan"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp"
+                    android:text="@string/backup_opt_delete_after"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <!-- ── Storage Saver section ──────────────────────────────────────── -->
+
+            <!-- Section label: storage saver -->
+            <TextView
+                android:id="@+id/tvSectionStorageSaver"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="24dp"
+                android:layout_marginTop="28dp"
+                android:letterSpacing="0.08"
+                android:text="@string/backup_section_storage_saver"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/optionsCard" />
+
+            <!--
+                Storage Saver card: icon | text block (weight=1) | state label | SwitchCompat.
+
+                Root is a horizontal LinearLayout so the state label and switch slot in
+                naturally — no gravity stacking or hard-coded marginEnd math required.
+
+                State feedback uses two reinforcing signals (updated in BackupFragment):
+                  - tvStorageSaverState: "OFF" (text_muted) ↔ "ON" (accent_cyan)
+                  - card background: backup_card_default ↔ backup_card_selected (2dp cyan stroke)
+            -->
+            <LinearLayout
+                android:id="@+id/cardStorageSaver"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="24dp"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/backup_card_default"
+                android:gravity="center_vertical"
+                android:minHeight="72dp"
+                android:orientation="horizontal"
+                android:paddingTop="14dp"
+                android:paddingBottom="14dp"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/tvSectionStorageSaver">
+
+                <!-- Compress icon — decorative; excluded from accessibility focus -->
+                <ImageView
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_marginStart="20dp"
+                    android:contentDescription="@null"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_compress"
+                    app:tint="@color/icon_blue" />
+
+                <!--
+                    Title + subtitle — weight=1 absorbs all remaining space so the
+                    state label and switch are pushed to the right edge.
+                -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="20dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/backup_opt_storage_saver"
+                        android:textColor="@color/text_primary"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/backup_opt_storage_saver_sub"
+                        android:textColor="@color/text_muted"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <!--
+                    State label: "OFF" / "ON".
+                    - Starts as "OFF" in text_muted; BackupFragment flips to "ON" in accent_cyan.
+                    - minWidth="32dp" keeps alignment stable when text changes length.
+                    - gravity="center" keeps the 2-char word visually centred in its slot.
+                    - Not focusable independently — TalkBack reads it as part of the switch row.
+                -->
+                <TextView
+                    android:id="@+id/tvStorageSaverState"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:focusable="false"
+                    android:gravity="center"
+                    android:importantForAccessibility="no"
+                    android:minWidth="32dp"
+                    android:text="@string/backup_opt_storage_saver_off"
+                    android:textColor="@color/text_muted"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <!--
+                    SwitchCompat:
+                    - No explicit width/height — wrap_content; LinearLayout measures it correctly.
+                    - thumbTint accent_cyan / trackTint stroke_card for brand consistency.
+                    - contentDescription is the accessible label; TalkBack reads switch state
+                      automatically ("on"/"off") after the description.
+                -->
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switchStorageSaver"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="16dp"
+                    android:checked="false"
+                    android:contentDescription="@string/backup_opt_storage_saver_desc"
+                    android:minWidth="48dp"
+                    app:thumbTint="@color/accent_cyan"
+                    app:trackTint="@color/stroke_card" />
+
+            </LinearLayout>
+
+        </androidx.constraintlayout.widget.ConstraintLayout>
+    </androidx.core.widget.NestedScrollView>
+
+    <!-- ── Start Backup CTA ───────────────────────────────────────────────── -->
+    <!--
+        Pinned to the bottom. Disabled (alpha=0.4) until the user picks a mode.
+        Enabled in BackupFragment.selectMode(). Hidden (GONE) while
+        cardTransferControls is visible — the two are mutually exclusive.
+    -->
+    <androidx.appcompat.widget.AppCompatButton
+        android:id="@+id/btnStart"
+        android:layout_width="0dp"
+        android:layout_height="60dp"
+        android:layout_marginHorizontal="24dp"
+        android:layout_marginBottom="32dp"
+        android:alpha="0.4"
+        android:background="@drawable/button_shape"
+        android:backgroundTint="@color/accent_cyan"
+        android:enabled="false"
+        android:text="@string/backup_start"
+        android:textAllCaps="false"
+        android:textColor="@color/background_main"
+        android:textSize="17sp"
+        android:textStyle="bold"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

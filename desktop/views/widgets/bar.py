@@ -5,45 +5,57 @@ from resources.colors import Colors
 
 
 class Bar(QWidget):
-    """A custom widget that displays a horizontal battery level indicator.
-    
-    This widget renders a battery bar with a background track and a gradient fill
-    that represents the current battery percentage. The bar has a fixed height
-    and uses a green gradient for the fill.
-    
-    Args:
-        percent (int): Battery percentage (0-100)
-        parent (Optional[QWidget]): Parent widget, defaults to None
+    """A custom widget that displays a horizontal level indicator bar.
+
+    Renders a rounded background track and a rounded gradient fill scaled to
+    the current percentage. The fill colors are configurable via
+    *gradient_start* and *gradient_end*, so this widget can represent battery
+    level, storage usage, or any other percentage-based metric.
     """
 
     def __init__(self, percent: int, gradient_start: QColor, gradient_end: QColor,
                  parent: QWidget | None = None) -> None:
-        """Initialize the BatteryBar widget.
-        
+        """Initialize the Bar widget.
+
         Args:
-            percent (int): Battery percentage (0-100)
-            parent (Optional[QWidget]): Parent widget, defaults to None
+            percent: Fill percentage, clamped to ``[0, 100]``.
+            gradient_start: Color at the start (left edge) of the fill gradient.
+            gradient_end: Color at the end (right edge) of the fill gradient.
+            parent: Optional parent widget, defaults to ``None``.
         """
         super().__init__(parent)
-        self._percentage = percent
+        self._percentage: int = percent
 
-        self._gradient_start = gradient_start
-        self._gradient_end = gradient_end
+        self._gradient_start: QColor = gradient_start
+        self._gradient_end: QColor = gradient_end
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         # Fix the bar height to 7 px so it renders as a thin horizontal track.
         self.setFixedHeight(7)
 
-    def paintEvent(self, event: QPaintEvent) -> None:
-        """Handle the paint event to draw the battery bar.
-        
-        This method is called automatically when the widget needs to be redrawn.
-        It creates a painter with antialiasing and draws the background track
-        and battery fill.
-        
+    @property
+    def percent(self) -> int:
+        """Current fill level in the range ``[0, 100]``."""
+        return self._percentage
+
+    def set_percent(self, percent: int) -> None:
+        """Update the fill percentage and schedule a repaint.
+
         Args:
-            event (QPaintEvent): The paint event
+            percent: New fill level clamped to ``[0, 100]``.
+        """
+        self._percentage = max(0, min(100, percent))
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        """Handle the paint event to draw the bar.
+
+        Called automatically by Qt when the widget needs to be redrawn. Creates
+        a painter with antialiasing and draws the background track and fill.
+
+        Args:
+            event: The paint event delivered by Qt.
         """
         painter: QPainter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)

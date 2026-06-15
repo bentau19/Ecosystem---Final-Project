@@ -91,7 +91,7 @@ def _ensure_clr(dll_path: Optional[str] = None) -> None:
         from System import Array, Byte  # pyright: ignore[reportMissingImports]
         from System.Runtime.InteropServices import GCHandle, GCHandleType  # pyright: ignore[reportMissingImports]
         from TauSync.Implementations.Management import ConnectionManager as _CM  # pyright: ignore[reportMissingImports]
-        from System import Nullable, Int32
+        from System import Nullable, Int32, TimeoutException
 
         _Array = Array
         _Byte = Byte
@@ -598,7 +598,12 @@ class TauSync:
         Blocks until a remote peer connects.  Only needs to be called once
         per process - the underlying transport is a singleton.
 
+        Args:
+            timeout_seconds: Max seconds to wait for a client.
+                ``None`` (default) waits forever.
+
         Raises:
+            TimeoutError: If no client connected within *timeout_seconds*.
             RuntimeError: If the transport was already established in
                 client mode, or if already listening.
         """
@@ -640,9 +645,13 @@ class TauSync:
         Args:
             ip: Server IP address (e.g. ``"192.168.1.50"``), or ``""``
                 to listen (server mode).
-            timeout_seconds: Optional timeout in seconds for the connection attempt.
+            timeout_seconds: Max seconds for the connection attempt.
+                ``None`` (default) retries forever.
 
         Raises:
+            TimeoutError: If the connection was not established within
+                *timeout_seconds*.
+            ValueError: If *ip* is non-empty but not a valid IPv4 address.
             RuntimeError: If the transport was already established in
                 the opposite role, or already connected to a different
                 address.
@@ -650,13 +659,17 @@ class TauSync:
 
         from System import TimeoutException
 
-        ipaddress.IPv4Address(ip)
         self._check_not_disposed()
         ip = ip.strip() if ip else ""
 
+        # Empty string = server mode (documented fallback). Validate the address
+        # only for client mode — validating first broke the fallback by raising
+        # AddressValueError before listen() could ever run.
         if not ip:
-            self.listen()
+            self.listen(timeout_seconds)
             return
+
+        ipaddress.IPv4Address(ip)
 
         with TauSync._global_role_lock:
             if TauSync._global_role == _ROLE_SERVER:
@@ -692,7 +705,12 @@ class TauSync:
     @property
     def is_connected(self) -> bool:
         """Whether the underlying TCP transport is up."""
-        if not self._manager.IsConnected():
+        if self._disposed:
+            return False
+        try:
+            if not self._manager.IsConnected():
+                return False
+        except Exception:
             return False
         return TauSync._global_role != _ROLE_NONE
 
@@ -707,7 +725,7 @@ class TauSync:
             self,
             word: str,
             chunk_size: int = 65536,
-            timeout_seconds: int | None = None,
+            timeout_seconds: int | None = 60,
     ) -> TauSyncStream:
         """Open a named duplex stream (meeting-word handshake).
 
@@ -719,13 +737,22 @@ class TauSync:
                 Must be a non-empty, non-blank string.
             chunk_size: Default read buffer size for the returned stream
                 (1 .. 16 MB).
+            timeout_seconds: Max seconds to wait for the peer to call
+                ``connect(word)`` too.  NOTE: unlike ``listen``/``connect_to``,
+                ``None`` here does NOT mean "wait forever" — it falls back to
+                the library default handshake timeout (30 s, CoreConfig
+                ``HandshakeTimeoutSeconds``).
 
         Returns:
             A ``TauSyncStream`` wrapping the paired duplex channel.
 
         Raises:
-            RuntimeError: If the transport is not connected or the
-                manager has been disposed.
+            TimeoutError: If the handshake did not complete within
+                *timeout_seconds*.
+            RuntimeError: If the transport is not connected, the manager has
+                been disposed, or another ``connect()`` with the same word is
+                still in flight (concurrent same-word guard — wait for it to
+                resolve or use a distinct word).
             ValueError: If *word* is empty/blank or *chunk_size* is invalid.
         """
         from System import TimeoutException
@@ -765,17 +792,23 @@ class TauSync:
             pass
 
     def disconnect(self) -> None:
+        """Close the TCP transport and reset the process-wide role to ``none``.
+
+        After this call ``is_connected`` returns ``False`` and ``listen()`` /
+        ``connect_to()`` may be called again on the same instance.
+
+        Safe to call on an already-disconnected transport (no-op).
+
+        Raises:
+            RuntimeError: If this instance has been disposed.
+        """
+        self._check_not_disposed()
         if not self.is_connected:
             return
-        self._check_not_disposed()
-
-        try:
-            self._manager.Disconnect()
-            with TauSync._global_role_lock:
-                TauSync._global_role = _ROLE_NONE
-                TauSync._global_target = None
-        except Exception as e:
-            raise
+        self._manager.Disconnect()
+        with TauSync._global_role_lock:
+            TauSync._global_role = _ROLE_NONE
+            TauSync._global_target = None
 
     def new_manager(self) -> "TauSync":
         """Create another ``TauSync`` instance sharing the same singleton socket.

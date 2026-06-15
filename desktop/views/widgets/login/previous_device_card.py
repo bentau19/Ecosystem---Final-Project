@@ -1,8 +1,3 @@
-"""
-Device card for the login screen's right panel.
-Shows name, OS/tag meta, status badge, and last-seen time.
-On hover the status column is replaced by a 'Connect →' button.
-"""
 from datetime import datetime, timedelta, date
 
 from PySide6.QtCore import QEvent, QRectF, Qt, Slot
@@ -15,12 +10,10 @@ from PySide6.QtWidgets import (
 
 from domain.dto.previous_device import PreviousDeviceDTO
 from domain.enums.device_status import DeviceStatus
-from domain.enums.screen import Screen
 from resources.colors import LoginColors
 from resources.paths import Icons
 from resources.spacing import Spacing
 from app.app_state import app_state
-from app.navigation_manager import navigation_manager
 from viewmodels.device import DeviceViewModel
 
 # Maps DeviceStatus → QSS object name for the badge widget
@@ -42,8 +35,9 @@ class PreviousDeviceCard(QWidget):
     ``Connect →`` button that initiates a connection via the
     :class:`~viewmodels.device.DeviceViewModel`.
 
-    When the ViewModel reports ``device_connected``, this card calls the
-    navigation manager to transition to the dashboard screen.
+    Navigation on ``device_connected`` is owned by
+    :class:`~views.screens.login.LoginScreen` — not by this card — so it
+    works correctly even when no previous devices exist in the DB.
     """
 
     def __init__(
@@ -51,7 +45,8 @@ class PreviousDeviceCard(QWidget):
             device: PreviousDeviceDTO,
             parent: QWidget | None = None,
     ) -> None:
-        """
+        """Initialize the previous-device card and build its content layout.
+
         Args:
             device: Device data to display on this card.
             parent: Optional parent widget.
@@ -81,7 +76,12 @@ class PreviousDeviceCard(QWidget):
 
     @property
     def device(self) -> PreviousDeviceDTO:
-        """The device DTO bound to this card."""
+        """Return the device DTO bound to this card.
+
+        Returns:
+            The :class:`~domain.dto.previous_device.PreviousDeviceDTO` this
+            card was constructed with.
+        """
         return self._device
 
     # ── Setup ──────────────────────────────────────────────────────────────────
@@ -101,7 +101,7 @@ class PreviousDeviceCard(QWidget):
         self._meta_lbl = QLabel(f"{self._device.os}  ·  {self._device.tag}")
         self._meta_lbl.setObjectName("DeviceMeta")
 
-        time:date = self._device.last_connected
+        time: date = self._device.last_connected
         # Classify as 'recent' if last seen within 14 days, otherwise 'idle'
         status = DeviceStatus.RECENT if datetime.now().date() - time < timedelta(days=14) else DeviceStatus.IDLE
         obj_name = _BADGE_CONFIG[status]
@@ -184,9 +184,9 @@ class PreviousDeviceCard(QWidget):
         pass
 
     def _connect_signals(self) -> None:
-        # Wire the Connect button and ViewModel device_connected signal.
+        # Wire the Connect button; navigation on device_connected is owned by
+        # LoginScreen so it fires even when no previous-device cards exist.
         self._connect_btn.clicked.connect(self._on_button_clicked)
-        self._device_viewmodel.device_connected.connect(self._on_device_connected)
 
     # ── Hover events ──────────────────────────────────────────────────────────
 
@@ -209,11 +209,6 @@ class PreviousDeviceCard(QWidget):
         self._connect_btn.setVisible(False)
         self._status_widget.setVisible(True)
         super().leaveEvent(event)
-
-    @Slot()
-    def _on_device_connected(self) -> None:
-        # Navigate to the dashboard; fires for every card regardless of which initiated the request.
-        navigation_manager.go_to_screen(Screen.DASHBOARD)
 
     @Slot()
     def _on_button_clicked(self) -> None:

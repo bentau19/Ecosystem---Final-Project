@@ -3,11 +3,12 @@ from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout
 
 from app.app_state import app_state
 from app.theme_manager import theme_manager
-from dto.tool import ToolDTO
+from domain.dto.tool import ToolDTO
 from resources.colors import DashboardColors, LightColors, LightDashboardColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet, themed
+from viewmodels.tool import ToolViewModel
 
 
 class ToolsSectionHeader(QWidget):
@@ -19,7 +20,7 @@ class ToolsSectionHeader(QWidget):
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialize the _tools section header widget.
+        """Initialize the tools section header widget.
 
         Args:
             parent: Parent widget, defaults to None.
@@ -29,7 +30,7 @@ class ToolsSectionHeader(QWidget):
         self._title: QLabel
         self._tag: QLabel
 
-        self._tools_view_model = app_state.tool_viewmodel
+        self._tools_view_model: ToolViewModel = app_state.tool_viewmodel
 
         self._setup_ui()
         self._setup_style()
@@ -64,8 +65,8 @@ class ToolsSectionHeader(QWidget):
 
     @staticmethod
     def _create_tag() -> QLabel:
-        # Return the initial count tag; text is updated dynamically by _update_tag.
-        tag: QLabel = QLabel("6 tools available")
+        # Start empty; _update_tag populates the real count on the first tools_changed signal.
+        tag: QLabel = QLabel("")
         tag.setObjectName("tag")
         return tag
 
@@ -78,7 +79,7 @@ class ToolsSectionHeader(QWidget):
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
-        # Wire tool_count_changed and theme_changed to their slots.
+        # Wire tools_changed and theme_changed to their slots.
         self._tools_view_model.tools_changed.connect(self._update_tag)
         theme_manager.theme_changed.connect(self._setup_style)
 

@@ -10,9 +10,6 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 
@@ -21,8 +18,12 @@ import java.util.function.BiConsumer;
  *
  * <p>Branches on TargetID: 0 = discovery (requires CONTROL + MagicBytes),
  * >0 = pass to registered handler. FIN cleanup: remove from both routingMap
- * and targetMap, then releaseId with delayed recycling.
- * Matches C# ConnectionContext.
+ * and targetMap.
+ *
+ * <p>IDs are never reused within a session (24-bit monotonic counter, reset on
+ * reconnect), so stale FIN frames addressed to a closed channel hit an unmapped
+ * ID and are dropped instead of corrupting a newer channel that recycled the
+ * same ID. Matches C# ConnectionContext.
  */
 public final class ConnectionContext {
 
@@ -38,23 +39,13 @@ public final class ConnectionContext {
     private final Object idLock = new Object();
 
     /**
-     * IDs eligible for reuse. Uses ConcurrentHashMap as a set (value is always 0)
-     * for idempotent add — safe when both FIN-dispatch and completeStream release
-     * the same ID.
+     * LocalID -> handler(payload, flags). Handler decides DATA vs in-band CONTROL.
      */
-    private final ConcurrentHashMap<Integer, Byte> releasedIds = new ConcurrentHashMap<>();
-
-    private final ScheduledExecutorService recycleScheduler =
-            Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "TauSync-IdRecycler");
-                t.setDaemon(true);
-                return t;
-            });
-
-    /** LocalID -> handler(payload, flags). Handler decides DATA vs in-band CONTROL. */
     private final ConcurrentHashMap<Integer, BiConsumer<byte[], Byte>> routingMap = new ConcurrentHashMap<>();
 
-    /** LocalID -> PeerID. For sending: TargetID = targetMap.get(localId) in the TPack header. */
+    /**
+     * LocalID -> PeerID. For sending: TargetID = targetMap.get(localId) in the TPack header.
+     */
     private final ConcurrentHashMap<Integer, Integer> targetMap = new ConcurrentHashMap<>();
 
     /**
@@ -79,16 +70,40 @@ public final class ConnectionContext {
     }
 
     /**
-     * Establishes the transport connection.
+     * Establishes the transport connection with no timeout (waits indefinitely).
      *
      * @param targetId peer IP for client mode; null/empty for server mode
      * @throws IllegalStateException if already connected or not initialised
      */
     public void initializeTransports(String targetId) throws Exception {
+        initializeTransports(targetId, null);
+    }
+
+    /**
+     * Establishes the transport connection, giving up after the timeout.
+     *
+     * @param targetId       peer IP for client mode; null/empty for server mode
+     * @param timeoutSeconds max seconds to wait for the connection; null = wait forever
+     * @throws java.util.concurrent.TimeoutException if the timeout elapses before connecting
+     * @throws IllegalStateException                 if already connected or not initialised
+     */
+    public void initializeTransports(String targetId, Integer timeoutSeconds) throws Exception {
         if (wifiTransport.isConnected()) {
             throw new IllegalStateException("Transport already connected.");
         }
-        wifiTransport.connect(targetId).get();
+        // Clear any routing/discovery state left over from a previous session before
+        // re-establishing, so stale handlers and pending REQs are not replayed on the
+        // new session's frames. Mirrors the C# ConnectionContext.InitializeTransports.
+        reset();
+        try {
+            wifiTransport.connect(targetId, timeoutSeconds).get();
+        } catch (java.util.concurrent.ExecutionException e) {
+            // Unwrap so callers see TimeoutException (or the real cause) directly,
+            // matching the C# GetAwaiter().GetResult() unwrapping behaviour.
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception) throw (Exception) cause;
+            throw e;
+        }
     }
 
     public ITransport getWifiTransport() {
@@ -110,7 +125,11 @@ public final class ConnectionContext {
     // ── ID Management ─────────────────────────────────────────────────
 
     /**
-     * Reserves the next available ID, preferring recycled IDs.
+     * Reserves the next channel ID. IDs are strictly monotonic within a session —
+     * never recycled — so frames that arrive late for a closed channel (e.g. a peer
+     * FIN delayed behind bulk transfer data) can never be misrouted to a newer
+     * channel. The 24-bit space (16.7M IDs) cannot realistically be exhausted in
+     * one session, and {@link #reset()} restarts the counter on every reconnect.
      *
      * @return an ID in the range [MIN_ID..MAX_ID]
      */
@@ -131,24 +150,29 @@ public final class ConnectionContext {
     }
 
     /**
-     * Releases ID: clears routing/target maps immediately, then schedules the ID
-     * for recycling after {@link CoreConfig#ID_RECYCLE_DELAY_MS} so that in-flight
-     * FIN frames are processed before another handler can claim the same ID.
+     * Releases ID: clears routing/target maps immediately. The ID itself is
+     * intentionally NOT returned to a free pool — recycling IDs allowed a delayed
+     * peer FIN (or a double release from FIN-dispatch + completeStream) to destroy
+     * the routing/target entries of a newer channel that had re-reserved the same
+     * ID, surfacing as "No peer route for localId N" on writes. Safe to call
+     * multiple times for the same ID.
      */
     public void releaseId(int id) {
         if (id < CoreConfig.MIN_ID || id > CoreConfig.MAX_ID) return;
         routingMap.remove(id);
         targetMap.remove(id);
-        recycleScheduler.schedule(() -> releasedIds.put(id, (byte) 0),
-                CoreConfig.ID_RECYCLE_DELAY_MS, TimeUnit.MILLISECONDS);
     }
 
-    /** PeerID to use when sending for this local ID. Returns null if not bound. */
+    /**
+     * PeerID to use when sending for this local ID. Returns null if not bound.
+     */
     public Integer getPeerIdFor(int localId) {
         return targetMap.get(localId);
     }
 
-    /** Binds localId -> peerId for sending (e.g. after initiator receives OK). */
+    /**
+     * Binds localId -> peerId for sending (e.g. after initiator receives OK).
+     */
     public void setTargetForSend(int localId, int peerId) {
         if (localId < CoreConfig.MIN_ID || localId > CoreConfig.MAX_ID) return;
         targetMap.put(localId, peerId);
@@ -204,13 +228,49 @@ public final class ConnectionContext {
         return routingMap.containsKey(id);
     }
 
+    /**
+     * Aborts every open channel by delivering a synthetic FIN to its registered handler.
+     * Each handler responds to FIN by completing its backing {@link BackBufferedInputStream},
+     * which unblocks any thread sitting in {@code read()} with EOF instead of hanging forever.
+     *
+     * <p>Must be called when the transport dies (receive loop exit / explicit disconnect):
+     * without it, streams whose peer vanished without sending FIN (e.g. desktop closed
+     * mid-transfer) block their readers indefinitely. Mirrors C# {@code AbortAllChannels}.
+     */
+    public void abortAllChannels() {
+        for (java.util.Map.Entry<Integer, BiConsumer<byte[], Byte>> entry : routingMap.entrySet()) {
+            try {
+                entry.getValue().accept(new byte[0], CoreConfig.FLAG_FIN);
+            } catch (Exception ignored) {
+                // A failing handler must not prevent the remaining channels from being aborted.
+            }
+        }
+        routingMap.clear();
+        targetMap.clear();
+    }
+
+    /**
+     * Clears all routing, service, and discovery state accumulated during a session.
+     *
+     * <p>Must be called before re-establishing a new connection so that stale handlers
+     * and pending discovery frames from the previous session are not replayed on the
+     * incoming frames of the new session.
+     */
+    public void reset() {
+        routingMap.clear();
+        targetMap.clear();
+        serviceRegistry.clear();
+        pendingDiscoveryByWord.clear();
+        nextCorrelationId.set(CoreConfig.MIN_ID);
+    }
+
     // ── Frame Dispatch ────────────────────────────────────────────────
 
     /**
      * Dispatches a received frame to the appropriate handler.
      *
      * @param targetId 0 for control/discovery, >0 for channel handler
-     * @param payload  frame payload (may be empty)
+     * @param payload  frame payload (maybe empty)
      * @param flags    frame flags bitmask
      * @return true if the frame was handled
      */
@@ -243,6 +303,11 @@ public final class ConnectionContext {
         if (request == null) return false;
         if (request.getMagicBytes() != CoreConfig.MAGIC_BYTES) return false;
         if (request.getStatus() == null) return false;
+        if (request.getStatus().trim().equalsIgnoreCase("CANCEL")) {
+            // Peer abandoned an outgoing REQ (its connect timed out or resolved via the
+            // peer path) — forget the orphan instead of reporting it forever. Spec §7.8.
+            return handleDiscoveryCancel(request);
+        }
         if (!request.getStatus().trim().equalsIgnoreCase("REQ")) return false;
 
         String word = request.getType() != null ? request.getType().trim() : null;
@@ -255,6 +320,69 @@ public final class ConnectionContext {
         }
 
         return completeDiscoveryHandshake(request, callback);
+    }
+
+    /**
+     * Handles a peer handshake cancellation: the peer abandoned its REQ for
+     * {@code (Type=word, SenderID)} and we must forget it. Two cases:
+     *
+     * <ol>
+     *   <li><b>REQ still queued</b> — remove exactly the queued payload whose SenderID
+     *       matches from {@link #pendingDiscoveryByWord}, so {@link #getPeerWaitingWords()}
+     *       stops reporting a word nobody is waiting on (and the app's polling loop stops
+     *       warning about it every tick).</li>
+     *   <li><b>REQ already handshaken</b> — the incoming channel built from that REQ
+     *       targets the cancelled SenderID. Abort it with a synthetic FIN (the
+     *       {@link #abortAllChannels()} pattern) so any blocked reader gets EOF instead of
+     *       hanging until its read timeout, then release the local id.</li>
+     * </ol>
+     *
+     * <p>The reverse {@link #targetMap} lookup cannot hit a live winning channel: the
+     * cancelled SenderID is a peer <em>outgoing</em>-attempt id, while our own outgoing
+     * routes target the peer's <em>incoming</em> ids — distinct values from the peer's
+     * monotonic id counter.
+     *
+     * <p>Idempotent and best-effort: a CANCEL for an unknown word/id is a no-op.
+     */
+    private boolean handleDiscoveryCancel(TransferRequest cancel) {
+        String word = cancel.getType() != null ? cancel.getType().trim() : null;
+        if (word == null || word.isEmpty()) return false;
+
+        // ── Case 1: REQ still queued — drop the matching entry only ──────────────
+        ConcurrentLinkedQueue<byte[]> queue = pendingDiscoveryByWord.get(word);
+        if (queue != null) {
+            java.util.Iterator<byte[]> it = queue.iterator();
+            while (it.hasNext()) {
+                byte[] entry = it.next();
+                TransferRequest req = parseTransferRequest(entry);
+                if (req != null
+                        && req.getSenderID() == cancel.getSenderID()
+                        && req.getStatus() != null
+                        && req.getStatus().trim().equalsIgnoreCase("REQ")) {
+                    it.remove();
+                }
+            }
+            if (queue.isEmpty()) {
+                pendingDiscoveryByWord.remove(word, queue);
+            }
+        }
+
+        // ── Case 2: REQ already handshaken into an active incoming channel ────────
+        for (java.util.Map.Entry<Integer, Integer> entry : targetMap.entrySet()) {
+            if (entry.getValue() == null || entry.getValue() != cancel.getSenderID()) continue;
+            BiConsumer<byte[], Byte> handler = routingMap.get(entry.getKey());
+            if (handler != null) {
+                try {
+                    handler.accept(new byte[0], CoreConfig.FLAG_FIN);
+                } catch (Exception ignored) {
+                    // A failing handler must not prevent the id cleanup below.
+                }
+            }
+            cleanupLocalId(entry.getKey());
+            break;
+        }
+
+        return true;
     }
 
     private void enqueuePendingDiscovery(String word, byte[] payload) {
@@ -304,7 +432,7 @@ public final class ConnectionContext {
     }
 
     private BiConsumer<byte[], Byte> createIncomingChannelHandler(int localId,
-                                                                   BackBufferedInputStream stream) {
+                                                                  BackBufferedInputStream stream) {
         return (payload, flags) -> {
             if (payload != null && payload.length > 0) {
                 stream.writeChunk(payload);
@@ -324,7 +452,10 @@ public final class ConnectionContext {
                 callback.accept(localId, peerSenderId, stream);
             } catch (Exception e) {
                 cleanupLocalId(localId);
-                try { stream.close(); } catch (Exception ignored) {}
+                try {
+                    stream.close();
+                } catch (Exception ignored) {
+                }
             }
         }, "TauSync-ServiceCb-" + localId);
         callbackThread.setDaemon(true);

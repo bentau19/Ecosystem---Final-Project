@@ -1,0 +1,197 @@
+/* ── Backup file review dialog ─────────────────────────────────────────────────
+   Tokens resolved via BackupReviewColors / LightBackupReviewColors:
+     {{BACKGROUND}}     — dialog body surface
+     {{BORDER}}         — dialog border + dividers
+     {{TEXT_PRIMARY}}   — heading / filename text
+     {{TEXT_SECONDARY}} — subtitle / meta / summary text
+     {{ROW_BG}}         — file row default background
+     {{ROW_BORDER}}     — file row default border
+     {{ROW_HOVER}}      — file row hover background
+     {{KEEP_BG}}        — row bg when decision = "keep"
+     {{KEEP_BORDER}}    — row / button border when kept
+     {{KEEP_TEXT}}      — keep button active text
+     {{DELETE_BG}}      — row bg when decision = "delete"
+     {{DELETE_BORDER}}  — row / button border when deleted
+     {{DELETE_TEXT}}    — delete button active text
+     {{ICON_BG}}        — FileThumbFallback circle background
+     {{ICON_BORDER}}    — FileThumbFallback circle border
+     {{ICON_TEXT}}      — FileThumbFallback text + Apply button gradient start
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Dialog body */
+QDialog#BackupReviewDialog {
+    background-color: {{BACKGROUND}};
+    border: 1px solid {{BORDER}};
+    border-radius: 12px;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────────── */
+
+QWidget#BackupReviewHeader {
+    background-color: {{BACKGROUND}};
+}
+
+QLabel#HeaderIcon {
+    background-color: {{ICON_BG}};
+    border: 1px solid {{ICON_BORDER}};
+    border-radius: 20px;
+    color: {{ICON_TEXT}};
+    font-size: 20px;
+    font-weight: 700;
+}
+
+QLabel#HeaderTitle {
+    color: {{TEXT_PRIMARY}};
+    font-size: 16px;
+    font-weight: 600;
+    background: transparent;
+}
+
+QLabel#HeaderSubtitle {
+    color: {{TEXT_SECONDARY}};
+    font-size: 12px;
+    background: transparent;
+}
+
+/* ── Dividers ─────────────────────────────────────────────────────────────── */
+
+QFrame#BackupDivider {
+    background-color: {{BORDER}};
+    border: none;
+}
+
+/* ── File list (QListView replaces old QScrollArea + QFrame rows) ─────────── */
+
+QListView#FileListView {
+    background-color: {{BACKGROUND}};
+    border: none;
+    outline: none;
+    padding: 8px 0px;
+}
+
+QListView#FileListView::item {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+
+QListView#FileListView::item:selected {
+    background: transparent;
+}
+
+/* Scrollbar */
+QListView#FileListView QScrollBar:vertical {
+    background: {{BACKGROUND}};
+    width: 6px;
+    margin: 0;
+    border-radius: 3px;
+}
+
+QListView#FileListView QScrollBar::handle:vertical {
+    background: {{BORDER}};
+    border-radius: 3px;
+    min-height: 24px;
+}
+
+QListView#FileListView QScrollBar::add-line:vertical,
+QListView#FileListView QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+/* Zero-state when no images are passed to the dialog */
+QLabel#EmptyLabel {
+    color: {{TEXT_SECONDARY}};
+    font-size: 13px;
+    background: transparent;
+}
+
+QWidget#ScrollContent {
+    background-color: {{BACKGROUND}};
+}
+
+/* ── Footer ───────────────────────────────────────────────────────────────── */
+
+QLabel#SummaryLabel {
+    color: {{TEXT_SECONDARY}};
+    font-size: 12px;
+    background: transparent;
+}
+
+/* Cancel — neutral ghost button */
+QPushButton#CancelButton {
+    background-color: transparent;
+    border: 1px solid {{BORDER}};
+    border-radius: 8px;
+    color: {{TEXT_SECONDARY}};
+    font-size: 13px;
+    font-weight: 500;
+    outline: none;
+}
+
+QPushButton#CancelButton:hover {
+    color: {{TEXT_PRIMARY}};
+    border-color: {{ICON_TEXT}};
+}
+
+QPushButton#CancelButton:pressed {
+    background-color: transparent;
+}
+
+/* Apply — primary cyan gradient CTA (mirrors other primary buttons in the app) */
+QPushButton#ApplyButton {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 {{ICON_TEXT}},
+        stop:1 #0891b2
+    );
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    padding: 0px 16px;
+    outline: none;
+}
+
+QPushButton#ApplyButton:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 {{ICON_TEXT}},
+        stop:1 {{ICON_TEXT}}
+    );
+}
+
+QPushButton#ApplyButton:pressed {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #0891b2,
+        stop:1 #0891b2
+    );
+}
+
+QPushButton#ApplyButton:disabled {
+    background: {{BORDER}};
+    color: {{TEXT_SECONDARY}};
+}
+
+/* Keep All — secondary outlined action using keep-green tokens */
+QPushButton#KeepAllButton {
+    background-color: transparent;
+    border: 1px solid {{KEEP_BORDER}};
+    border-radius: 8px;
+    color: {{KEEP_TEXT}};
+    font-size: 13px;
+    font-weight: 500;
+    padding: 0px 14px;
+    outline: none;
+}
+
+QPushButton#KeepAllButton:hover {
+    background-color: {{KEEP_BG}};
+}
+
+QPushButton#KeepAllButton:pressed {
+    background-color: {{KEEP_BG}};
+    border-color: {{KEEP_TEXT}};
+}

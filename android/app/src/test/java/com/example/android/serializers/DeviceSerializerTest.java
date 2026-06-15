@@ -42,7 +42,7 @@ public class DeviceSerializerTest {
     @Test
     public void deserializeRemoteInfo_withValidJson_returnsCorrectObject() {
         // Arrange: Prepare a valid JSON string matching RemoteDeviceInfo fields
-        String rawJson = "{\"pcName\":\"MyWindowsPC\", \"ipAddress\":\"192.168.1.50\"}";
+        String rawJson = "{\"pcName\":\"MyWindowsPC\", \"ip\":\"192.168.1.50\"}";
 
         // Act: Deserialize the raw JSON string back into an object
         RemoteDeviceInfo remote = serializer.deserializeRemoteInfo(rawJson);

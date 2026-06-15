@@ -14,10 +14,6 @@ class ConnectionPill(QFrame):
     This widget shows connection information with a pulsing dot indicator and
     connection type text. It's styled using QSS and displays connection status
     in a compact horizontal pill format.
-
-    Args:
-        parent: Optional[QWidget]
-            Parent widget.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -26,7 +22,7 @@ class ConnectionPill(QFrame):
         Creates all child widgets, sets up the layout, and applies styling.
 
         Args:
-            parent (Optional[QWidget]): Parent widget.
+            parent: Optional parent widget.
         """
         super().__init__(parent)
 

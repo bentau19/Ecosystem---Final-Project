@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 )
 
 from domain.enums.screen import Screen
-from dto.device_info import DeviceInfoDTO, DeviceNameDTO
+from domain.dto.device_info import DeviceInfoDTO, DeviceNameDTO
 from resources.paths import Icons, Styles
 from resources.spacing import Spacing
 from app.app_state import app_state
@@ -32,9 +32,8 @@ class Topbar(QWidget):
         """Initialize the Topbar.
 
         Args:
-            topbar_height (int): Height of the topbar. Defaults to 72.
-            parent (Optional[QWidget], optional): Optional parent widget.
-                                                  Defaults to None.
+            topbar_height: Height of the topbar in pixels. Defaults to 72.
+            parent: Optional parent widget, defaults to ``None``.
         """
         super().__init__(parent)
 
@@ -126,10 +125,11 @@ class Topbar(QWidget):
     @Slot()
     def _move_to_login(self) -> None:
         # Navigate back to the login screen after the device disconnects.
-        print("A")
         navigation_manager.go_to_screen(Screen.LOGIN)
 
     @Slot(object)
-    def _update_device_info(self, infos: list[DeviceInfoDTO]):
+    def _update_device_info(self, infos: list[DeviceInfoDTO]) -> None:
+        # The name card is always first in the list returned by
+        # DeviceViewModel._to_device_info_dtos.
         name: DeviceNameDTO = infos[0]
         self._subtitle_label.setText(f"{name.name}")

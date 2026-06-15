@@ -1,0 +1,42 @@
+{
+  "name": "BackupChannels",
+  "description": "TauSync meeting-word identifiers for the Android-to-PC backup protocol. Both PC and Android must call tau.connect() with the exact same string — define it here once and generate both sides.",
+  "type": "string",
+  "members": [
+    {
+      "name": "BACKUP_MANIFEST_FROM_ANDROID",
+      "value": "backup_manifest",
+      "description": "Android sends {num_files, total_size_bytes} as a lightweight header so the PC can display the transfer summary before the user picks a destination folder."
+    },
+    {
+      "name": "BACKUP_READY_FROM_PC",
+      "value": "backup_ready_pc",
+      "description": "PC sends a ready ack after the user confirms the destination folder."
+    },
+    {
+      "name": "BACKUP_FILE_META_SLOT",
+      "value": "backup_slot_meta_",
+      "description": "Per-file metadata channel prefix. Full channel name: BACKUP_FILE_META_SLOT + str(slot_index). Android sends a JSON object: {\"name\": \"photo.jpg\", \"size\": N, \"mtime\": T, \"rel_path\": \"...\"}. Slot index matches the scan order."
+    },
+    {
+      "name": "BACKUP_FILE_DATA_SLOT",
+      "value": "backup_slot_data_",
+      "description": "Per-file data channel prefix. Full channel name: BACKUP_FILE_DATA_SLOT + str(slot_index). Android streams exactly size raw bytes after the metadata channel closes. PC opens this channel with a file-size-proportional timeout."
+    },
+    {
+      "name": "BACKUP_FILE_RESULT",
+      "value": "backup_file_result_",
+      "description": "PC sends per-file transfer result to Android after receiving and attempting to save the file. Prefix — append slot index. Payload: one of BackupFileResult's values (\"succ\" | \"fail\"). \"fail\" indicates a transport/IO problem; PC-local screening rejections (corrupt/duplicate/filtered) are reported as \"succ\" since the transfer itself completed."
+    },
+    {
+      "name": "BACKUP_CONTROL_FROM_PC",
+      "value": "backup_ctrl_pc",
+      "description": "PC sends JSON control commands to Android during an active backup session. Payload: {\"cmd\": \"pause\"} | {\"cmd\": \"resume\"} | {\"cmd\": \"stop\"}. One connect() per command."
+    },
+    {
+      "name": "BACKUP_CONTROL_FROM_ANDROID",
+      "value": "backup_ctrl_android",
+      "description": "Android sends JSON control commands to PC during an active backup session. Payload: {\"cmd\": \"pause\"} | {\"cmd\": \"resume\"} | {\"cmd\": \"stop\"}. One connect() per command."
+    }
+  ]
+}

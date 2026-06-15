@@ -1,0 +1,11 @@
+/* ── Loading overlay message label ────────────────────────────────────────────
+   Token resolved via LoadingOverlayColors / LightLoadingOverlayColors:
+     {{TEXT}}  — muted secondary text shown below the spinner
+   ─────────────────────────────────────────────────────────────────────────── */
+
+QLabel#loadingMessage {
+    color: {{TEXT}};
+    font-size: 13px;
+    font-weight: 500;
+    background: transparent;
+}

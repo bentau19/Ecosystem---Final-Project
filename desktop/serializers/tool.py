@@ -1,8 +1,10 @@
 from domain.entities.tool import ToolEntity
 from serializers.serializer import ISerializer
 
+_ToolRow = tuple[str, str, str, bool]
 
-class ToolSerializer(ISerializer[ToolEntity | None, tuple]):
+
+class ToolSerializer(ISerializer[ToolEntity | None, _ToolRow | None]):
     """Serializes and deserializes ToolEntity objects to and from SQLite row tuples.
 
     Maps between a ``ToolEntity`` (or ``None`` when absent) and its SQLite
@@ -13,7 +15,7 @@ class ToolSerializer(ISerializer[ToolEntity | None, tuple]):
     """
 
     @staticmethod
-    def serialize(entity: ToolEntity | None) -> tuple[str, str, str, bool] | None:
+    def serialize(entity: ToolEntity | None) -> _ToolRow | None:
         """Convert a ToolEntity to a SQLite row tuple.
 
         Args:
@@ -34,7 +36,7 @@ class ToolSerializer(ISerializer[ToolEntity | None, tuple]):
         )
 
     @staticmethod
-    def deserialize(db_row: tuple) -> ToolEntity | None:
+    def deserialize(db_row: _ToolRow | tuple | None) -> ToolEntity | None:
         """Reconstruct a ToolEntity from a SQLite row tuple.
 
         Args:

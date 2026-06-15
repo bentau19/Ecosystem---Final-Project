@@ -2,11 +2,13 @@ from typing import Final
 
 from repositories.device import DeviceRepository
 from repositories.tool import ToolRepository
+from services.backup import BackupService
 from services.connectivity import ConnectivityService
 from services.device_info import DeviceInfoService
 from services.file_transfer import FileTransferService
 from services.phone_request import PhoneRequestService
 from services.tool import ToolService
+from viewmodels.backup import BackupViewModel
 from viewmodels.device import DeviceViewModel
 from viewmodels.file_transfer import FileTransferViewModel
 from viewmodels.tool import ToolViewModel
@@ -38,6 +40,9 @@ class AppState:
         self.tool_service: Final[ToolService] = ToolService(
             repository=self.tools_repository,
         )
+        self.backup_service: Final[BackupService] = BackupService(
+            connectivity=self.connectivity_service,
+        )
 
         # ViewModels
         self.device_viewmodel: Final[DeviceViewModel] = DeviceViewModel(
@@ -51,10 +56,23 @@ class AppState:
         self.tool_viewmodel: Final[ToolViewModel] = ToolViewModel(
             tool_service=self.tool_service,
         )
+        self.backup_viewmodel: Final[BackupViewModel] = BackupViewModel(
+            backup_service=self.backup_service,
+            connectivity_service=self.connectivity_service,
+        )
         self.phone_request_service: Final[PhoneRequestService] = PhoneRequestService(
             connectivity_service=self.connectivity_service,
             file_transfer_service=self.file_transfer_service,
+            backup_service=self.backup_service,
         )
+
+        # Wire service lifecycles to device connection events.
+        # BackupService is wired first so its executor is initialised before
+        # PhoneRequestService can dispatch receive_manifest() on the first poll.
+        self.device_viewmodel.device_connected.connect(self.backup_service.start)
+        self.device_viewmodel.device_connected.connect(self.phone_request_service.start)
+        self.device_viewmodel.device_disconnected.connect(self.backup_service.stop)
+        self.device_viewmodel.device_disconnected.connect(self.phone_request_service.stop)
 
 
 app_state: Final[AppState] = AppState()

@@ -1,4 +1,3 @@
-
 from PySide6.QtCore import Slot
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
@@ -18,7 +17,7 @@ from domain.enums.device_type import DeviceType
 from views.layouts.flow_layout import FlowLayout
 from app.app_state import app_state
 from app.theme_manager import theme_manager
-from resources.colors import Palette, Colors, LightColors
+from resources.colors import Colors, InfoCardColors, LightColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet, themed
@@ -29,17 +28,19 @@ from views.widgets.dashboard.storage_info import StorageInfo
 
 
 class PhoneDetailsRow(QWidget):
-    """Scrollable row of device-info cards on the dashboard.
+    """Scrollable flow-layout row of device-info cards on the dashboard.
 
-    On construction, it loads all device-info entities via the
-    ``DeviceInfoViewModel`` and renders one ``InfoCard`` per entity.
+    Renders one :class:`~views.widgets.dashboard.info_card.InfoCard` per
+    device-info DTO (name, OS, battery, storage) supplied by
+    :class:`~viewmodels.device.DeviceViewModel`.  Cards are rebuilt on every
+    ``device_infos_updated`` signal so that reconnects always show fresh data.
     """
 
     _DEVICE_TYPE_COLORS: dict[DeviceType, str] = {
-        DeviceType.NAME: Palette.CYAN_800,  # identity → mid-cyan tint
-        DeviceType.OS: Palette.CYAN_800,  # system   → mid-cyan tint
-        DeviceType.STORAGE: Palette.CYAN_800,  # storage  → mid-cyan tint
-        DeviceType.BATTERY: Palette.CYAN_800,  # energy   → mid-cyan tint
+        DeviceType.NAME:    InfoCardColors.ICON_BG,
+        DeviceType.OS:      InfoCardColors.ICON_BG,
+        DeviceType.STORAGE: InfoCardColors.ICON_BG,
+        DeviceType.BATTERY: InfoCardColors.ICON_BG,
     }
 
     def __init__(
@@ -63,13 +64,11 @@ class PhoneDetailsRow(QWidget):
         self._device_viewmodel: DeviceViewModel = app_state.device_viewmodel
 
         self._main_layout: FlowLayout
-        self._cards: list[InfoCard] = []
 
         self._setup_ui()
         self._setup_style()
         self._setup_signals()
 
-        self._device_viewmodel.load_device_info()
 
     def _setup_ui(self) -> None:
         # Create widgets and configure the flow layout.
@@ -165,6 +164,13 @@ class PhoneDetailsRow(QWidget):
 
     @Slot(list)
     def _set_device_infos(self, device_infos: list[DeviceInfoDTO]) -> None:
+        # Clear existing cards before repopulating to avoid duplicates across
+        # logout/login cycles (showEvent re-triggers load_device_info each time).
+        while self._main_layout.count():
+            item = self._main_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
         # Create an InfoCard for each DTO and add it to the flow layout.
         for dto in device_infos:
             if isinstance(dto, DeviceBatteryDTO):
@@ -175,3 +181,4 @@ class PhoneDetailsRow(QWidget):
                 self._main_layout.addWidget(self._create_general_info_card(dto))
             elif isinstance(dto, DeviceOSDTO):
                 self._main_layout.addWidget(self._create_general_info_card(dto))
+

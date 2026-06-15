@@ -388,7 +388,10 @@ desktop/
 │       ├── file_transfer_channels.py  # FileTransferChannels — metadata / response / data channels
 │       ├── file_transfer_response.py  # FileTransferResponse (ACCEPTED_FROM_PC, REJECTED_FROM_ANDROID…)
 │       ├── screen.py               # Screen IntEnum (LOGIN = 0, DASHBOARD = 1)
-│       └── session_channels.py     # SessionChannels — DISCONNECT_FROM_PHONE, DISCONNECT_FROM_PC
+│       ├── session_channels.py     # SessionChannels — DISCONNECT_FROM_PHONE, DISCONNECT_FROM_PC
+│       ├── backup_channels.py      # BackupChannels — control + per-file result channel names
+│       ├── backup_file_result.py   # BackupFileResult (ACCEPTED, REJECTED, NEEDS_REVIEW, …)
+│       └── backup_status.py        # BackupStatus — overall backup session state machine
 │
 ├── native/
 │   └── windows/
@@ -397,7 +400,7 @@ desktop/
 ├── repositories/                   # Data-access layer — SQLite via sqlite3
 │   ├── repository.py               # IRepository[T, K] abstract base (get_by_id, get_all, save, delete)
 │   ├── device.py                   # DeviceRepository — devices table; emits entity_saved / entity_deleted
-│   └── tool.py                     # ToolRepository — tools table; seeds 10 defaults on first run
+│   └── tool.py                     # ToolRepository — tools table; seeds 1 default tool on first run
 │
 ├── resources/                      # Design tokens and Qt virtual filesystem paths
 │   ├── colors.py                   # Palette → Colors (dark) + LightPalette → LightColors (light)
@@ -409,28 +412,33 @@ desktop/
 │   ├── icons/                      # SVG icons (logo, battery, storage, android, smartphone, …)
 │   └── styles/                     # Per-component QSS stylesheets (mirrors the views/ tree)
 │
-├── serializers/                    # Convert entities ↔ SQLite row tuples
+├── serializers/                    # Convert entities ↔ SQLite row tuples / JSON
 │   ├── serializer.py               # ISerializer[T, K] abstract base (serialize / deserialize)
 │   ├── device.py                   # DeviceSerializer — DeviceEntity ↔ 10-column row tuple
 │   ├── file_metadata.py            # FileMetadataSerializer — FileMetadataDTO ↔ JSON string
-│   └── tool.py                     # ToolSerializer — ToolEntity ↔ 4-column row tuple
+│   ├── tool.py                     # ToolSerializer — ToolEntity ↔ 4-column row tuple
+│   └── backup_session.py           # BackupSessionSerializer — BackupSessionPromptDTO ↔ JSON
 │
 ├── services/                       # Background services — all I/O on daemon threads, never QThread
 │   ├── connectivity.py             # ConnectivityService — TauSync TCP lifecycle
 │   ├── device_info.py              # DeviceInfoService — reads device channels, persists entity
 │   ├── file_transfer.py            # FileTransferService — send/receive files + named-pipe listener
 │   ├── phone_request.py            # PhoneRequestService — polls peer waiting channels, dispatches
-│   └── tool.py                     # ToolService — wraps ToolRepository, re-emits its signals
+│   ├── tool.py                     # ToolService — wraps ToolRepository, re-emits its signals
+│   └── backup.py                   # BackupService — receives backup files, runs FileDetection pipeline
 │
 ├── utils/                          # Shared utilities (no singletons here)
 │   ├── meta.py                     # ABCQObjectMeta — metaclass bridging ABC and QObject
 │   ├── network.py                  # get_ip_by_hostname(), read_string_from_channel()
-│   └── styles.py                   # load_stylesheet(), themed() — QSS loading helpers
+│   ├── styles.py                   # load_stylesheet(), themed() — QSS loading helpers
+│   ├── db.py                       # sqlite_connection() — context-manager for short-lived connections
+│   └── file_type.py                # File-type helpers used by BackupService
 │
 ├── viewmodels/                     # PySide6 QObject ViewModels — DTOs + Signals
 │   ├── device.py                   # DeviceViewModel — drives login list + dashboard device cards
 │   ├── file_transfer.py            # FileTransferViewModel — gates send/receive behind connectivity
-│   └── tool.py                     # ToolViewModel — drives the tools grid
+│   ├── tool.py                     # ToolViewModel — drives the tools grid
+│   └── backup.py                   # BackupViewModel — backup session state + review queue
 │
 ├── views/
 │   ├── main_window.py              # MainWindow — QStackedWidget + system tray
@@ -466,6 +474,16 @@ desktop/
 │       │   └── sidebar.py              # Sidebar — vertical strip of NavigationItems + logo
 │       ├── toasts/
 │       │   └── file_received.py        # FileReceivedToast — accept/reject prompt for incoming file
+│       ├── backup/
+│       │   ├── backup_dest_picker_dialog.py         # Dialog to choose backup destination folder
+│       │   ├── backup_review_dialog.py               # Review dialog — shows files needing user decision
+│       │   ├── backup_classification_review_dialog.py# ML-flagged file review (NEEDS_REVIEW items)
+│       │   ├── backup_progress_window.py             # Live progress window during a backup session
+│       │   ├── backup_review_model.py                # QAbstractListModel for review item list
+│       │   ├── backup_progress_model.py              # QAbstractListModel for progress item list
+│       │   ├── backup_review_delegate.py             # Custom item delegate for the review list
+│       │   ├── backup_progress_delegate.py           # Custom item delegate for the progress list
+│       │   └── helpers.py                            # Shared formatting helpers for backup widgets
 │       ├── bar.py                      # Bar — generic horizontal separator bar
 │       ├── divider.py                  # Divider — thin horizontal rule between sections
 │       ├── logo_widget.py              # LogoWidget — SVG logo with gradient text
@@ -539,12 +557,16 @@ class AppState:
         self.device_info_service    = DeviceInfoService(connectivity, device_repository)
         self.file_transfer_service  = FileTransferService(connectivity)
         self.tool_service           = ToolService(tools_repository)
-        self.phone_request_service  = PhoneRequestService(connectivity, file_transfer_service)
+        self.backup_service         = BackupService(connectivity)
 
         # ViewModels
         self.device_viewmodel        = DeviceViewModel(connectivity_service, device_info_service)
         self.file_transfer_viewmodel = FileTransferViewModel(file_transfer_service, connectivity_service)
         self.tool_viewmodel          = ToolViewModel(tool_service)
+        self.backup_viewmodel        = BackupViewModel(backup_service, connectivity_service)
+
+        # PhoneRequestService depends on backup_service — constructed after viewmodels
+        self.phone_request_service  = PhoneRequestService(connectivity, file_transfer_service, backup_service)
 
 app_state: Final[AppState] = AppState()
 ```
@@ -749,6 +771,30 @@ See [File Transfer & IPC](#file-transfer--ipc) for the full protocol.
 | `file_receive_complete` | `(str, str)` filename + path | Receive succeeded |
 | `file_receive_error` | `str` | Any receive failure |
 
+### `BackupService`
+
+Receives backup files sent from the Android app and runs each file through the
+`FileDetection` screening pipeline (`Classifier`).
+
+For every incoming file the service:
+1. Streams the file bytes to a temporary cache location.
+2. Calls `Classifier.classify(cached_file, dest_path, use_ml=True)`.
+3. Moves `ACCEPTED` files to the chosen destination folder.
+4. Drops `REJECTED` files (duplicates or confidently unwanted images).
+5. Queues `NEEDS_REVIEW` files and emits a signal so `BackupViewModel` can surface them
+   in the `BackupClassificationReviewDialog`.
+
+`BackupService` is started by `device_viewmodel.device_connected` and stopped on
+`device_viewmodel.device_disconnected` (wired in `AppState.__init__`).
+
+| Signal | Payload | When |
+|---|---|---|
+| `backup_session_started` | `BackupSessionPromptDTO` | Android initiates a backup session |
+| `backup_review_needed` | `list[BackupReviewPromptDTO]` | Files needing user decision queued |
+| `backup_file_result` | `(str, BackupFileResult)` | Per-file verdict ready |
+| `backup_session_complete` | — | All files in the session processed |
+| `backup_error` | `str` | Unrecoverable error in the session |
+
 ### `PhoneRequestService`
 
 Polls `tau.get_peer_waiting_words()` to detect channels the phone has opened before `SyncDose`
@@ -760,6 +806,7 @@ Default handler map (registered in `AppState`):
 |---|---|
 | `FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC` | `FileTransferService.receive_metadata` |
 | `SessionChannels.DISCONNECT_FROM_PHONE` | `ConnectivityService.disconnect_device` |
+| `BackupChannels.*` | `BackupService` (backup session control channel) |
 
 ### `ToolService`
 
@@ -829,6 +876,20 @@ asynchronously without blocking the UI thread.
 | `tool_updated` | `str` (title) | Tool modified |
 | `tool_count_changed` | `int` | Enabled count changed |
 
+### `BackupViewModel`
+
+Coordinates backup session state and surfaces the review queue to the UI. Subscribes to
+`BackupService` signals and exposes them as view-ready signals so backup widgets never
+import from `services/` directly.
+
+| Signal | Payload | When |
+|---|---|---|
+| `backup_session_prompt` | `BackupSessionPromptDTO` | New backup session ready for user confirmation |
+| `backup_review_prompt` | `list[BackupReviewPromptDTO]` | ML-flagged files ready for user decision |
+| `backup_file_result` | `(str, BackupFileResult)` | Per-file verdict (drives progress window) |
+| `backup_complete` | — | Session finished |
+| `backup_error` | `str` | Session failed |
+
 ---
 
 ## Repositories
@@ -854,8 +915,9 @@ metaclass conflict.
 Adds `get_all_enabled()` → `list[ToolEntity]` (queries `WHERE is_enabled = 1`) and
 `id_exists(title)` → `bool`.
 
-Seeds the `tools` table with 10 placeholder tools on the first run (when the table is empty).
-Tools 1, 2, 3, 4, 6, 8, 10 seed as enabled; Tools 5, 7, 9 seed as disabled.
+Seeds the `tools` table with one default tool ("Send File to Phone") on first run using
+`INSERT OR IGNORE`, so the seed is also applied to existing installs that pre-date it without
+overwriting any user edits.
 
 ### `DeviceRepository`
 
@@ -887,6 +949,11 @@ Maps `ToolEntity ↔ (title, description, icon_path, is_enabled)`.
 
 Converts `FileMetadataDTO ↔ JSON string`. Used by `FileTransferService` to transmit file name
 and size over the `file_meta` TauSync channel before the raw bytes are sent.
+
+### `BackupSessionSerializer`
+
+Converts `BackupSessionPromptDTO ↔ JSON string`. Used by `BackupService` to parse the session
+manifest sent by the Android app at the start of a backup session.
 
 ---
 

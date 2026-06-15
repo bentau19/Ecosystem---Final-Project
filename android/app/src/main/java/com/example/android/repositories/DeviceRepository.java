@@ -145,6 +145,7 @@ public class DeviceRepository {
         }
         // Update status to disconnected
         updateConnectionStatus(ConnectionStatus.DISCONNECTED);
+        
     }
 
     /**

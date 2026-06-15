@@ -1,0 +1,231 @@
+/* ── Backup Progress Window ──────────────────────────────────────────────────
+   Tokens resolved via BackupProgressColors / LightBackupProgressColors:
+     {{BACKGROUND}}        — window body surface
+     {{SURFACE}}           — elevated card surface (overall section)
+     {{BORDER}}            — borders + dividers
+     {{ROW_BG}}            — file row default background
+     {{ROW_BORDER}}        — file row default border
+     {{ROW_ACTIVE_BG}}     — file row bg when actively syncing
+     {{ROW_ACTIVE_BORDER}} — file row border when actively syncing
+     {{TEXT_PRIMARY}}      — primary text (filenames, %)
+     {{TEXT_SECONDARY}}    — secondary text (sizes, stats)
+     {{PROGRESS_TRACK}}    — empty portion of progress bar track
+     {{PROGRESS_FILL}}     — progress bar gradient start
+     {{PROGRESS_FILL_END}} — progress bar gradient end
+     {{STATUS_QUEUED_TEXT}}  — "Queued" badge text
+     {{STATUS_ACTIVE_BG}}    — "Syncing" badge + row background
+     {{STATUS_ACTIVE_TEXT}}  — "Syncing" badge text + speed label
+     {{STATUS_DONE_BG}}      — "Done" badge + row background
+     {{STATUS_DONE_TEXT}}    — "Done" badge text + row border
+     {{STATUS_FAILED_BG}}    — "Failed" badge + row background
+     {{STATUS_FAILED_TEXT}}  — "Failed" badge text + row border
+     {{BTN_PAUSE_BORDER}}    — Pause button border
+     {{BTN_PAUSE_TEXT}}      — Pause button text
+     {{BTN_CANCEL_BORDER}}   — Cancel button border
+     {{BTN_CANCEL_TEXT}}     — Cancel button text
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── Window + central widget ─────────────────────────────────────────────── */
+
+QMainWindow#BackupProgressWindow {
+    background-color: {{BACKGROUND}};
+}
+
+QWidget#BPWContent {
+    background-color: {{BACKGROUND}};
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+
+QWidget#BPWHeader {
+    background-color: {{BACKGROUND}};
+}
+
+QLabel#HeaderIcon {
+    background-color: {{STATUS_ACTIVE_BG}};
+    border: 1px solid {{ROW_ACTIVE_BORDER}};
+    border-radius: 20px;
+    color: {{STATUS_ACTIVE_TEXT}};
+    font-size: 20px;
+}
+
+QLabel#HeaderTitle {
+    color: {{TEXT_PRIMARY}};
+    font-size: 16px;
+    font-weight: 600;
+    background: transparent;
+}
+
+QLabel#HeaderSubtitle {
+    color: {{TEXT_SECONDARY}};
+    font-size: 12px;
+    background: transparent;
+}
+
+/* ── Overall progress section ────────────────────────────────────────────── */
+
+QWidget#OverallSection {
+    background-color: {{SURFACE}};
+    border: 1px solid {{BORDER}};
+    border-radius: 10px;
+}
+
+QLabel#OverallPercent {
+    color: {{TEXT_PRIMARY}};
+    font-size: 22px;
+    font-weight: 700;
+    background: transparent;
+}
+
+QLabel#OverallStats {
+    color: {{TEXT_SECONDARY}};
+    font-size: 11px;
+    background: transparent;
+}
+
+QLabel#OverallEta {
+    color: {{TEXT_SECONDARY}};
+    font-size: 11px;
+    background: transparent;
+}
+
+/* ── File list (QListView replaces old QScrollArea + QFrame rows) ────────── */
+
+QListView#FileListView {
+    background-color: {{BACKGROUND}};
+    border: none;
+    outline: none;
+    padding: 8px 0px;
+}
+
+QListView#FileListView::item {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+
+QListView#FileListView::item:selected {
+    background: transparent;
+}
+
+/* Scrollbar */
+QListView#FileListView QScrollBar:vertical {
+    background: {{BACKGROUND}};
+    width: 6px;
+    margin: 0;
+    border-radius: 3px;
+}
+
+QListView#FileListView QScrollBar::handle:vertical {
+    background: {{BORDER}};
+    border-radius: 3px;
+    min-height: 24px;
+}
+
+QListView#FileListView QScrollBar::add-line:vertical,
+QListView#FileListView QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+/* ── Dividers ────────────────────────────────────────────────────────────── */
+
+QFrame#BPWDivider {
+    background-color: {{BORDER}};
+    border: none;
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+
+QWidget#BPWFooter {
+    background-color: {{BACKGROUND}};
+}
+
+QLabel#FooterSummary {
+    color: {{TEXT_SECONDARY}};
+    font-size: 12px;
+    background: transparent;
+}
+
+/* Pause / Resume — neutral ghost button */
+QPushButton#PauseButton {
+    background-color: transparent;
+    border: 1px solid {{BTN_PAUSE_BORDER}};
+    border-radius: 8px;
+    color: {{BTN_PAUSE_TEXT}};
+    font-size: 13px;
+    font-weight: 500;
+    padding: 0px 16px;
+    outline: none;
+}
+
+QPushButton#PauseButton:hover {
+    border-color: {{PROGRESS_FILL}};
+    color: {{PROGRESS_FILL}};
+}
+
+QPushButton#PauseButton:pressed {
+    background-color: {{STATUS_ACTIVE_BG}};
+}
+
+QPushButton#PauseButton:disabled {
+    color: {{STATUS_QUEUED_TEXT}};
+    border-color: {{BORDER}};
+}
+
+/* Cancel All — danger ghost button */
+QPushButton#CancelAllButton {
+    background-color: transparent;
+    border: 1px solid {{BTN_CANCEL_BORDER}};
+    border-radius: 8px;
+    color: {{BTN_CANCEL_TEXT}};
+    font-size: 13px;
+    font-weight: 500;
+    padding: 0px 16px;
+    outline: none;
+}
+
+QPushButton#CancelAllButton:hover {
+    background-color: {{STATUS_FAILED_BG}};
+}
+
+QPushButton#CancelAllButton:pressed {
+    background-color: {{STATUS_FAILED_BG}};
+    border-color: {{STATUS_FAILED_TEXT}};
+}
+
+QPushButton#CancelAllButton:disabled {
+    color: {{STATUS_QUEUED_TEXT}};
+    border-color: {{BORDER}};
+}
+
+/* Auto-scroll toggle — neutral ghost when off, teal-lit when :checked */
+QPushButton#AutoScrollButton {
+    background-color: transparent;
+    border: 1px solid {{BTN_PAUSE_BORDER}};
+    border-radius: 8px;
+    color: {{BTN_PAUSE_TEXT}};
+    font-size: 13px;
+    font-weight: 500;
+    padding: 0px 16px;
+    outline: none;
+}
+
+QPushButton#AutoScrollButton:hover {
+    border-color: {{PROGRESS_FILL}};
+    color: {{PROGRESS_FILL}};
+}
+
+QPushButton#AutoScrollButton:checked {
+    background-color: {{STATUS_ACTIVE_BG}};
+    border-color: {{PROGRESS_FILL}};
+    color: {{PROGRESS_FILL}};
+}
+
+QPushButton#AutoScrollButton:checked:hover {
+    border-color: {{PROGRESS_FILL_END}};
+    color: {{PROGRESS_FILL_END}};
+}
+
+QPushButton#AutoScrollButton:pressed {
+    background-color: {{STATUS_ACTIVE_BG}};
+}

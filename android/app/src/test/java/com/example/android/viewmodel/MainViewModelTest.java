@@ -15,6 +15,7 @@ import com.example.android.domain.entities.LocalDeviceInfo;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionType;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
+import com.example.android.domain.usecases.DisconnectDeviceUseCase;
 import com.example.android.domain.usecases.ParseQrDataUseCase;
 import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
 
@@ -47,6 +48,9 @@ public class MainViewModelTest {
     @Mock
     private ParseQrDataUseCase mockParseQrUseCase;
 
+    @Mock
+    private DisconnectDeviceUseCase mockDisconnectUseCase;
+
     private MainViewModel viewModel;
 
     @Before
@@ -56,17 +60,18 @@ public class MainViewModelTest {
                 mockRepository,
                 mockRefreshUseCase,
                 mockConnectUseCase,
-                mockParseQrUseCase
+                mockParseQrUseCase,
+                mockDisconnectUseCase
         );
     }
 
     @Test
-    public void disconnect_callsUseCaseDisconnect() {
+    public void disconnect_callsDisconnectUseCase() {
         // Act: Trigger disconnect logic
         viewModel.disconnect();
 
-        // Assert: Verify the interaction with the connection UseCase
-        verify(mockConnectUseCase).disconnect();
+        // Assert: DisconnectDeviceUseCase.execute() is called, not ConnectToDeviceUseCase
+        verify(mockDisconnectUseCase).execute();
     }
 
     @Test

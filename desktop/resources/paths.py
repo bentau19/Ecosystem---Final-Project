@@ -13,6 +13,7 @@ class Icons(PathsEnum):
     """Qt virtual paths to bundled SVG icon assets (registered in ``syncdose.qrc``)."""
 
     LOGO = ":/icons/logo.svg"
+    BACKUP_PROGRESS = ":/icons/backup_progress.svg"
     SETTINGS = ":/icons/settings.svg"
     DASHBOARD = ":/icons/dashboard.svg"
     BATTERY = ":/icons/battery.svg"
@@ -69,3 +70,17 @@ class ToastStyles(PathsEnum):
     """Qt virtual paths to toast-widget QSS stylesheets."""
 
     FILE_RECEIVED = ":/styles/toasts/file-received.qss"
+
+
+class LoadingStyles(PathsEnum):
+    """Qt virtual paths to loading-widget QSS stylesheets."""
+
+    OVERLAY = ":/styles/loading/overlay.qss"
+
+
+class BackupStyles(PathsEnum):
+    """Qt virtual paths to backup-widget QSS stylesheets."""
+
+    REVIEW              = ":/styles/backup/backup-review.qss"
+    PROGRESS            = ":/styles/backup/backup-progress.qss"
+    CLASSIFICATION_REVIEW = ":/styles/backup/backup-classification-review.qss"

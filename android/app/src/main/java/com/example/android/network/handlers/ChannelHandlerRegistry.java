@@ -63,13 +63,42 @@ public class ChannelHandlerRegistry {
 
     /**
      * Processes a peer request by delegating to the appropriate handler.
-     * If no handler is registered for the channel, logs a warning.
+     *
+     * <p>Lookup order:
+     * <ol>
+     *   <li>Exact match on {@code channel} key.</li>
+     *   <li>Prefix match — scans for a registered key that is a leading substring of
+     *       {@code channel}. This supports handlers like
+     *       {@code BackupReceivedChannelHandler} registered under
+     *       {@code "backup_file_result_"} that handle dynamic suffixes such as
+     *       {@code "backup_file_result_0"}, {@code "backup_file_result_1"}, etc.
+     *       The scan is O(n) but the registry holds only ~10 entries in practice.</li>
+     * </ol>
+     *
+     * <p>The full channel name is forwarded to
+     * {@link ChannelHandler#onPeerRequest(String)} so prefix-matched handlers can
+     * extract the dynamic suffix. Existing handlers ignore the argument via the
+     * default bridge in {@link ChannelHandler}.
+     *
+     * <p>Logs a warning if no handler is found by either strategy.
      */
     public void handlePeerRequest(String channel) {
         ChannelHandler handler = handlers.get(channel);
+
+        if (handler == null) {
+            // Prefix fallback — supports handlers registered with a channel prefix
+            // (e.g. "backup_file_result_") that handle channels with dynamic suffixes.
+            for (Map.Entry<String, ChannelHandler> entry : handlers.entrySet()) {
+                if (channel.startsWith(entry.getKey())) {
+                    handler = entry.getValue();
+                    break;
+                }
+            }
+        }
+
         if (handler != null) {
             try {
-                handler.onPeerRequest();
+                handler.onPeerRequest(channel);   // full name forwarded to handler
             } catch (Exception e) {
                 Log.e(TAG, "Error handling request for channel [" + channel + "]: " + e.getMessage());
             }

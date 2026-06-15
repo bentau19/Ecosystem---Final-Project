@@ -4,6 +4,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from domain.dto.file_metadata import FileMetadataDTO
+from domain.dto.file_receive_complete import FileReceiveCompleteDTO
+from domain.dto.file_receive_prompt import FileReceivePromptDTO
+from domain.dto.file_send_complete import FileSendCompleteDTO
 from viewmodels.file_transfer import FileTransferViewModel
 
 
@@ -123,7 +127,7 @@ def test_receive_file_delegates_when_connected(
     vm._on_device_connected()
     vm.receive_file("/tmp/downloads/photo.jpg", 4096)
 
-    mock_service.receive_file.assert_called_once_with("/tmp/downloads/photo.jpg", 4096)
+    mock_service.receive_file.assert_called_once_with("/tmp/downloads/photo.jpg", 4096, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -162,14 +166,13 @@ def test_is_device_connected_reflects_lifecycle(
 
 
 def test_on_send_complete_forwards_signal(vm: FileTransferViewModel) -> None:
-    names: list[str] = []
-    bytes_: list[int] = []
-    vm.send_complete.connect(lambda n, b: (names.append(n), bytes_.append(b)))
+    received: list[FileSendCompleteDTO] = []
+    vm.send_complete.connect(received.append)
 
-    vm._on_send_complete("photo.jpg", 1024)
+    vm._on_send_complete(FileSendCompleteDTO(filename="photo.jpg", total_bytes=1024))
 
-    assert names == ["photo.jpg"]
-    assert bytes_ == [1024]
+    assert received[0].filename == "photo.jpg"
+    assert received[0].total_bytes == 1024
 
 
 def test_on_send_error_forwards_signal(vm: FileTransferViewModel) -> None:
@@ -200,25 +203,42 @@ def test_on_send_rejected_emits_send_error_with_filename(
 
 
 def test_on_metadata_received_forwards_signal(vm: FileTransferViewModel) -> None:
-    names: list[str] = []
-    sizes: list[int] = []
-    vm.metadata_received.connect(lambda n, s: (names.append(n), sizes.append(s)))
+    received: list[FileReceivePromptDTO] = []
+    vm.metadata_received.connect(received.append)
 
-    vm._on_metadata_received("doc.pdf", 4096)
+    vm._on_metadata_received(FileMetadataDTO(name="doc.pdf", size=4096, modified_at=0))
 
-    assert names == ["doc.pdf"]
-    assert sizes == [4096]
+    assert received[0].filename == "doc.pdf"
+    assert received[0].size == 4096
+
+
+def test_on_metadata_received_stores_modified_at(vm: FileTransferViewModel) -> None:
+    """The VM must stash ``modified_at`` so ``receive_file`` can forward it."""
+    vm._on_metadata_received(FileMetadataDTO(name="photo.jpg", size=2048, modified_at=1_700_000_000_000))
+
+    assert vm._pending_modified_at == 1_700_000_000_000
+
+
+def test_receive_file_passes_pending_modified_at_to_service(
+    vm: FileTransferViewModel,
+    mock_service: MagicMock,
+) -> None:
+    """``receive_file`` must forward the stored ``modified_at`` to the service."""
+    vm._on_device_connected()
+    vm._on_metadata_received(FileMetadataDTO(name="photo.jpg", size=2048, modified_at=1_700_000_000_000))
+    vm.receive_file("/tmp/photo.jpg", 2048)
+
+    mock_service.receive_file.assert_called_once_with("/tmp/photo.jpg", 2048, 1_700_000_000_000)
 
 
 def test_on_receive_complete_forwards_signal(vm: FileTransferViewModel) -> None:
-    names: list[str] = []
-    paths: list[str] = []
-    vm.receive_complete.connect(lambda n, p: (names.append(n), paths.append(p)))
+    received: list[FileReceiveCompleteDTO] = []
+    vm.receive_complete.connect(received.append)
 
-    vm._on_receive_complete("doc.pdf", "/tmp/downloads/doc.pdf")
+    vm._on_receive_complete(FileReceiveCompleteDTO(filename="doc.pdf", dest_path="/tmp/downloads/doc.pdf"))
 
-    assert names == ["doc.pdf"]
-    assert paths == ["/tmp/downloads/doc.pdf"]
+    assert received[0].filename == "doc.pdf"
+    assert received[0].dest_path == "/tmp/downloads/doc.pdf"
 
 
 def test_on_receive_error_forwards_signal(vm: FileTransferViewModel) -> None:

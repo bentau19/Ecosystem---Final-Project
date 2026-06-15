@@ -15,6 +15,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.example.android.R;
 import com.example.android.domain.entities.RemoteDeviceInfo;
+import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.ui.MainActivity;
 import com.example.android.ui.adapters.ToolsAdapter;
 import com.example.android.ui.models.ToolItem;
@@ -78,7 +79,16 @@ public class ActionsFragment extends Fragment {
             }
         });
 
-        // 5. Disconnect Button: Requests termination of the active session
+        // 5. Observe ConnectionStatus to disable the disconnect button while a
+        //    disconnect is already in flight (prevents double-tap / re-entry).
+        viewModel.getConnectionStatus().observe(getViewLifecycleOwner(), status -> {
+            if (status == null) return;
+            boolean disconnecting = status == ConnectionStatus.DISCONNECTING;
+            btnDisconnect.setEnabled(!disconnecting);
+            btnDisconnect.setAlpha(disconnecting ? 0.4f : 1.0f);
+        });
+
+        // 6. Disconnect Button: Requests termination of the active session
         btnDisconnect.setOnClickListener(v -> {
             if (getActivity() instanceof MainActivity) {
                 ((MainActivity) getActivity()).disconnect();
@@ -125,10 +135,26 @@ public class ActionsFragment extends Fragment {
     }
 
     /**
-     * Logic for handling specific tool interactions.
+     * Routes a tool-card tap to the appropriate sub-screen or action.
+     * Add a new {@code case} here as each tool gains its own Fragment/flow.
      */
     private void handleToolClick(String toolId) {
-        Toast.makeText(getContext(), "Executing: " + toolId, Toast.LENGTH_SHORT).show();
+        switch (toolId) {
+            case "backup":
+                if (viewModel.isBackupActive()) {
+                    // A scan or transfer is already running in the background —
+                    // block a second one to prevent system overload.
+                    Toast.makeText(getContext(),
+                            R.string.backup_already_in_progress,
+                            Toast.LENGTH_SHORT).show();
+                } else if (getActivity() instanceof MainActivity) {
+                    ((MainActivity) getActivity()).navigateToBackup();
+                }
+                break;
+            default:
+                Toast.makeText(getContext(), "Executing: " + toolId, Toast.LENGTH_SHORT).show();
+                break;
+        }
     }
 
     /**

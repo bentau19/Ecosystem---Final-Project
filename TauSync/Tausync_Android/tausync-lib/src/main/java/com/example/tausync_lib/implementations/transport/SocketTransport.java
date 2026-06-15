@@ -63,6 +63,11 @@ public class SocketTransport implements ITransport {
 
     @Override
     public CompletableFuture<Void> connect(String targetId) {
+        return connect(targetId, null);
+    }
+
+    @Override
+    public CompletableFuture<Void> connect(String targetId, Integer timeoutSeconds) {
         if (disposed) {
             return CompletableFuture.failedFuture(new IllegalStateException("Transport disposed"));
         }
@@ -74,25 +79,34 @@ public class SocketTransport implements ITransport {
         serverMode = wantServer;
 
         if (wantServer) {
-            return startListening();
+            return startListening(timeoutSeconds);
         }
-        return connectToServerWithRetry(targetId.trim());
+        return connectToServerWithRetry(targetId.trim(), timeoutSeconds);
     }
 
     // ── Server Mode ───────────────────────────────────────────────────
 
-    private CompletableFuture<Void> startListening() {
+    private CompletableFuture<Void> startListening(Integer timeoutSeconds) {
         CompletableFuture<Void> connectionFuture = new CompletableFuture<>();
 
         acceptThread = new Thread(() -> {
             try {
                 serverSocket = new ServerSocket(port);
+                if (timeoutSeconds != null) {
+                    // accept() throws SocketTimeoutException when no client arrives in time,
+                    // mirroring the C# server-mode _timeoutCts behaviour.
+                    serverSocket.setSoTimeout(timeoutSeconds * 1000);
+                }
                 socket = serverSocket.accept();
                 inputStream = socket.getInputStream();
                 outputStream = socket.getOutputStream();
                 connected = true;
                 startReceiveLoop();
                 connectionFuture.complete(null);
+            } catch (java.net.SocketTimeoutException e) {
+                connectionFuture.completeExceptionally(
+                        new java.util.concurrent.TimeoutException(
+                                "No client connected within the timeout period."));
             } catch (Exception e) {
                 if (!disposed) {
                     connectionFuture.completeExceptionally(e);
@@ -109,14 +123,28 @@ public class SocketTransport implements ITransport {
 
     // ── Client Mode ───────────────────────────────────────────────────
 
-    private CompletableFuture<Void> connectToServerWithRetry(String host) {
+    private CompletableFuture<Void> connectToServerWithRetry(String host, Integer timeoutSeconds) {
         CompletableFuture<Void> connectionFuture = new CompletableFuture<>();
         int delayMs = CoreConfig.CLIENT_CONNECT_RETRY_DELAY_SECONDS * 1000;
+        // Overall deadline for the whole retry loop; null = retry forever (legacy behaviour).
+        final Long deadlineNanos = timeoutSeconds != null
+                ? System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(timeoutSeconds)
+                : null;
 
         Thread retryThread = new Thread(() -> {
             while (!connectionFuture.isDone() && !disposed) {
+                if (deadlineNanos != null && System.nanoTime() >= deadlineNanos) {
+                    connectionFuture.completeExceptionally(
+                            new java.util.concurrent.TimeoutException(
+                                    "Failed to connect within the timeout period."));
+                    return;
+                }
                 try {
-                    Socket attempt = new Socket(host, port);
+                    Socket attempt = new Socket();
+                    // Bound each TCP connect attempt by the remaining budget so a single
+                    // attempt to a black-holed IP cannot overrun the caller's timeout.
+                    int attemptTimeoutMs = remainingMillis(deadlineNanos);
+                    attempt.connect(new java.net.InetSocketAddress(host, port), attemptTimeoutMs);
                     if (connectionFuture.isDone() || disposed) {
                         attempt.close();
                         return;
@@ -133,6 +161,12 @@ public class SocketTransport implements ITransport {
                     if (disposed) {
                         connectionFuture.completeExceptionally(
                                 new IllegalStateException("Transport disposed during connect"));
+                        return;
+                    }
+                    if (deadlineNanos != null && System.nanoTime() >= deadlineNanos) {
+                        connectionFuture.completeExceptionally(
+                                new java.util.concurrent.TimeoutException(
+                                        "Failed to connect within the timeout period."));
                         return;
                     }
                     try {
@@ -152,6 +186,19 @@ public class SocketTransport implements ITransport {
         retryThread.start();
 
         return connectionFuture;
+    }
+
+    /**
+     * Milliseconds remaining until the deadline, clamped to int.
+     *
+     * @param deadlineNanos absolute deadline from {@link System#nanoTime()}, or null for no limit
+     * @return remaining millis (>= 1), or 0 meaning "no timeout" when deadline is null
+     */
+    private static int remainingMillis(Long deadlineNanos) {
+        if (deadlineNanos == null) return 0; // Socket.connect(addr, 0) = infinite timeout
+        long ms = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime());
+        if (ms <= 0) return 1; // already past deadline; fail fast on the next attempt
+        return ms > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) ms;
     }
 
     // ── Send ──────────────────────────────────────────────────────────
@@ -273,6 +320,11 @@ public class SocketTransport implements ITransport {
         closeQuietly(inputStream);
         closeQuietly(outputStream);
         closeQuietly(socket);
+
+        // Unblock every reader stuck on an open channel stream. The peer is gone, so no
+        // FIN will ever arrive — deliver a synthetic FIN to each handler so blocked
+        // read() calls return EOF instead of hanging forever.
+        ConnectionContext.getInstance().abortAllChannels();
 
         Thread rt = receiveThread;
         if (rt != null && rt != Thread.currentThread()) {

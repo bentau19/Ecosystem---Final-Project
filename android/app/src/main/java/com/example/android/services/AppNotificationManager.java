@@ -3,7 +3,9 @@ package com.example.android.services;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Context;
+import android.content.Intent;
 import android.os.Build;
 import android.util.Log;
 
@@ -21,7 +23,13 @@ import com.example.android.repositories.DeviceRepository;
 public class AppNotificationManager {
 
     public static final String CHANNEL_ID = "ConnectivityServiceChannel";
+    public static final String FILE_TRANSFER_CHANNEL_ID = "FileTransferChannel";
+    public static final String SEND_FILE_CHANNEL_ID = "SendFileChannel";
+    public static final String BACKUP_PROGRESS_CHANNEL_ID = "BackupProgressChannel";
     public static final int NOTIFICATION_ID = 1;
+    public static final int FILE_TRANSFER_NOTIFICATION_ID = 2;
+    public static final int SEND_FILE_NOTIFICATION_ID = 3;
+    public static final int BACKUP_PROGRESS_NOTIFICATION_ID = 4;
     private static final String TAG = "AppNotificationMgr";
 
     private final Context context;
@@ -133,18 +141,335 @@ public class AppNotificationManager {
     }
 
     /**
-     * Creates the notification channel required for Android O and above.
+     * Shows a heads-up notification asking the user to Accept or Reject
+     * an incoming file transfer from the PC.
+     * Used when the app is in the background.
+     *
+     * @param fileName The name of the incoming file.
+     * @param formattedSize Human-readable file size (e.g. "3.2 MB").
+     */
+    public void showFileTransferApprovalNotification(String fileName, String formattedSize) {
+        // Accept PendingIntent
+        Intent acceptIntent = new Intent(context, FileTransferActionReceiver.class);
+        acceptIntent.setAction(FileTransferActionReceiver.ACTION_ACCEPT);
+        PendingIntent acceptPending = PendingIntent.getBroadcast(
+                context, 0, acceptIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        // Reject PendingIntent
+        Intent rejectIntent = new Intent(context, FileTransferActionReceiver.class);
+        rejectIntent.setAction(FileTransferActionReceiver.ACTION_REJECT);
+        PendingIntent rejectPending = PendingIntent.getBroadcast(
+                context, 1, rejectIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        Notification notification = new NotificationCompat.Builder(context, FILE_TRANSFER_CHANNEL_ID)
+                .setContentTitle("Incoming File from PC")
+                .setContentText(fileName + " · " + formattedSize)
+                .setSmallIcon(R.drawable.ic_sync)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .addAction(0, "Accept", acceptPending)
+                .addAction(0, "Reject", rejectPending)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(FILE_TRANSFER_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Dismisses the file transfer approval notification.
+     * Called after the user responds (either via dialog or notification).
+     */
+    public void dismissFileTransferNotification() {
+        if (notificationManager != null) {
+            notificationManager.cancel(FILE_TRANSFER_NOTIFICATION_ID);
+        }
+    }
+
+    /**
+     * Shows (or updates) the ongoing send-file progress notification.
+     * Uses an indeterminate progress bar since byte-level progress is not tracked.
+     *
+     * @param message The status text to display (e.g. "Waiting for PC…", "Sending photo.jpg…").
+     */
+    public void showSendFileProgressNotification(String message) {
+        Notification notification = new NotificationCompat.Builder(context, SEND_FILE_CHANNEL_ID)
+                .setContentTitle("Sending file")
+                .setContentText(message)
+                .setSmallIcon(R.drawable.ic_sync)
+                .setProgress(0, 0, true)   // indeterminate progress bar
+                .setOngoing(true)           // user cannot swipe away while in progress
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(SEND_FILE_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Shows a brief auto-cancel notification with the final send result.
+     * Replaces the ongoing progress notification.
+     *
+     * @param title   Short result title (e.g. "File sent", "Transfer rejected").
+     * @param message Detail line shown below the title.
+     */
+    public void showSendFileResultNotification(String title, String message) {
+        Notification notification = new NotificationCompat.Builder(context, SEND_FILE_CHANNEL_ID)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setSmallIcon(R.drawable.ic_sync)
+                .setAutoCancel(true)
+                .setTimeoutAfter(4_000)   // auto-dismiss after 4 seconds
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(SEND_FILE_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Dismisses the send-file progress / result notification.
+     */
+    public void dismissSendFileNotification() {
+        if (notificationManager != null) {
+            notificationManager.cancel(SEND_FILE_NOTIFICATION_ID);
+        }
+    }
+
+    // ── Backup transfer progress notifications ────────────────────────────────
+
+    /** Action: pause the in-progress backup transfer (sent to {@code ConnectivityService}). */
+    public static final String ACTION_BACKUP_PAUSE = "com.example.android.ACTION_BACKUP_PAUSE";
+
+    /** Action: resume a paused backup transfer (sent to {@code ConnectivityService}). */
+    public static final String ACTION_BACKUP_RESUME = "com.example.android.ACTION_BACKUP_RESUME";
+
+    /** Action: stop the backup transfer immediately, no confirmation (sent to {@code ConnectivityService}). */
+    public static final String ACTION_BACKUP_STOP = "com.example.android.ACTION_BACKUP_STOP";
+
+    /**
+     * Builds a {@link PendingIntent} that starts {@code ConnectivityService} with the
+     * given action — used for the Pause/Resume/Stop notification action buttons.
+     *
+     * @param action      One of {@link #ACTION_BACKUP_PAUSE}, {@link #ACTION_BACKUP_RESUME},
+     *                    {@link #ACTION_BACKUP_STOP}.
+     * @param requestCode Distinct request code so the three PendingIntents don't collide.
+     */
+    private PendingIntent buildBackupControlPendingIntent(String action, int requestCode) {
+        Intent intent = new Intent(context, ConnectivityService.class);
+        intent.setAction(action);
+        return PendingIntent.getService(
+                context, requestCode, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+    }
+
+    /**
+     * Shows (or updates) the sticky backup progress notification.
+     *
+     * <p>Uses a determinate progress bar because the total number of files is always
+     * known upfront when the backup transfer starts.
+     *
+     * <p>This notification is <b>ongoing</b> (the user cannot swipe it away while
+     * the transfer is in progress). Includes Pause and Stop actions.
+     *
+     * @param sent  Number of files successfully transferred so far.
+     * @param total Total number of files in this backup batch.
+     */
+    public void showBackupProgressNotification(int sent, int total) {
+        String contentText = sent + " / " + total + " files";
+
+        Notification notification = new NotificationCompat.Builder(context, BACKUP_PROGRESS_CHANNEL_ID)
+                .setContentTitle(context.getString(R.string.backup_notif_progress_title))
+                .setContentText(contentText)
+                .setSmallIcon(R.drawable.ic_backup)
+                .setProgress(total, sent, false)   // determinate bar — total is always known
+                .setOngoing(true)                  // sticky: user cannot dismiss mid-backup
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .addAction(0, "Pause", buildBackupControlPendingIntent(ACTION_BACKUP_PAUSE, 10))
+                .addAction(0, "Stop", buildBackupControlPendingIntent(ACTION_BACKUP_STOP, 11))
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(BACKUP_PROGRESS_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Shows (or updates) the sticky backup notification while the transfer is paused.
+     *
+     * <p>Same progress bar as {@link #showBackupProgressNotification(int, int)} but the
+     * primary action reads "Resume" instead of "Pause"; Stop is still available.
+     *
+     * @param sent  Number of files successfully transferred so far.
+     * @param total Total number of files in this backup batch.
+     */
+    public void showBackupPausedNotification(int sent, int total) {
+        String contentText = sent + " / " + total + " files — Paused";
+
+        Notification notification = new NotificationCompat.Builder(context, BACKUP_PROGRESS_CHANNEL_ID)
+                .setContentTitle(context.getString(R.string.backup_notif_progress_title))
+                .setContentText(contentText)
+                .setSmallIcon(R.drawable.ic_backup)
+                .setProgress(total, sent, false)
+                .setOngoing(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .addAction(0, "Resume", buildBackupControlPendingIntent(ACTION_BACKUP_RESUME, 12))
+                .addAction(0, "Stop", buildBackupControlPendingIntent(ACTION_BACKUP_STOP, 11))
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(BACKUP_PROGRESS_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Replaces the sticky progress notification with a brief auto-cancelling
+     * one-time completion summary — "Backup completed / Backup successful: X items"
+     * and, if any files errored, "... Had an error with: Y files".
+     *
+     * <p>This is the only in-app feedback the user gets on success, since
+     * {@code BackupFragment} returns to the dashboard immediately after the
+     * transfer is kicked off.
+     *
+     * @param succeeded Number of files backed up without a reported error.
+     * @param failed    Number of files the PC reported as transfer failures
+     *                  (see {@link com.example.android.repositories.BackupRepository#getFailedCount()}).
+     */
+    public void showBackupCompleteNotification(int succeeded, int failed) {
+        String contentText = (failed > 0)
+                ? context.getString(R.string.backup_notif_complete_with_errors_format, succeeded, failed)
+                : context.getString(R.string.backup_notif_complete_text_format, succeeded);
+
+        Notification notification = new NotificationCompat.Builder(context, BACKUP_PROGRESS_CHANNEL_ID)
+                .setContentTitle(context.getString(R.string.backup_notif_complete_title))
+                .setContentText(contentText)
+                .setSmallIcon(R.drawable.ic_backup)
+                .setAutoCancel(true)      // tap to dismiss
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(BACKUP_PROGRESS_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Replaces the sticky progress notification with a brief auto-cancelling
+     * "Backup failed" notice. Used for both transfer failures (network/IO error
+     * mid-transfer) and scan failures (could not enumerate files) — the only
+     * feedback available since {@code BackupFragment} is no longer on screen.
+     */
+    public void showBackupFailedNotification() {
+        Notification notification = new NotificationCompat.Builder(context, BACKUP_PROGRESS_CHANNEL_ID)
+                .setContentTitle(context.getString(R.string.backup_notif_failed_title))
+                .setContentText(context.getString(R.string.backup_notif_failed_text))
+                .setSmallIcon(R.drawable.ic_backup)
+                .setAutoCancel(true)      // tap to dismiss
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(BACKUP_PROGRESS_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Replaces the sticky progress notification with a persistent
+     * "Backup failed" notice, specifically for scan-phase failures (could not
+     * enumerate files — e.g. missing storage permissions).
+     */
+    public void showBackupScanFailedNotification() {
+        Notification notification = new NotificationCompat.Builder(context, BACKUP_PROGRESS_CHANNEL_ID)
+                .setContentTitle(context.getString(R.string.backup_notif_failed_title))
+                .setContentText(context.getString(R.string.backup_notif_scan_failed_text))
+                .setSmallIcon(R.drawable.ic_backup)
+                .setAutoCancel(true)      // tap to dismiss
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(BACKUP_PROGRESS_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Replaces the sticky progress notification with a persistent
+     * "Backup stopped" notice — shown when the user stops the transfer via the
+     * progress notification's Stop action.
+     */
+    public void showBackupStoppedNotification() {
+        Notification notification = new NotificationCompat.Builder(context, BACKUP_PROGRESS_CHANNEL_ID)
+                .setContentTitle(context.getString(R.string.backup_notif_stopped_title))
+                .setContentText(context.getString(R.string.backup_notif_stopped_text))
+                .setSmallIcon(R.drawable.ic_backup)
+                .setAutoCancel(true)      // tap to dismiss
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build();
+
+        if (notificationManager != null) {
+            notificationManager.notify(BACKUP_PROGRESS_NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Dismisses the backup progress / result notification outright (no replacement
+     * notice). Reserved for cases where no further user feedback is appropriate.
+     */
+    public void dismissBackupProgressNotification() {
+        if (notificationManager != null) {
+            notificationManager.cancel(BACKUP_PROGRESS_NOTIFICATION_ID);
+        }
+    }
+
+    /**
+     * Creates the notification channels required for Android O and above.
      */
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
+            // Connectivity channel (low importance — persistent status bar)
+            NotificationChannel connectivityChannel = new NotificationChannel(
                     CHANNEL_ID,
                     "Connectivity Service Channel",
                     NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("Shows the status of PC connection");
+            connectivityChannel.setDescription("Shows the status of PC connection");
+
+            // File transfer channel (high importance — heads-up notification)
+            NotificationChannel fileTransferChannel = new NotificationChannel(
+                    FILE_TRANSFER_CHANNEL_ID,
+                    "File Transfer",
+                    NotificationManager.IMPORTANCE_HIGH
+            );
+            fileTransferChannel.setDescription("Incoming file transfer requests from PC");
+
+            // Send file channel (low importance — silent progress bar)
+            NotificationChannel sendFileChannel = new NotificationChannel(
+                    SEND_FILE_CHANNEL_ID,
+                    "Send File",
+                    NotificationManager.IMPORTANCE_LOW
+            );
+            sendFileChannel.setDescription("Progress of outgoing file transfers to PC");
+
+            // Backup progress channel (low importance — silent sticky progress bar)
+            NotificationChannel backupProgressChannel = new NotificationChannel(
+                    BACKUP_PROGRESS_CHANNEL_ID,
+                    "Backup Progress",
+                    NotificationManager.IMPORTANCE_LOW
+            );
+            backupProgressChannel.setDescription("Progress of backup file transfer to PC");
+
             if (notificationManager != null) {
-                notificationManager.createNotificationChannel(channel);
+                notificationManager.createNotificationChannel(connectivityChannel);
+                notificationManager.createNotificationChannel(fileTransferChannel);
+                notificationManager.createNotificationChannel(sendFileChannel);
+                notificationManager.createNotificationChannel(backupProgressChannel);
             }
         }
     }

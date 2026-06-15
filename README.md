@@ -6,9 +6,10 @@ A cross-platform solution connecting Android phones to Windows PCs. The phone ac
 
 | Directory | Language | Description |
 |---|---|---|
-| [`android/`](android/) | Java (MVVM + Clean Architecture) | Android client app |
-| [`desktop/`](desktop/) | Python 3.13 + PySide6 | Windows desktop client — **SyncDose** |
-| [`TauSync/`](TauSync/) | C# .NET 8 + Java + Python wrapper | Proprietary TCP multiplexing protocol |
+| [`android/`](android/README.md) | Java · MVVM + Clean Architecture | Android companion app — device info, file transfer (both directions), backup |
+| [`desktop/`](desktop/README.md) | Python 3.13 · PySide6 | **SyncDose** Windows desktop client — dashboard, tools grid, file transfer, backup, system tray |
+| [`TauSync/`](TauSync/README.md) | C# .NET 8 · Java · Python wrapper | Proprietary TCP multiplexing protocol — C# library, Android Java port, Python wrapper |
+| [`FileDetection/`](FileDetection/README.md) | Python · PyTorch | ML-powered backup screening — duplicate detection, corruption checks, image classification |
 
 ---
 
@@ -16,7 +17,7 @@ A cross-platform solution connecting Android phones to Windows PCs. The phone ac
 
 ```
 Ecosystem/
-├── android/                    # Android app (Java, Min SDK 24)
+├── android/                    # Android app (Java, Min SDK 29)
 │   └── app/src/main/java/com/example/android/
 │       ├── domain/             # Pure Java — entities, use cases (no Android deps)
 │       ├── data/               # DataSources, Repositories
@@ -39,13 +40,23 @@ Ecosystem/
 │   ├── main.py                 # App entry point (fast launch)
 │   └── run.py                  # Dev launcher: compile resources → run tests → launch
 │
-└── TauSync/                    # Protocol library
-    ├── Shared_Definitions/     # TauSync_Protocol_Spec.md (v3.1)
-    ├── Tausync_Windows/        # C# .NET 8 library (TauSync.Lib.dll)
-    │   └── TauSync.Lib/
-    ├── Tausync_Android/        # Java Android library
-    │   └── tausync-lib/
-    └── windows/                # Python wrapper (tausync_py) around the .NET DLL
+├── TauSync/                    # Protocol library
+│   ├── Shared_Definitions/     # TauSync_Protocol_Spec.md (v3.1)
+│   ├── Tausync_Windows/        # C# .NET 8 library (TauSync.Lib.dll)
+│   │   └── TauSync.Lib/
+│   ├── Tausync_Android/        # Java Android library
+│   │   └── tausync-lib/
+│   └── windows/                # Python wrapper (tausync_py) around the .NET DLL
+│
+└── FileDetection/              # ML backup screening pipeline (PyTorch)
+    ├── detector.py             # Corruption detection (empty file, format-level checks)
+    ├── classifer.py            # Classifier — two-stage pipeline (dups + ML)
+    ├── image_classifer.py      # MobileNetV3-Large image classifier
+    ├── file_duplicates.py      # xxh3_128 content-hash duplicate detection
+    ├── quality.py              # Image quality scoring
+    ├── similar_photos.py       # Perceptual hash visual-similarity grouping
+    ├── checkers/               # Format-specific checkers (image, PDF, ZIP)
+    └── dataset/                # Training data
 ```
 
 ---
@@ -122,10 +133,10 @@ target file path to the pipe and exits.
 
 ## Android App
 
-**Min SDK:** 24 (Android 7.0) · **Target SDK:** 36 · **JDK:** 21 · **Gradle:** 8.13
+**Min SDK:** 29 (Android 10.0) · **Target SDK:** 36 · **JDK:** 21 · **Gradle:** 8.13+
 
 Open `android/` in Android Studio. The app uses manual DI via `MainViewModelFactory` — no
-Hilt or Dagger. `ConnectionService` is a Foreground Service that keeps the TauSync socket
+Hilt or Dagger. `ConnectivityService` is a Foreground Service that keeps the TauSync socket
 alive while the app is in the background.
 
 Connection is established by scanning a QR code displayed on the SyncDose desktop app.

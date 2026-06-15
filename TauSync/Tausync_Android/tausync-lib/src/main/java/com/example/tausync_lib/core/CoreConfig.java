@@ -38,12 +38,6 @@ public final class CoreConfig {
     /** Delay between TCP connection retries in client mode. */
     public static final int CLIENT_CONNECT_RETRY_DELAY_SECONDS = 2;
 
-    /**
-     * Grace period (ms) before a released ID is eligible for reuse.
-     * Prevents stale FIN frames from corrupting new handlers.
-     */
-    public static final int ID_RECYCLE_DELAY_MS = 2000;
-
     /** Max queued REQs per word before the service is registered. */
     public static final int MAX_PENDING_DISCOVERY_PER_WORD = 64;
 

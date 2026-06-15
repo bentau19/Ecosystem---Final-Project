@@ -1,10 +1,4 @@
-"""
-Device-info service.
-
-Reads device metadata from TauSync named channels on a background thread
-and emits a fully-populated DeviceEntity so the ViewModel can persist and
-display it without touching the network layer directly.
-"""
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
@@ -16,7 +10,11 @@ from domain.entities.device_info import DeviceEntity
 from domain.enums.device_info_channels import DeviceInfoChannels
 from repositories.device import DeviceRepository
 from services.connectivity import ConnectivityService
+# Imported for its side effect of binding the `network` submodule onto the
+# `utils` package object so `utils.network.*` below resolves correctly.
 from utils import network
+
+logger = logging.getLogger(__name__)
 
 
 class DeviceInfoService(QObject):
@@ -27,23 +25,32 @@ class DeviceInfoService(QObject):
     repository (to guarantee UUID uniqueness when the remote device has no
     previously assigned ID).
 
-    All channel reads run on a background :class:`threading.Thread` via the
-    ``@threaded`` decorator so the UI thread is never blocked. PySide6's queued
-    connection mechanism ensures ``Signal.emit()`` from that thread is safe.
+    All channel reads run on a background :class:`threading.Thread` spawned
+    submitted to :attr:`_executor` so the UI thread is never blocked.
+    PySide6's queued connection mechanism ensures ``Signal.emit()`` is safe.
 
     Signals:
         device_info_ready (Signal[object]): Emitted with a fully-populated
             :class:`~entities.device_info.DeviceEntity` once all channel reads
             complete successfully.
+        device_saved (Signal[object]): Emitted with the
+            :class:`~domain.entities.device_info.DeviceEntity` after
+            :meth:`save` writes it to the repository.
         read_error (Signal[str]): Emitted with the exception message string if
             any channel read raises an exception.
+        device_fetched (Signal[object]): Emitted with the
+            :class:`~domain.entities.device_info.DeviceEntity` matching a
+            :meth:`fetch_device_by_id` lookup, or ``None`` if not found.
+        all_devices_fetched (Signal[list]): Emitted with
+            ``list[DeviceEntity]`` when :meth:`fetch_all_devices` completes.
     """
 
-    device_info_ready = Signal(object)
-    device_saved = Signal(object)
-    read_error = Signal(str)
-    device_fetched = Signal(object)  # DeviceEntity | None
-    all_devices_fetched = Signal(list)  # list[DeviceEntity]
+    device_info_ready: Signal = Signal(object)
+    device_saved: Signal = Signal(object)
+    read_error: Signal = Signal(str)
+    device_fetched: Signal = Signal(object)  # DeviceEntity | None
+    all_devices_fetched: Signal = Signal(list)  # list[DeviceEntity]
+    _CHANNEL_TIMEOUT: int = 10  # seconds to wait for each device-info channel
 
     def __init__(
             self,
@@ -66,11 +73,10 @@ class DeviceInfoService(QObject):
         super().__init__(parent)
         self._connectivity: ConnectivityService = connectivity
         self._device_repository: DeviceRepository = repository
-        self._threads: list[threading.Thread] = []
 
+        self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
         self._lifecycle_lock: threading.Lock = threading.Lock()
         self._is_running: threading.Event = threading.Event()
-        self._threads_lock: threading.Lock = threading.Lock()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -86,7 +92,7 @@ class DeviceInfoService(QObject):
         """
         if not self._is_running.is_set():
             return
-        self._spawn(self._save, entity)
+        self._executor.submit(self._save, entity)
 
     def fetch_device_by_id(self, device_id: str) -> None:
         """Fetch a stored device by ID on a background thread.
@@ -105,7 +111,7 @@ class DeviceInfoService(QObject):
         """
         if not self._is_running.is_set():
             return
-        self._spawn(self._fetch_device_by_id, device_id)
+        self._executor.submit(self._fetch_device_by_id, device_id)
 
     def fetch_all_devices(self) -> None:
         """Fetch all stored devices on a background thread.
@@ -120,7 +126,7 @@ class DeviceInfoService(QObject):
         """
         if not self._is_running.is_set():
             return
-        self._spawn(self._fetch_all_devices)
+        self._executor.submit(self._fetch_all_devices)
 
     def start(self) -> None:
         """Start the service on a background thread."""
@@ -129,6 +135,23 @@ class DeviceInfoService(QObject):
     def stop(self) -> None:
         """Stop the service on a background thread, joining all pending workers."""
         threading.Thread(target=self._stop, daemon=True).start()
+
+    def restart(self) -> None:
+        """Stop then start the service sequentially on one background thread.
+
+        Unlike calling :meth:`stop` followed by :meth:`start` (two independent
+        threads racing on the lifecycle lock — start could win first and
+        no-op, leaving the service dead), this guarantees the stop fully
+        completes before the start runs.  Used on device disconnect so the
+        login screen's DB reads (:meth:`fetch_all_devices`,
+        :meth:`fetch_device_by_id`) keep working for the next session.
+        """
+
+        def _restart() -> None:
+            self._stop()
+            self._start()
+
+        threading.Thread(target=_restart, daemon=True).start()
 
     def fetch_device_info(self) -> None:
         """Request a fresh device-info read from TauSync channels on a background thread.
@@ -142,42 +165,37 @@ class DeviceInfoService(QObject):
         """
         if not self._is_running.is_set():
             return
-        self._spawn(self._get_device_info)
+        self._executor.submit(self._get_device_info)
 
     # ── Private helpers ────────────────────────────────────────────────────────
-
-    def _spawn(self, target, *args) -> None:
-        # Reject new spawns during teardown to avoid work after _is_running is cleared.
-        if not self._is_running.is_set():
-            return
-        t = threading.Thread(target=target, args=args, daemon=True)
-        with self._threads_lock:
-            self._threads.append(t)
-        t.start()
 
     def _start(self) -> None:
         # Guard against double-start with the lifecycle lock.
         with self._lifecycle_lock:
             if self._is_running.is_set():
                 return
+            self._executor = ThreadPoolExecutor()
             self._is_running.set()
 
     def _stop(self) -> None:
-        # Join every worker except the calling thread to avoid a deadlock.
+        # Clear the running flag then wait for all submitted work to finish.
+        # The executor reference is captured inside the lock so a concurrent
+        # _start() (which swaps self._executor) can never have its fresh pool
+        # shut down by this stop.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            pending_threads: list[threading.Thread] = self._get_pending_threads()
-            for t in pending_threads:
-                if t == threading.current_thread():
-                    continue
-                t.join()
+            executor = self._executor
+        executor.shutdown(wait=True, cancel_futures=True)
 
     def _save(self, entity: DeviceEntity) -> None:
-        # Persist entity via repository and re-emit the saved signal at service level.
+        # Persist entity via repository, then emit both the saved signal and
+        # device_info_ready so the ViewModel only receives the entity after it
+        # is guaranteed to be on disk.
         self._device_repository.save(entity)
         self.device_saved.emit(entity)
+        self.device_info_ready.emit(entity)
 
     def _fetch_device_by_id(self, device_id: str) -> None:
         # Look up the entity and emit device_fetched (None if not found).
@@ -189,11 +207,6 @@ class DeviceInfoService(QObject):
         devices = self._device_repository.get_all()
         self.all_devices_fetched.emit(devices)
 
-    def _get_pending_threads(self) -> list[threading.Thread]:
-        # Snapshot alive threads under the lock so callers can join without holding it.
-        with self._threads_lock:
-            return [t for t in self._threads if t.is_alive()]
-
     def _get_device_info(self) -> None:
         # Read all device channels in parallel, build the entity, persist, and emit.
         tau = self._connectivity.tau
@@ -201,15 +214,16 @@ class DeviceInfoService(QObject):
             return
         try:
             read = utils.network.read_string_from_channel
+            t = self._CHANNEL_TIMEOUT
             with ThreadPoolExecutor() as pool:
-                f_id       = pool.submit(read, tau, DeviceInfoChannels.ID.value)
-                f_name     = pool.submit(read, tau, DeviceInfoChannels.NAME_FROM_ANDROID.value)
-                f_os       = pool.submit(read, tau, DeviceInfoChannels.OS_FROM_ANDROID.value)
-                f_battery  = pool.submit(read, tau, DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.value)
-                f_charging = pool.submit(read, tau, DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.value)
-                f_stor_tot = pool.submit(read, tau, DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.value)
-                f_stor_use = pool.submit(read, tau, DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.value)
-                f_ip       = pool.submit(read, tau, DeviceInfoChannels.IP_FROM_ANDROID.value)
+                f_id = pool.submit(read, tau, DeviceInfoChannels.ID.value, t)
+                f_name = pool.submit(read, tau, DeviceInfoChannels.NAME_FROM_ANDROID.value, t)
+                f_os = pool.submit(read, tau, DeviceInfoChannels.OS_FROM_ANDROID.value, t)
+                f_battery = pool.submit(read, tau, DeviceInfoChannels.BATTERY_LEVEL_FROM_ANDROID.value, t)
+                f_charging = pool.submit(read, tau, DeviceInfoChannels.BATTERY_CHARGING_FROM_ANDROID.value, t)
+                f_stor_tot = pool.submit(read, tau, DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.value, t)
+                f_stor_use = pool.submit(read, tau, DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.value, t)
+                f_ip = pool.submit(read, tau, DeviceInfoChannels.IP_FROM_ANDROID.value, t)
             entity = DeviceEntity(
                 id=f_id.result(),
                 tag="",
@@ -222,12 +236,12 @@ class DeviceInfoService(QObject):
                 last_connected=date.today(),
                 ip=f_ip.result(),
             )
-            self.save(entity)
+            self._save(entity)
 
-            # Send PC name to the connected Android device on a background thread
-            self._spawn(self._send_pc_name)
-            
-            self.device_info_ready.emit(entity)
+            # Send PC name to the connected Android device on a background thread.
+            if self._is_running.is_set():
+                self._executor.submit(self._send_pc_name)
+            # device_info_ready is emitted from _save (after the DB write) — not here.
         except Exception as exc:
             self.read_error.emit(str(exc))
 
@@ -241,4 +255,4 @@ class DeviceInfoService(QObject):
             pc_name = utils.network.get_pc_name()
             utils.network.write_string_to_channel(tau, DeviceInfoChannels.PC_NAME.value, pc_name)
         except Exception as e:
-            print(f"[Desktop] Warning: Failed to send PC name to Android: {e}")
+            logger.warning("Failed to send PC name to Android: %s", e)
