@@ -16,12 +16,8 @@ TauSync/windows/tausync_py.egg-info/PKG-INFO
 *.suo
 *.jpg
 *.png
-<<<<<<< HEAD
 *.dll
 *.pdb
-=======
-
->>>>>>> EFP-67-Detect-Unwanted-Images-videos-And-Files
 
 ### --- Python Specific --- ###
 __pycache__/
