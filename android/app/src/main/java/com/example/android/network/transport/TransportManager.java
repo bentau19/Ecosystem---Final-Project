@@ -111,6 +111,42 @@ public interface TransportManager {
     void streamInputStreamToChannel(String channel, java.io.InputStream inputStream) throws Exception;
 
     /**
+     * Callback used by {@link #serveJsonExchange} to transform a peer's JSON
+     * request into a JSON response — all on the same underlying TauSyncStream.
+     */
+    @FunctionalInterface
+    interface JsonExchangeHandler {
+        /**
+         * @param requestJson Raw JSON string written by the peer.
+         * @return JSON string to write back as the response.
+         * @throws Exception if the request cannot be processed.
+         */
+        String respond(String requestJson) throws Exception;
+    }
+
+    /**
+     * Serves a single PC-initiated JSON request-response exchange on one TauSyncStream.
+     *
+     * <p>Opens the channel, reads the full JSON string sent by the peer, invokes
+     * {@code handler} with that string, writes the handler's return value as the
+     * response, then closes the stream — all within the same TauSync channel ID.
+     *
+     * <p>This is required for virtual-drive channels where the PC writes a request
+     * and blocks waiting for the response on the <em>same</em> stream.  Using
+     * separate {@link #readFromChannel} / {@link #writeToChannel} calls would open
+     * two independent streams and break the protocol.
+     *
+     * <p>Must be called from a background thread — blocks until the exchange
+     * is complete.
+     *
+     * @param channel Meeting word the peer is blocking on.
+     * @param handler Transforms the request JSON into the response JSON.
+     * @throws Exception if the channel cannot be opened, the read fails,
+     *                   the handler throws, or the write fails.
+     */
+    void serveJsonExchange(String channel, JsonExchangeHandler handler) throws Exception;
+
+    /**
      * Checks if the transport is currently connected.
      */
     boolean isConnected();

@@ -280,7 +280,8 @@ class FileTransferService(QObject):
                 try:
                     timeout = datetime.timedelta(seconds=3)
                     server.wait_for_client(timeout)
-                    file_path: str = server.read(timeout)
+                    # read() now returns raw bytes; the path is UTF-8 text on the wire.
+                    file_path: str = server.read(timeout).decode("utf-8")
                     self.send_file(file_path)
                 except TimeoutError as exc:
                     pass

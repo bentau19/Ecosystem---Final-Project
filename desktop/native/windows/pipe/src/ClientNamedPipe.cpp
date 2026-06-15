@@ -3,6 +3,8 @@
 #include "PipeException.h"
 #include <stdexcept>
 #include <algorithm>
+#include <vector>
+#include <limits>
 
 std::wstring ClientNamedPipe::StringToWstring(const std::string &str)
 {
@@ -27,40 +29,38 @@ std::wstring ClientNamedPipe::StringToWstring(const std::string &str)
     return wString;
 }
 
-ClientNamedPipe::ClientNamedPipe(int inputBufferSize, int outputBufferSize, const std::string &pipeName)
+ClientNamedPipe::ClientNamedPipe(int inputBufferSize, int outputBufferSize,
+                                 const std::string& pipeName, bool duplex)
 {
-    this->inputBufferSize = inputBufferSize;
+    this->inputBufferSize  = inputBufferSize;
     this->outputBufferSize = outputBufferSize;
 
     std::wstring w_string = StringToWstring(pipeName);
 
+    DWORD access = duplex ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_WRITE;
+
     hPipe = CreateFileW(
         w_string.c_str(),
-        GENERIC_WRITE,
+        access,
         0,
         nullptr,
         OPEN_EXISTING,
         FILE_FLAG_OVERLAPPED,
-        nullptr);
+        nullptr
+    );
 
     if (hPipe != INVALID_HANDLE_VALUE)
-    {
-        return; // SUCCESS case
-    }
+        return;
 
     DWORD err = GetLastError();
-
     switch (err)
     {
     case ERROR_FILE_NOT_FOUND:
-        throw PipeException("Pipe not found", PipeErrorCode::ConnectionFailed);
-
+        throw PipeException("Pipe not found",               PipeErrorCode::ConnectionFailed);
     case ERROR_ACCESS_DENIED:
-        throw PipeException("Access denied", PipeErrorCode::AccessDenied);
-
+        throw PipeException("Access denied",                PipeErrorCode::AccessDenied);
     case ERROR_PIPE_BUSY:
-        throw PipeException("Pipe busy", PipeErrorCode::ConnectionFailed);
-
+        throw PipeException("Pipe busy",                    PipeErrorCode::ConnectionFailed);
     default:
         throw PipeException("Failed to create client pipe", PipeErrorCode::ConnectionFailed);
     }
@@ -130,6 +130,70 @@ if (timeout)
         }
         totalBytesWritten += bytesWritten;
     }
+}
+
+std::string ClientNamedPipe::readExact(size_t n,
+                                       std::optional<std::chrono::milliseconds> timeout)
+{
+    std::string buffer;
+    buffer.reserve(n);
+
+    while (buffer.size() < n) {
+        size_t remaining = n - buffer.size();
+        std::vector<char> chunk(remaining);
+
+        OVERLAPPED ov = {};
+        ov.hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+        if (!ov.hEvent)
+            throw PipeException("CreateEvent failed", PipeErrorCode::ReadFailed);
+
+        DWORD bytesRead = 0;
+        BOOL ok = ReadFile(hPipe, chunk.data(), (DWORD)remaining, &bytesRead, &ov);
+
+        if (!ok) {
+            DWORD err = GetLastError();
+            if (err == ERROR_BROKEN_PIPE || err == ERROR_PIPE_NOT_CONNECTED) {
+                CloseHandle(ov.hEvent);
+                throw PipeException("Pipe broken", PipeErrorCode::BrokenPipe);
+            }
+            if (err != ERROR_IO_PENDING) {
+                CloseHandle(ov.hEvent);
+                throw PipeException("ReadFile failed", PipeErrorCode::ReadFailed);
+            }
+
+            DWORD ms = INFINITE;
+            if (timeout)
+                ms = static_cast<DWORD>(
+                    std::min(timeout->count(),
+                             (long long)std::numeric_limits<DWORD>::max()));
+
+            DWORD res = WaitForSingleObject(ov.hEvent, ms);
+            if (res == WAIT_TIMEOUT) {
+                CancelIoEx(hPipe, &ov);
+                CloseHandle(ov.hEvent);
+                throw PipeException("Timeout in readExact", PipeErrorCode::ConnectionTimeout);
+            }
+            if (res != WAIT_OBJECT_0) {
+                CloseHandle(ov.hEvent);
+                throw PipeException("Wait failed in readExact", PipeErrorCode::ReadFailed);
+            }
+            if (!GetOverlappedResult(hPipe, &ov, &bytesRead, FALSE)) {
+                DWORD err2 = GetLastError();
+                CloseHandle(ov.hEvent);
+                throw PipeException(
+                    err2 == ERROR_BROKEN_PIPE ? "Pipe broken" : "Overlapped read failed",
+                    err2 == ERROR_BROKEN_PIPE ? PipeErrorCode::BrokenPipe
+                                              : PipeErrorCode::ReadFailed);
+            }
+        }
+
+        CloseHandle(ov.hEvent);
+        if (bytesRead == 0)
+            throw PipeException("Zero bytes read — pipe closed", PipeErrorCode::BrokenPipe);
+        buffer.append(chunk.data(), bytesRead);
+    }
+
+    return buffer;
 }
 
 void ClientNamedPipe::close()

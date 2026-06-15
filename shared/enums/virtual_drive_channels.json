@@ -1,0 +1,15 @@
+{
+  "name": "VirtualDriveChannels",
+  "description": "TauSync meeting-word identifiers for the virtual drive protocol. PC initiates all channels; Android responds. Both sides call tau.connect() with the exact same string.",
+  "type": "string",
+  "members": [
+    { "name": "VIRTUAL_DRIVE_LIST",     "value": "virtual_drive_list",     "description": "PC requests a directory listing at a given path. Fixed meeting word." },
+    { "name": "VIRTUAL_DRIVE_STAT",     "value": "virtual_drive_stat",     "description": "PC requests file or folder metadata (size, mtime, is_dir). Fixed meeting word." },
+    { "name": "VIRTUAL_DRIVE_READ",     "value": "virtual_drive_read",     "description": "Base prefix for read sessions. Negotiation channel: PC sends {path, offset, length, uuid}; actual data flows on virtual_drive_read_{uuid}." },
+    { "name": "VIRTUAL_DRIVE_WRITE",    "value": "virtual_drive_write",    "description": "Base prefix for write sessions. Negotiation channel: PC sends {path, uuid}; actual data streams on virtual_drive_write_{uuid}." },
+    { "name": "VIRTUAL_DRIVE_CREATE",   "value": "virtual_drive_create",   "description": "PC requests creation of a file or directory. Fixed meeting word." },
+    { "name": "VIRTUAL_DRIVE_DELETE",   "value": "virtual_drive_delete",   "description": "PC requests deletion of a file or directory. Fixed meeting word." },
+    { "name": "VIRTUAL_DRIVE_RENAME",   "value": "virtual_drive_rename",   "description": "PC requests rename or move of a file or directory. Fixed meeting word." },
+    { "name": "VIRTUAL_DRIVE_TRUNCATE", "value": "virtual_drive_truncate", "description": "PC requests a file size change (truncate or extend). Fixed meeting word." }
+  ]
+}

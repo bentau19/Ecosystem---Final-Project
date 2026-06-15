@@ -333,6 +333,25 @@ public class TauSyncTransportManager implements TransportManager {
     }
 
     @Override
+    public void serveJsonExchange(String channel, JsonExchangeHandler handler) throws Exception {
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException(
+                    "Cannot serve channel [" + channel + "]: Not connected");
+        }
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
+                     tauSync.connect(channel)) {
+            // Read the full request the peer wrote on this stream.
+            String request = new String(stream.readAll(), java.nio.charset.StandardCharsets.UTF_8);
+            // Compute the response (may spawn background threads for data-phase ops).
+            String response = handler.respond(request);
+            // Write the response back on the same stream before it closes.
+            stream.writeString(response);
+            Log.v(TAG, "serveJsonExchange [" + channel + "]: req=" + request
+                    + " resp=" + response);
+        }
+    }
+
+    @Override
     public void disconnect() {
         Log.d(TAG, "Disconnect requested");
         mainHandler.removeCallbacks(this::attemptConnection);

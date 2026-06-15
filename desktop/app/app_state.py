@@ -7,6 +7,7 @@ from services.device_info import DeviceInfoService
 from services.file_transfer import FileTransferService
 from services.phone_request import PhoneRequestService
 from services.tool import ToolService
+from services.virtual_drive import VirtualDriveService
 from viewmodels.device import DeviceViewModel
 from viewmodels.file_transfer import FileTransferViewModel
 from viewmodels.tool import ToolViewModel
@@ -55,6 +56,9 @@ class AppState:
             connectivity_service=self.connectivity_service,
             file_transfer_service=self.file_transfer_service,
         )
+        self.virtual_drive_service: Final[VirtualDriveService] = VirtualDriveService(
+            connectivity=self.connectivity_service,
+        )
 
         # Wire PhoneRequestService lifecycle to device connection events.
         # On connect  → start() is idempotent (guarded by _is_running); the thread
@@ -63,6 +67,12 @@ class AppState:
         #                 spawns a fresh _listen_to_channels thread.
         self.device_viewmodel.device_connected.connect(self.phone_request_service.start)
         self.device_viewmodel.device_disconnected.connect(self.phone_request_service.stop)
+
+        # Wire VirtualDriveService lifecycle to device connection events.
+        # start() opens \\.\pipe\SyncDoseVDrive and begins serving VirtualDrive.exe.
+        # stop() shuts the executor down after all in-flight ops complete.
+        self.device_viewmodel.device_connected.connect(self.virtual_drive_service.start)
+        self.device_viewmodel.device_disconnected.connect(self.virtual_drive_service.stop)
 
 
 app_state: Final[AppState] = AppState()
