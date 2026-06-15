@@ -134,11 +134,6 @@ public final class ConnectionContext {
      * @return an ID in the range [MIN_ID..MAX_ID]
      */
     public int reserveId() {
-        for (Integer key : releasedIds.keySet()) {
-            if (releasedIds.remove(key) != null) {
-                return key;
-            }
-        }
 
         synchronized (idLock) {
             int id = nextCorrelationId.get();
