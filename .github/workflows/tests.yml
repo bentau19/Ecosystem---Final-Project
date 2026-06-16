@@ -94,3 +94,48 @@ jobs:
       - name: Run FileDetection tests
         working-directory: FileDetection
         run: pytest tests/ --timeout=300 -v
+
+
+  # =========================
+  # TAUSYNC ANDROID TESTS
+  # =========================
+  tausync-android-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+
+      - name: Make gradlew executable
+        run: chmod +x TauSync/Tausync_Android/tausync-lib/gradlew
+
+      - name: Run TauSync Android tests
+        working-directory: TauSync/Tausync_Android/tausync-lib
+        run: ./gradlew test
+
+
+  # =========================
+  # TAUSYNC WINDOWS TESTS
+  # =========================
+  tausync-windows-test:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install TauSync dependencies
+        run: |
+          pip install -r TauSync/windows/requirements.txt
+          pip install pytest pytest-timeout
+
+      - name: Run TauSync Windows tests
+        working-directory: TauSync/windows/tau_sync_tests
+        run: pytest tests/ --timeout=300 -v
