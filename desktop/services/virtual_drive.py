@@ -154,13 +154,11 @@ class VirtualDriveService(QObject):
         while self._is_running.is_set():
             try:
                 req, payload, = self._read_frame(pipe)
-                print(f"request: req={req} payload={payload}")
             except Exception:
                 # Pipe broken or client disconnected — exit the session loop.
                 break
             try:
                 resp, resp_payload, = self._dispatch(req, payload)
-                print(f"respond: resp= {resp} resp_payload={resp_payload}")
             except Exception as exc:
                 # Surface the failure: a swallowed op error reaches VirtualDrive.exe
                 # as {"ok": false} with no indication of what actually went wrong.

@@ -47,6 +47,20 @@ public interface TransportManager {
     }
 
     /**
+     * Callback for {@link #serveJsonExchange(String, JsonExchangeHandler)}: given the peer's
+     * newline-terminated JSON request string, computes and returns the JSON response string.
+     */
+    @FunctionalInterface
+    interface JsonExchangeHandler {
+        /**
+         * @param request The newline-terminated JSON request read from the channel.
+         * @return The JSON response string to write back on the same channel.
+         * @throws Exception if computing the response fails.
+         */
+        String respond(String request) throws Exception;
+    }
+
+    /**
      * Connects to the remote device with automatic reconnection support.
      *
      * @param remoteDevice Information about the target remote device
@@ -167,6 +181,20 @@ public interface TransportManager {
     void writeMetadataThenStreamToChannel(String channel,
                                           String metadata,
                                           java.io.InputStream inputStream) throws Exception;
+
+    /**
+     * Opens a single TauSync channel, reads one newline-terminated JSON request from the peer,
+     * passes it to {@code handler}, and writes the handler's JSON response back on the same
+     * channel before closing it.
+     *
+     * <p>Used by the virtual-drive protocol: the desktop opens a meeting word
+     * (e.g. {@code "virtual_drive_stat"}), writes a JSON request, and reads the response.
+     *
+     * @param channel Channel name (meeting word) to serve.
+     * @param handler Computes the JSON response from the JSON request.
+     * @throws Exception if the channel connect, read, handler, or write fails.
+     */
+    void serveJsonExchange(String channel, JsonExchangeHandler handler) throws Exception;
 
     /**
      * Checks if the transport is currently connected.

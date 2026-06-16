@@ -15,6 +15,7 @@ import androidx.lifecycle.ProcessLifecycleOwner;
 
 import com.example.android.data.datasource.BackupDataSource;
 import com.example.android.data.datasource.SystemDataSource;
+import com.example.android.data.datasource.VirtualDriveDataSource;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.BackupTransferStatus;
 import com.example.android.domain.enums.ConnectionStatus;
@@ -24,13 +25,16 @@ import com.example.android.enums.DeviceInfoChannels;
 import com.example.android.enums.FileTransferChannels;
 import com.example.android.enums.SessionChannels;
 import com.example.android.enums.BackupChannels;
+import com.example.android.enums.VirtualDriveChannels;
 import com.example.android.network.handlers.BackupControlChannelHandler;
+import com.example.android.network.handlers.VirtualDriveChannelHandler;
 import com.example.android.network.handlers.ChannelHandlerRegistry;
 import com.example.android.network.handlers.DeviceInfoChannelHandler;
 import com.example.android.domain.usecases.BackupTransferUseCase;
 import com.example.android.domain.usecases.ReceiveFileUseCase;
 import com.example.android.domain.usecases.RespondToFileTransferUseCase;
 import com.example.android.domain.usecases.SendFileUseCase;
+import com.example.android.domain.usecases.VirtualDriveUseCase;
 import com.example.android.repositories.BackupRepository;
 import com.example.android.repositories.SendFileRepository;
 import com.example.android.network.handlers.FileDataChannelHandler;
@@ -68,6 +72,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     private ReceiveFileUseCase receiveFileUseCase;
     private SendFileUseCase sendFileUseCase;
     private BackupTransferUseCase backupTransferUseCase;
+
+    // Virtual drive UseCase — serves all WinFsp filesystem ops forwarded by the desktop
+    private VirtualDriveUseCase virtualDriveUseCase;
 
     // Observer for outgoing file transfer notifications — kept so we can remove it in onDestroy
     private Observer<SendFileStatus> sendFileStatusObserver;
@@ -122,6 +129,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         backupTransferUseCase = new BackupTransferUseCase(
                 transportManager, BackupRepository.getInstance(), this, new BackupDataSource());
 
+        // Virtual drive — no Context needed; DataSource uses Environment.getExternalStorageDirectory()
+        virtualDriveUseCase = new VirtualDriveUseCase(transportManager, new VirtualDriveDataSource());
+
         registerChannelHandlers();
         registerFileTransferActionListener();
         registerIncomingRequestListener();
@@ -173,6 +183,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                 BackupChannels.BACKUP_CONTROL_FROM_PC.getValue(),
                 new BackupControlChannelHandler(transportManager, backupTransferUseCase)
         );
+
+        // Virtual drive — one handler instance per channel; all backed by the same UseCase
+        for (VirtualDriveChannels vdCh : VirtualDriveChannels.values()) {
+            handlerRegistry.registerHandler(
+                    vdCh.getValue(),
+                    new VirtualDriveChannelHandler(vdCh.getValue(), virtualDriveUseCase)
+            );
+        }
 
         // All other device telemetry data types are registered inline as Getters using generic Lambda functional interfaces
         registerDeviceInfoHandler(DeviceInfoChannels.NAME_FROM_ANDROID.getValue(), this::getDeviceName);
