@@ -1,16 +1,13 @@
-"""
-Data Transfer Object for a single file in a backup queue.
-
-Used by :class:`~viewmodels.backup.BackupViewModel` to describe the set of
-files that are about to be — or are currently being — backed up, without
-exposing any view-layer types.
-"""
 import dataclasses
 
 
 @dataclasses.dataclass
 class BackupFileDTO:
     """View-facing descriptor for one file in the backup queue.
+
+    Used by :class:`~viewmodels.backup.BackupViewModel` to describe the set
+    of files that are about to be — or are currently being — backed up,
+    without exposing any view-layer types.
 
     Attributes:
         path: Absolute source path on disk.  Used as the primary key in all

@@ -62,7 +62,7 @@ def _make_tau(
     """
     tau = MagicMock()
 
-    def _connect_side_effect(word: str) -> MagicMock:
+    def _connect_side_effect(word: str, **kwargs: object) -> MagicMock:
         if word in (
             FileTransferChannels.REGULAR_FILE_METADATA_PC_TO_ANDROID.value,
             FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC.value,
@@ -130,7 +130,13 @@ def make_service():
         mock_connectivity.tau = tau
         svc = FileTransferService(connectivity=mock_connectivity)
         svc._listen_for_file_to_send = MagicMock()  # suppress real Windows pipe
-        svc.start()
+        # Call _start() directly so _is_running is set synchronously before the
+        # factory returns.  svc.start() delegates to a daemon thread which can
+        # lose a scheduling race with the test body on the very next line,
+        # causing receive_metadata() / send_file() to return early (is_running
+        # not yet set) and the signal to never fire.  _listen_for_file_to_send
+        # is already a MagicMock, so _start() does not block here.
+        svc._start()
         services.append(svc)
         return svc
 
@@ -270,7 +276,7 @@ def test_send_file_opens_channels_in_correct_order(
 
     tau = MagicMock()
 
-    def _connect(word: str) -> MagicMock:
+    def _connect(word: str, **kwargs: object) -> MagicMock:
         call_order.append(word)
         if word == FileTransferChannels.REGULAR_FILE_METADATA_PC_TO_ANDROID.value:
             return _make_stream_cm(meta_stream)

@@ -83,113 +83,48 @@ QLabel#OverallStats {
     background: transparent;
 }
 
-/* ── Scroll area ─────────────────────────────────────────────────────────── */
-
-QScrollArea#FileScrollArea,
-QWidget#FileScrollContent {
-    background-color: {{BACKGROUND}};
-    border: none;
+QLabel#OverallEta {
+    color: {{TEXT_SECONDARY}};
+    font-size: 11px;
+    background: transparent;
 }
 
-/* Scrollbar styling */
-QScrollArea#FileScrollArea QScrollBar:vertical {
+/* ── File list (QListView replaces old QScrollArea + QFrame rows) ────────── */
+
+QListView#FileListView {
+    background-color: {{BACKGROUND}};
+    border: none;
+    outline: none;
+    padding: 8px 0px;
+}
+
+QListView#FileListView::item {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+
+QListView#FileListView::item:selected {
+    background: transparent;
+}
+
+/* Scrollbar */
+QListView#FileListView QScrollBar:vertical {
     background: {{BACKGROUND}};
     width: 6px;
     margin: 0;
     border-radius: 3px;
 }
 
-QScrollArea#FileScrollArea QScrollBar::handle:vertical {
+QListView#FileListView QScrollBar::handle:vertical {
     background: {{BORDER}};
     border-radius: 3px;
     min-height: 24px;
 }
 
-QScrollArea#FileScrollArea QScrollBar::add-line:vertical,
-QScrollArea#FileScrollArea QScrollBar::sub-line:vertical {
+QListView#FileListView QScrollBar::add-line:vertical,
+QListView#FileListView QScrollBar::sub-line:vertical {
     height: 0;
-}
-
-/* ── File rows ───────────────────────────────────────────────────────────── */
-
-QFrame#BackupProgressRow {
-    background-color: {{ROW_BG}};
-    border: 1px solid {{ROW_BORDER}};
-    border-radius: 8px;
-}
-
-QFrame#BackupProgressRow[status="active"] {
-    background-color: {{ROW_ACTIVE_BG}};
-    border: 1px solid {{ROW_ACTIVE_BORDER}};
-}
-
-QFrame#BackupProgressRow[status="done"] {
-    background-color: {{STATUS_DONE_BG}};
-    border: 1px solid {{STATUS_DONE_TEXT}};
-}
-
-QFrame#BackupProgressRow[status="failed"] {
-    background-color: {{STATUS_FAILED_BG}};
-    border: 1px solid {{STATUS_FAILED_TEXT}};
-}
-
-/* File-type icon label (emoji, no background) */
-QLabel#FileTypeIcon {
-    background: transparent;
-    border: none;
-    font-size: 22px;
-}
-
-QLabel#RowFileName {
-    color: {{TEXT_PRIMARY}};
-    font-size: 13px;
-    font-weight: 600;
-    background: transparent;
-}
-
-QLabel#RowFileSize {
-    color: {{TEXT_SECONDARY}};
-    font-size: 11px;
-    background: transparent;
-}
-
-QLabel#RowSpeed {
-    color: {{STATUS_ACTIVE_TEXT}};
-    font-size: 11px;
-    background: transparent;
-}
-
-/* ── Status badges ───────────────────────────────────────────────────────── */
-
-QLabel#StatusBadge {
-    border-radius: 4px;
-    padding: 2px 6px;
-    font-size: 11px;
-    font-weight: 600;
-}
-
-QLabel#StatusBadge[status="queued"] {
-    color: {{STATUS_QUEUED_TEXT}};
-    background: transparent;
-    border: 1px solid {{BORDER}};
-}
-
-QLabel#StatusBadge[status="active"] {
-    color: {{STATUS_ACTIVE_TEXT}};
-    background-color: {{STATUS_ACTIVE_BG}};
-    border: 1px solid {{ROW_ACTIVE_BORDER}};
-}
-
-QLabel#StatusBadge[status="done"] {
-    color: {{STATUS_DONE_TEXT}};
-    background-color: {{STATUS_DONE_BG}};
-    border: 1px solid {{STATUS_DONE_TEXT}};
-}
-
-QLabel#StatusBadge[status="failed"] {
-    color: {{STATUS_FAILED_TEXT}};
-    background-color: {{STATUS_FAILED_BG}};
-    border: 1px solid {{STATUS_FAILED_TEXT}};
 }
 
 /* ── Dividers ────────────────────────────────────────────────────────────── */
@@ -261,4 +196,36 @@ QPushButton#CancelAllButton:pressed {
 QPushButton#CancelAllButton:disabled {
     color: {{STATUS_QUEUED_TEXT}};
     border-color: {{BORDER}};
+}
+
+/* Auto-scroll toggle — neutral ghost when off, teal-lit when :checked */
+QPushButton#AutoScrollButton {
+    background-color: transparent;
+    border: 1px solid {{BTN_PAUSE_BORDER}};
+    border-radius: 8px;
+    color: {{BTN_PAUSE_TEXT}};
+    font-size: 13px;
+    font-weight: 500;
+    padding: 0px 16px;
+    outline: none;
+}
+
+QPushButton#AutoScrollButton:hover {
+    border-color: {{PROGRESS_FILL}};
+    color: {{PROGRESS_FILL}};
+}
+
+QPushButton#AutoScrollButton:checked {
+    background-color: {{STATUS_ACTIVE_BG}};
+    border-color: {{PROGRESS_FILL}};
+    color: {{PROGRESS_FILL}};
+}
+
+QPushButton#AutoScrollButton:checked:hover {
+    border-color: {{PROGRESS_FILL_END}};
+    color: {{PROGRESS_FILL_END}};
+}
+
+QPushButton#AutoScrollButton:pressed {
+    background-color: {{STATUS_ACTIVE_BG}};
 }

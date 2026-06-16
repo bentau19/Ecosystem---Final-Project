@@ -1,17 +1,4 @@
-"""
-File handler entry point.
-
-Standalone Windows process launched by the OS when the user invokes the
-"Send with SyncDose" shell context-menu action.  Receives the target file
-path as ``sys.argv[1]``, writes it to the SyncDose named pipe, and exits.
-
-If the pipe is not found (main app not running or phone not connected) a
-:class:`~views.widgets.dialogs.handler_dialog.PhoneNotDetectedDialog` is shown.
-Any other failure shows a
-:class:`~views.widgets.dialogs.handler_dialog.TransferErrorDialog`.
-In both cases the user may click **Try Again** to retry the send, or
-**Dismiss** to abort.
-"""
+import logging
 import sys
 from typing import Final
 
@@ -19,6 +6,8 @@ from PySide6.QtCore import QCoreApplication
 from PySide6.QtWidgets import QApplication, QDialog
 
 from native.windows.pipe import Client
+
+logger = logging.getLogger(__name__)
 from views.widgets.dialogs.file_handler import (
     PhoneNotDetectedDialog,
     TransferErrorDialog,
@@ -32,6 +21,9 @@ PIPE_NAME: Final[str] = r'\\.\pipe\FileSend'
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _ensure_app() -> QCoreApplication | QApplication:
+    # Reuse an existing QApplication if one is already running, otherwise
+    # construct one — a QApplication instance is required before any
+    # QDialog can be shown.
     return QApplication.instance() or QApplication(sys.argv)
 
 
@@ -61,12 +53,20 @@ def send_via_pipe(file_path: str) -> None:
                 return
         except Exception as exe:
             _ensure_app()
-            print(exe)
+            logger.error("Pipe write error: %s", exe)
             if TransferErrorDialog().exec() != QDialog.DialogCode.Accepted:
                 return
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
+# Standalone Windows process launched by the OS when the user invokes the
+# "Send with SyncDose" shell context-menu action.  Receives the target file
+# path as sys.argv[1], writes it to the SyncDose named pipe, and exits.
+#
+# If the pipe is not found (main app not running or phone not connected) a
+# PhoneNotDetectedDialog is shown.  Any other failure shows a
+# TransferErrorDialog.  In both cases the user may click "Try Again" to retry
+# to send, or "Dismiss" to abort.
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

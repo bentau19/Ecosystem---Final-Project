@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    ic_compress — 24 × 24 dp "compress / shrink" icon used by the Storage Saver row.
+    Four diagonal arrows pointing inward toward the centre, forming a compress metaphor.
+    fillColor is white so the icon can be tinted at runtime via app:tint.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Top-left arrow pointing toward centre (↘) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M3,3 L3,8 L5,6 L8,9 L9,8 L6,5 L8,3 Z" />
+
+    <!-- Top-right arrow pointing toward centre (↙) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M21,3 L16,3 L18,5 L15,8 L16,9 L19,6 L21,8 Z" />
+
+    <!-- Bottom-left arrow pointing toward centre (↗) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M3,21 L8,21 L6,19 L9,16 L8,15 L5,18 L3,16 Z" />
+
+    <!-- Bottom-right arrow pointing toward centre (↖) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M21,21 L21,16 L19,18 L16,15 L15,16 L18,19 L16,21 Z" />
+
+</vector>

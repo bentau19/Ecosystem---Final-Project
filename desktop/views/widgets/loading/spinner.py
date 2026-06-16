@@ -1,7 +1,5 @@
-"""Animated circular arc loading spinner widget."""
-
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QPainter, QPen, QPaintEvent
+from PySide6.QtGui import QColor, QPainter, QPen, QPaintEvent, QShowEvent, QHideEvent
 from PySide6.QtWidgets import QWidget
 
 from app.theme_manager import theme_manager
@@ -61,13 +59,21 @@ class LoadingSpinner(QWidget):
 
     # ── Timer lifecycle ────────────────────────────────────────────────────────
 
-    def showEvent(self, event) -> None:  # noqa: ANN001
-        """Start the rotation timer when the widget becomes visible."""
+    def showEvent(self, event: QShowEvent) -> None:
+        """Start the rotation timer when the widget becomes visible.
+
+        Args:
+            event: The show event delivered by Qt.
+        """
         self._timer.start()
         super().showEvent(event)
 
-    def hideEvent(self, event) -> None:  # noqa: ANN001
-        """Stop the rotation timer when the widget is hidden."""
+    def hideEvent(self, event: QHideEvent) -> None:
+        """Stop the rotation timer when the widget is hidden.
+
+        Args:
+            event: The hide event delivered by Qt.
+        """
         self._timer.stop()
         super().hideEvent(event)
 

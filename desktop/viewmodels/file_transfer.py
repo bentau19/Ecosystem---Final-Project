@@ -1,19 +1,3 @@
-"""
-ViewModel for file transfer operations.
-
-Gates connectivity-sensitive calls behind device state and forwards the
-minimal set of :class:`~services.file_transfer.FileTransferService` signals
-that the view needs: completion, error, and the metadata-arrival prompt.
-
-The receive flow is split into three explicit steps, each driven by the view:
-    1. :meth:`receive_metadata` — start listening; fires :attr:`metadata_received`.
-    2. :meth:`receive_file`     — user accepted; streams bytes to the chosen path.
-    3. :meth:`reject_receive`   — user declined; sends the reject token.
-
-Steps 2 and 3 are **not** gated by connectivity so that in-flight operations
-that begin while connected can still resolve (or error gracefully) after a
-disconnect.
-"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -37,6 +21,15 @@ class FileTransferViewModel(QObject):
     — operations dispatched before a device connects are silently dropped.
     In-flight transfers that complete or fail after a disconnect still surface
     their result so the view can inform the user.
+
+    The receive flow is split into three explicit steps, each driven by the view:
+        1. :meth:`receive_metadata` — start listening; fires :attr:`metadata_received`.
+        2. :meth:`receive_file`     — user accepted; streams bytes to the chosen path.
+        3. :meth:`reject_receive`   — user declined; sends the reject token.
+
+    Steps 2 and 3 are **not** gated by connectivity so that in-flight operations
+    that begin while connected can still resolve (or error gracefully) after a
+    disconnect.
 
     Signals:
         send_complete (Signal[FileSendCompleteDTO]): Emitted on success.

@@ -5,7 +5,7 @@ import qrcode
 from PIL.ImageQt import ImageQt
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QPaintEvent, QResizeEvent
-from PySide6.QtWidgets import QLabel, QWidget, QSizePolicy
+from PySide6.QtWidgets import QLabel, QWidget
 
 from resources.colors import Palette
 from resources.spacing import Spacing
@@ -30,14 +30,14 @@ _QR_CORNER_RADIUS: int = Spacing.XXL
 
 
 class QR(QLabel):
-    """
-    QR code widget with teal corner-bracket decorations and clipped rounded corners.
+    """QR code widget with teal corner-bracket decorations and clipped rounded corners.
 
     Uses error correction level H (30 % recovery capacity).
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """
+        """Initialize the QR widget and generate the initial QR code.
+
         Args:
             parent: Optional parent widget.
         """

@@ -102,7 +102,7 @@ public class ReceiveFileRepository {
      * IDLE → PENDING_APPROVAL
      */
     public void onTransferRequested(ReceiveFileRequest request) {
-        Log.d(TAG, "Incoming transfer: " + request.getFileName() + " (" + request.getFormattedSize() + ")");
+        Log.d(TAG, "Incoming transfer: " + request.fileName() + " (" + request.getFormattedSize() + ")");
         // Post status BEFORE the request so that when MainActivity's pendingRequest observer
         // fires and reads transferStatus.getValue(), the status is already PENDING_APPROVAL.
         transferStatus.postValue(ReceiveFileStatus.PENDING_APPROVAL);
@@ -125,7 +125,7 @@ public class ReceiveFileRepository {
         transferStatus.postValue(ReceiveFileStatus.RECEIVING);
         ReceiveFileRequest request = pendingRequest.getValue();
         if (actionListener != null && request != null) {
-            actionListener.onUserAccepted(request.getFileName());
+            actionListener.onUserAccepted(request.fileName());
         } else {
             Log.w(TAG, "No actionListener or pending request on accept");
         }

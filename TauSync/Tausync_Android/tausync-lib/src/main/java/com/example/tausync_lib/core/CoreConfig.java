@@ -38,12 +38,6 @@ public final class CoreConfig {
     /** Delay between TCP connection retries in client mode. */
     public static final int CLIENT_CONNECT_RETRY_DELAY_SECONDS = 2;
 
-    /**
-     * Grace period (ms) before a released ID is eligible for reuse.
-     * Prevents stale FIN frames from corrupting new handlers.
-     */
-    public static final int ID_RECYCLE_DELAY_MS = 2000;
-
     /** Max queued REQs per word before the service is registered. */
     public static final int MAX_PENDING_DISCOVERY_PER_WORD = 64;
 
@@ -52,4 +46,11 @@ public final class CoreConfig {
 
     /** Maximum valid local ID (3-byte uint24). */
     public static final int MAX_ID = 0xFFFFFF;
+
+    /**
+     * Maximum accepted payload size per frame (16 MB). A peer can advertise any 32-bit
+     * payload length in the header; without this cap a crafted header could trigger a
+     * multi-gigabyte allocation and OOM the receiver.
+     */
+    public static final int MAX_PAYLOAD_SIZE = 16 * 1024 * 1024;
 }

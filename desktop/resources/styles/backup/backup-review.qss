@@ -60,53 +60,42 @@ QFrame#BackupDivider {
     border: none;
 }
 
-/* ── Scroll area ──────────────────────────────────────────────────────────── */
+/* ── File list (QListView replaces old QScrollArea + QFrame rows) ─────────── */
 
-QScrollArea#FileScrollArea,
-QWidget#ScrollContent {
+QListView#FileListView {
     background-color: {{BACKGROUND}};
     border: none;
+    outline: none;
+    padding: 8px 0px;
 }
 
-/* ── File rows ────────────────────────────────────────────────────────────── */
-
-QFrame#BackupFileRow {
-    background-color: {{ROW_BG}};
-    border: 1px solid {{ROW_BORDER}};
-    border-radius: 8px;
-}
-
-QFrame#BackupFileRow:hover {
-    background-color: {{ROW_HOVER}};
-}
-
-/* Green tint — user chose "keep" */
-QFrame#BackupFileRow[decision="keep"] {
-    background-color: {{KEEP_BG}};
-    border: 1px solid {{KEEP_BORDER}};
-}
-
-/* Red tint — user chose "delete" */
-QFrame#BackupFileRow[decision="delete"] {
-    background-color: {{DELETE_BG}};
-    border: 1px solid {{DELETE_BORDER}};
-}
-
-/* Thumbnail — actual image pixmap with rounded corners applied in Python */
-QLabel#FileThumb {
+QListView#FileListView::item {
     background: transparent;
     border: none;
+    padding: 0px;
 }
 
-/* Fallback shown when the image file cannot be read */
-QLabel#FileThumbFallback {
-    background-color: {{ICON_BG}};
-    border: 1px solid {{ICON_BORDER}};
-    border-radius: 8px;
-    color: {{ICON_TEXT}};
-    font-size: 8px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
+QListView#FileListView::item:selected {
+    background: transparent;
+}
+
+/* Scrollbar */
+QListView#FileListView QScrollBar:vertical {
+    background: {{BACKGROUND}};
+    width: 6px;
+    margin: 0;
+    border-radius: 3px;
+}
+
+QListView#FileListView QScrollBar::handle:vertical {
+    background: {{BORDER}};
+    border-radius: 3px;
+    min-height: 24px;
+}
+
+QListView#FileListView QScrollBar::add-line:vertical,
+QListView#FileListView QScrollBar::sub-line:vertical {
+    height: 0;
 }
 
 /* Zero-state when no images are passed to the dialog */
@@ -116,59 +105,9 @@ QLabel#EmptyLabel {
     background: transparent;
 }
 
-QLabel#FileName {
-    color: {{TEXT_PRIMARY}};
-    font-size: 13px;
-    font-weight: 600;
-    background: transparent;
+QWidget#ScrollContent {
+    background-color: {{BACKGROUND}};
 }
-
-QLabel#FileMeta {
-    color: {{TEXT_SECONDARY}};
-    font-size: 11px;
-    background: transparent;
-}
-
-/* ── Keep / Delete action buttons ─────────────────────────────────────────── */
-
-QPushButton#KeepButton,
-QPushButton#DeleteButton {
-    background-color: transparent;
-    border: 1px solid {{ROW_BORDER}};
-    border-radius: 6px;
-    color: {{TEXT_SECONDARY}};
-    font-size: 12px;
-    font-weight: 500;
-    outline: none;
-}
-
-QPushButton#KeepButton:hover {
-    border-color: {{KEEP_BORDER}};
-    color: {{KEEP_TEXT}};
-}
-
-QPushButton#DeleteButton:hover {
-    border-color: {{DELETE_BORDER}};
-    color: {{DELETE_TEXT}};
-}
-
-/* Active (selected) states */
-QPushButton#KeepButton[active=true] {
-    background-color: {{KEEP_BG}};
-    border-color: {{KEEP_BORDER}};
-    color: {{KEEP_TEXT}};
-    font-weight: 600;
-}
-
-QPushButton#DeleteButton[active=true] {
-    background-color: {{DELETE_BG}};
-    border-color: {{DELETE_BORDER}};
-    color: {{DELETE_TEXT}};
-    font-weight: 600;
-}
-
-QPushButton#KeepButton:pressed   { background-color: {{KEEP_BG}}; }
-QPushButton#DeleteButton:pressed { background-color: {{DELETE_BG}}; }
 
 /* ── Footer ───────────────────────────────────────────────────────────────── */
 
@@ -229,4 +168,30 @@ QPushButton#ApplyButton:pressed {
         stop:0 #0891b2,
         stop:1 #0891b2
     );
+}
+
+QPushButton#ApplyButton:disabled {
+    background: {{BORDER}};
+    color: {{TEXT_SECONDARY}};
+}
+
+/* Keep All — secondary outlined action using keep-green tokens */
+QPushButton#KeepAllButton {
+    background-color: transparent;
+    border: 1px solid {{KEEP_BORDER}};
+    border-radius: 8px;
+    color: {{KEEP_TEXT}};
+    font-size: 13px;
+    font-weight: 500;
+    padding: 0px 14px;
+    outline: none;
+}
+
+QPushButton#KeepAllButton:hover {
+    background-color: {{KEEP_BG}};
+}
+
+QPushButton#KeepAllButton:pressed {
+    background-color: {{KEEP_BG}};
+    border-color: {{KEEP_TEXT}};
 }

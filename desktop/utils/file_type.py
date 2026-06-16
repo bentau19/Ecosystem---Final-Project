@@ -1,11 +1,8 @@
-"""File-type classification helpers.
-
-Pure Python — no Qt dependency — so these can be safely imported from any
-layer (services, viewmodels, views) without creating cross-layer violations.
-"""
 from __future__ import annotations
 
 # ── Extension sets ─────────────────────────────────────────────────────────────
+# Pure Python — no Qt dependency — so these can be safely imported from any
+# layer (services, viewmodels, views) without creating cross-layer violations.
 
 IMAGE_EXTS: frozenset[str] = frozenset({
     "jpg", "jpeg", "png", "gif", "bmp", "webp",
@@ -45,6 +42,9 @@ def is_image(name: str) -> bool:
 
     Args:
         name: Filename to test.
+
+    Returns:
+        ``True`` if the extension of *name* is in :data:`IMAGE_EXTS`.
     """
     return file_ext(name) in IMAGE_EXTS
 

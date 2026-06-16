@@ -25,7 +25,6 @@ All protocol-level constants live in one place (`CoreConfig` on C#). Both platfo
 | `HandshakeTimeoutSeconds`        | `30`         | Max time to wait for a handshake OK before timing out.                                   |
 | `DefaultPort`                    | `8888`       | TCP port used by `SocketTransport`.                                                      |
 | `ClientConnectRetryDelaySeconds` | `2`          | Delay between TCP connection retries (client mode).                                      |
-| `IdRecycleDelayMs`               | `2000`       | Grace period before a released ID is eligible for reuse (prevents stale-FIN corruption). |
 | `MaxPendingDiscoveryPerWord`     | `64`         | Max queued REQs per word before the service is registered.                               |
 
 ### Valid ID Range
@@ -110,7 +109,7 @@ Discovery and handshake use JSON payloads inside **control frames** (TargetID=0,
   "MagicBytes": 1413567827,
   "SenderID":   "<int>",
   "Type":       "<string>",
-  "Status":     "REQ" | "OK" | "REJECT"
+  "Status":     "REQ" | "OK" | "REJECT" | "CANCEL"
 }
 ```
 
@@ -119,15 +118,15 @@ Discovery and handshake use JSON payloads inside **control frames** (TargetID=0,
 | `MagicBytes` | `uint32` | Must be `0x54415553` (decimal `1413567827`). Protocol identity check.                                                              |
 | `SenderID`   | `int`    | The **local ID of the sender** — the ID the peer should target when sending frames back. Range: 1..0xFFFFFF.                       |
 | `Type`       | `string` | The **Meeting Word** (e.g. `"CLIPBOARD"`, `"FILE"`, `"main"`). Case-insensitive matching. Required for `REQ`, echoed back in `OK`. |
-| `Status`     | `string` | `"REQ"` = initiate, `"OK"` = accept, `"REJECT"` = deny.                                                                            |
+| `Status`     | `string` | `"REQ"` = initiate, `"OK"` = accept, `"REJECT"` = deny, `"CANCEL"` = retract an abandoned REQ (see §7.8).                          |
 
 ### 3.1 Validation Rules
 
 A `TransferRequest` is valid when:
 1. `MagicBytes == 0x54415553`
 2. `SenderID` is in range `[0, 0xFFFFFF]`
-3. `Status` is one of `REQ`, `OK`, `REJECT` (case-insensitive after trim)
-4. If `Status == "REQ"`, then `Type` must be non-empty
+3. `Status` is one of `REQ`, `OK`, `REJECT`, `CANCEL` (case-insensitive after trim)
+4. If `Status == "REQ"` or `Status == "CANCEL"`, then `Type` must be non-empty; for `CANCEL`, `SenderID` must equal the `SenderID` of the REQ being retracted
 
 ---
 
@@ -155,7 +154,7 @@ A `TransferRequest` is valid when:
 ┌──────────────────▼──────────────────────────────────────┐
 │              ConnectionContext (Singleton)                │
 │                                                         │
-│  - ID management (reserve / release / recycle)          │
+│  - ID management (reserve / release — never reused)     │
 │  - _routingMap: localId → handler(payload, flags)       │
 │  - _targetMap:  localId → peerId                        │
 │  - _serviceRegistry: word → callback                    │
@@ -243,21 +242,21 @@ Defined for future AES-GCM payload encryption. Currently implemented (`SecureCha
 | `_targetMap`              | `ConcurrentDictionary<int, int>`                        | localId → peerId             | Outgoing: when writing via `localId`, the TPack header uses `peerId` as TargetID.              |
 | `_serviceRegistry`        | `ConcurrentDictionary<string, Action<int,int,Stream>>`  | word → callback              | Registered listeners for Meeting Words. Case-insensitive.                                      |
 | `_pendingDiscoveryByWord` | `ConcurrentDictionary<string, ConcurrentQueue<byte[]>>` | word → queue of REQ payloads | Buffers REQ frames that arrive before the service is registered. Drained on `RegisterService`. |
-| `_releasedIds`            | `ConcurrentDictionary<int, byte>`                       | id → 0                       | Pool of IDs available for reuse (set semantics, idempotent add).                               |
 | `_nextCorrelationId`      | `int` (atomic)                                          | —                            | Monotonically incrementing ID counter. Starts at 1.                                            |
 
 ### 6.2 ID Management
 
 **ReserveId():**
-1. Try to take a recycled ID from `_releasedIds` (iterate keys, `TryRemove` first match).
-2. If none available, atomically increment `_nextCorrelationId`.
-3. If counter exceeds `MaxId` (0xFFFFFF), wrap to `MinId` (1).
+1. Atomically increment `_nextCorrelationId`.
+2. If counter exceeds `MaxId` (0xFFFFFF), wrap to `MinId` (1).
+
+IDs are **never reused** within a session. The 24-bit space (16.7M IDs) cannot realistically be exhausted in one session, and the counter is reset on every reconnect (`Reset()`).
 
 **ReleaseId(id):**
 1. Remove from `_routingMap` and `_targetMap` immediately.
-2. Schedule `RecycleIdAfterDelayAsync(id)` — after `IdRecycleDelayMs` (2 seconds), add to `_releasedIds`.
-3. The delay prevents a stale FIN frame (still in-flight from the peer) from corrupting a new handler registered with the same recycled ID.
-4. `_releasedIds[id] = 0` is idempotent — safe if `ReleaseId` is called multiple times for the same ID (e.g., from both FIN dispatch and `CompleteStream`).
+2. The ID itself is **not** returned to any free pool. Safe to call multiple times for the same ID (e.g., from both FIN dispatch and `CompleteStream`) — subsequent calls are no-ops.
+
+> **History:** earlier versions recycled released IDs after a 2-second grace period (`IdRecycleDelayMs`). This was removed: a double release (FIN-dispatch + `CompleteStream`) scheduled two independent recycle timers, and the second timer could re-pool an ID **after** a new channel had already re-reserved it — two live channels then shared one ID, and the first FIN destroyed the survivor's route (`"No peer route for localId N"`). A peer FIN delayed behind bulk transfer data could also outlive the grace period and tear down the recycled ID's new channel. Monotonic IDs eliminate both failure modes: late frames for closed channels hit an unmapped ID and are dropped.
 
 ### 6.3 Frame Dispatch
 
@@ -358,12 +357,98 @@ Since there is always exactly one TCP client and one TCP server, they always pic
 
 #### Cleanup of the Losing Path
 
-- **When own path wins** (TCP client): The peer-path `DuplexStream` sits in the word channel, unconsumed. Its handler remains in `_routingMap` but nobody sends to it (the peer writes to our outgoing localId, not our incoming localId). Minor resource leak, no data corruption.
+- **When own path wins** (TCP client): The peer-path `DuplexStream` sits in the word channel, unconsumed. Its handler remains in `_routingMap` but nobody sends to it (the peer writes to our outgoing localId, not our incoming localId). Minor resource leak, no data corruption. After resolution, `Connect`'s cleanup completes the per-word channel writer so the losing peer-path read terminates instead of leaking a pending task, and removes the word entry from the per-word map so a stale stream is never handed to a later `Connect(word)` call.
 - **When peer path wins** (TCP server): `CleanupLosingOutgoingAttempt` is called — releases the outgoing `localId`, unregisters its handler, and disposes its `BackBufferedStream`.
+- **When both paths fail** (e.g. double timeout): `CleanupLosingOutgoingAttempt` must still run before the exception propagates, otherwise the outgoing attempt's handler stays in `_routingMap` and its `BackBufferedStream` leaks for the session.
 
 ### 7.4 Handshake Timeout
 
-A `CancellationTokenSource` with `HandshakeTimeoutSeconds` is created at the start of race resolution. On expiry, it sets an exception on the outgoing attempt's `TaskCompletionSource`, which causes the await to throw, falling through to the fallback path or propagating the timeout.
+Both race paths share a **single wall-clock budget** of `HandshakeTimeoutSeconds` (or the caller's override), armed at the start of race resolution:
+
+- **C#**: one `CancellationTokenSource` covers both the outgoing attempt's `TaskCompletionSource` and the peer-path channel read. On expiry, both awaits throw `TimeoutException`.
+- **Java**: `orTimeout` is applied to the own path **at race start** (not lazily in the fallback branch) and the peer path polls against a deadline computed at race start. The fallback path therefore expires at the same wall-clock deadline as the preferred path — total time is ~`timeoutSec`, never `2 × timeoutSec`.
+
+The losing path's failure falls through to the fallback path; if both fail, the timeout propagates to the caller after the outgoing attempt is cleaned up.
+
+### 7.5 Transport Connect Timeout
+
+`ConnectTransport(targetId, timeoutSeconds)` accepts an optional timeout on **both platforms**:
+
+- `timeoutSeconds = null` → wait/retry **forever** (legacy behaviour).
+- Client mode: the retry loop (2 s delay between attempts) stops at the deadline, and each individual TCP connect attempt is bounded by the remaining budget. Expiry surfaces as `TimeoutException`.
+- Server mode: the accept wait is bounded (`CancellationTokenSource` in C#, `ServerSocket.setSoTimeout` in Java). Expiry surfaces as `TimeoutException` and the listener is torn down so a subsequent connect attempt starts clean.
+
+### 7.6 Concurrent Same-Word Guard
+
+Only **one `Connect(word)` may be in flight per word per side** at any time. The per-word
+state (single `_serviceRegistry[word]` callback slot, one word channel, the cleanup in
+`Connect`'s finally block) assumes exactly one outstanding handshake — a second concurrent
+call would clobber the listener and orphan one of the paired streams on the peer side
+(silent hang, no error).
+
+Both implementations therefore track in-flight words (C# `_inFlightWords`
+`ConcurrentDictionary`, Java `inFlightWords` concurrent set, keyed by the trimmed word) and
+**fail fast** on a duplicate:
+
+- **C#**: `Connect(word)` throws `InvalidOperationException` ("Connect already in progress for word '...'").
+- **Java**: `connect(word)` throws `IllegalStateException` with the same message.
+
+The guard is released after the handshake resolves (success **or** failure), strictly after
+the rest of the per-word cleanup, so **sequential reuse of the same word remains fully
+supported**. Callers needing parallel streams must use distinct words or await each
+`Connect` before starting the next.
+
+### 7.7 Stream Abort on Transport Death
+
+`Read` on a channel stream has no timeout by design — but it **must observe transport death**. When the transport disconnects (receive-loop exit or explicit `Disconnect`), the implementation calls `ConnectionContext.AbortAllChannels()`, which delivers a synthetic FIN to every handler in `_routingMap`. Each handler completes its backing `BackBufferedStream`, so blocked readers return EOF instead of hanging forever waiting for a FIN that will never arrive (e.g. the peer left Wi-Fi mid-transfer).
+
+### 7.8 Handshake Cancellation (CANCEL)
+
+The symmetric handshake sends one REQ from **each** side, but pairing consumes only one.
+Whenever a `Connect(word)` resolves **without** its own REQ being used, that REQ lives on
+at the peer with no owner:
+
+- **Connect succeeded via the peer path** (the TCP-server normal case): the winning stream
+  came from the *peer's* REQ; our own REQ is abandoned.
+- **Connect failed** (handshake timeout / double timeout): cleanup is local-only; the REQ
+  already delivered to the peer is abandoned.
+
+Because no timer is ever attached to a sent REQ (the sender's connect already resolved) and
+queued REQs have no TTL on the receiver, an abandoned REQ previously leaked for the rest of
+the session: with one-shot (never-reused) meeting words it was re-reported by
+`GetPeerWaitingWords()` on every poll tick, and if the receiver had already handshaken it,
+the resulting incoming channel sat as an orphan stream forever.
+
+**Rule:** whenever an outgoing REQ ends up unused, the side that abandoned it sends a
+best-effort cancellation on the discovery channel:
+
+```json
+{ "MagicBytes": 1413567827, "SenderID": <the abandoned REQ's SenderID>, "Type": "<word>", "Status": "CANCEL" }
+```
+
+Sent from `CleanupLosingOutgoingAttempt` (all call sites: peer-path win, preferred-path
+failure fallback, both-paths failure), guarded so it fires **exactly once per attempt**.
+Not sent on `REJECT` (the peer consumed the REQ to reject it). Fire-and-forget: send
+failures are swallowed.
+
+**Receiver behaviour** (`HandleDiscoveryCancel`), idempotent, no reply:
+
+1. **REQ still queued** — remove exactly the entry in `_pendingDiscoveryByWord[word]` whose
+   parsed `SenderID` matches; drop the word key when its queue empties. Other queued REQs
+   for the same word are untouched.
+2. **REQ already handshaken** — the incoming channel created from that REQ is the unique
+   entry whose `_targetMap[localId]` equals the cancelled `SenderID` (peer outgoing-attempt
+   ids and peer incoming ids are distinct values of the peer's monotonic counter, so the
+   reverse lookup can never hit a live winning channel). Deliver a synthetic FIN to its
+   handler (the §7.7 abort pattern — blocked readers get EOF immediately) and release the
+   local id.
+
+**Ordering:** REQ and its CANCEL travel on the same TCP stream, so a CANCEL always arrives
+after its own REQ.
+
+**Compatibility:** peers that predate this section validate `Status == "REQ"` on discovery
+frames and silently drop a `CANCEL` — mixed versions degrade gracefully to the old
+(leaking) behaviour without errors.
 
 ---
 
@@ -414,7 +499,7 @@ Both methods throw `InvalidOperationException` if no peer route exists for the g
 2. `DuplexStream.Dispose()` → `ConnectionManager.CompleteStream(localId)`:
    - Look up `peerId` from `_targetMap[localId]`.
    - If found: send `TPack(TargetID=peerId, Payload=empty, Flags=FIN)`.
-   - Call `ReleaseId(localId)` → clears maps, schedules delayed ID recycle.
+   - Call `ReleaseId(localId)` → clears maps (the ID is never reused this session).
 3. Dispose the backing `BackBufferedStream`.
 
 ### 9.2 Receiver Side (FIN Arrival)
@@ -425,14 +510,13 @@ Both methods throw `InvalidOperationException` if no peer route exists for the g
 4. Application's next `Read` returns 0 bytes (EOF).
 5. Application calls `stream.Dispose()` → `CompleteStream`:
    - `_targetMap` already cleared → `peerId` is null → FIN not sent again (no double-FIN).
-   - `ReleaseId` called again (idempotent — delayed recycle uses `ConcurrentDictionary`, duplicate add is harmless).
+   - `ReleaseId` called again (idempotent — map removals are no-ops the second time).
 
-### 9.3 ID Recycling Safety
+### 9.3 Stale-Frame Safety (No ID Reuse)
 
-Released IDs are **not** immediately available for reuse. After `ReleaseId`:
-1. Maps are cleared instantly (no routing to dead handlers).
-2. After `IdRecycleDelayMs` (2 seconds), the ID is added to the recycle pool.
-3. This grace period ensures any in-flight FIN frames from the peer are fully processed before the ID can be claimed by a new `Connect` call, preventing a stale FIN from corrupting a new handler.
+Released IDs are **never** reused within a session:
+1. Maps are cleared instantly on `ReleaseId` (no routing to dead handlers).
+2. Any frame that arrives late for a closed channel — including a peer FIN delayed behind bulk transfer data — targets an ID with no `_routingMap` entry, so `Dispatch` returns false and the frame is dropped harmlessly. It can never be misrouted to a newer channel.
 
 ---
 
@@ -505,13 +589,13 @@ Peer A (TCP Client)                          Peer B (TCP Server)
 ──── Teardown ───────────────────────────────────────────────────────
 9. A: stream.Dispose() → CompleteStream(1)
    Send TPack(TargetID=2, Flags=FIN)
-   ReleaseId(1) → maps cleared, ID recycle in 2s
+   ReleaseId(1) → maps cleared (ID 1 never reused this session)
 
 10. B: receives FIN at ID 2
     backStream_2.Complete() → B reads EOF
     B: stream.Dispose() → CompleteStream(2)
     _targetMap[2] already cleared → no FIN sent back
-    ReleaseId(2) → maps cleared, ID recycle in 2s
+    ReleaseId(2) → maps cleared (ID 2 never reused this session)
 ```
 
 ---
@@ -522,7 +606,6 @@ Peer A (TCP Client)                          Peer B (TCP Server)
 |:------------------------------------------------|:---------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `_routingMap`, `_targetMap`, `_serviceRegistry` | `ConcurrentDictionary` — lock-free reads, fine-grained locking on writes.                                                                                      |
 | `_nextCorrelationId`                            | `Interlocked.Increment` — atomic.                                                                                                                              |
-| `_releasedIds`                                  | `ConcurrentDictionary<int,byte>` — set semantics, idempotent add.                                                                                              |
 | TCP send                                        | `SemaphoreSlim(1,1)` in `SocketTransport` — serializes frame writes.                                                                                           |
 | Receive loop                                    | Single background `Task` reads frames sequentially.                                                                                                            |
 | Service callbacks                               | Dispatched on `Task.Run` to avoid blocking the receive loop.                                                                                                   |
@@ -552,9 +635,10 @@ The Java implementation must be **wire-compatible** with the C# side. This means
 - [ ] **Frame reassembly**: Read 8-byte header, then PayloadLength bytes.
 - [ ] **Dispatch by TargetID**: 0 → discovery, >0 → handler lookup.
 - [ ] **Symmetric Connect(word)**: RegisterService + send REQ + race resolution.
+- [ ] **Concurrent same-word guard**: Reject a second in-flight `Connect(word)` for the same word with an immediate exception (§7.6); release the guard after the per-word cleanup so sequential reuse works.
 - [ ] **Race resolution tiebreaker**: TCP server prefers peer path, TCP client prefers own path.
 - [ ] **Pending discovery queue**: Buffer REQs when service not yet registered.
-- [ ] **ID recycling with grace period**: Don't reuse an ID for at least 2 seconds after release.
+- [ ] **No ID reuse**: Channel IDs are strictly monotonic within a session; released IDs are never recycled (counter resets on reconnect).
 - [ ] **FIN handling**: On receive → complete stream + cleanup. On send → empty payload + FIN flag.
 - [ ] **BackBufferedStream equivalent**: Producer/consumer buffer that bridges packets to stream reads. Return partial data immediately (don't block waiting to fill the entire read buffer).
 - [ ] **Send lock**: Serialize TCP writes to prevent frame interleaving.
@@ -576,9 +660,11 @@ In simultaneous connect, each side creates two local IDs (outgoing attempt + inc
 
 If both sides choose "own path", the peer writes to the incoming ID's `BackBufferedStream`, but the app reads from the outgoing ID's `BackBufferedStream` — data goes to the wrong buffer. The transport-role tiebreaker guarantees complementary choices without any extra protocol messages.
 
-### 13.2 Why Delayed ID Recycling?
+### 13.2 Why No ID Reuse?
 
-When Side A disposes a stream (localId=1) and immediately starts a new `Connect` that recycles localId=1, Side B might still have an in-flight FIN targeting localId=1 from the old stream. If this FIN arrives after the new handler is registered for localId=1, it would destroy the new handler and break the new connection. The 2-second grace period ensures all in-flight frames are processed before the ID becomes available.
+When Side A disposes a stream (localId=1) and a later `Connect` reuses localId=1, Side B might still have an in-flight FIN targeting localId=1 from the old stream. If that FIN arrives after the new handler is registered for localId=1, it destroys the new handler and breaks the new connection.
+
+Earlier versions tried a 2-second recycle grace period, but it had two fatal flaws under high channel churn (e.g., hundreds of file slots): (1) a double release — FIN-dispatch plus `CompleteStream` — scheduled two independent recycle timers, and the second timer re-pooled the ID *after* a new channel had re-reserved it, letting two live channels share one ID; (2) a peer FIN serialized behind megabytes of bulk data could arrive later than any fixed grace period. Strictly monotonic IDs (24-bit space, reset per session) eliminate the entire class of bugs: late frames target unmapped IDs and are dropped.
 
 ### 13.3 BackBufferedStream Partial-Read Semantics
 

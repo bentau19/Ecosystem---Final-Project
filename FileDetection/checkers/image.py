@@ -1,43 +1,45 @@
-"""
-Structural corruption checker for image files.
-
-Uses Pillow to fully decode the image into memory. Any format-level error —
-truncated data, invalid headers, broken chunk structure — will raise an
-exception that is caught and reported as corruption.
-"""
-
+import threading
 from pathlib import Path
 
 from PIL import Image, ImageFile, UnidentifiedImageError
 
+# Serialises concurrent callers so that the save-mutate-restore sequence on
+# the module-level ImageFile.LOAD_TRUNCATED_IMAGES global is atomic. Without
+# this, thread A's finally-block restore could overwrite thread B's intended
+# setting while B is mid-decode.
+_image_check_lock: threading.Lock = threading.Lock()
+
 
 def check_image(file_path: Path) -> bool:
-    """
-    Returns True if the image file is structurally corrupt.
+    """Check whether an image file is structurally corrupt.
 
-    Forces a full pixel-level decode via ``img.load()``, which catches:
+    Uses Pillow to fully decode the image into memory via ``img.load()``,
+    which catches:
+
     - Truncated files (data ends before the image is complete)
     - Invalid or unrecognized format headers
     - Broken chunk/segment structure (e.g. bad JPEG markers, bad PNG CRCs)
 
-    ``LOAD_TRUNCATED_IMAGES`` is explicitly set to False so that Pillow raises
-    on truncation instead of silently padding with gray pixels.
+    Any format-level error during decode is caught and reported as
+    corruption.
 
     Args:
         file_path: Path to the image file to inspect.
 
     Returns:
-        True  → image is corrupt (Pillow raised during decode).
-        False → image decoded successfully.
+        True if the image is corrupt (Pillow raised during decode), False if
+        it decoded successfully.
     """
-    original_truncated_setting: bool = ImageFile.LOAD_TRUNCATED_IMAGES
-    ImageFile.LOAD_TRUNCATED_IMAGES = False
-
-    try:
-        with Image.open(file_path) as img:
-            img.load()
-        return False
-    except (UnidentifiedImageError, OSError, SyntaxError):
-        return True
-    finally:
-        ImageFile.LOAD_TRUNCATED_IMAGES = original_truncated_setting
+    with _image_check_lock:
+        # Disable truncated-image tolerance so Pillow raises on truncation
+        # instead of silently padding with gray pixels.
+        original: bool = ImageFile.LOAD_TRUNCATED_IMAGES
+        ImageFile.LOAD_TRUNCATED_IMAGES = False
+        try:
+            with Image.open(file_path) as img:
+                img.load()
+            return False
+        except (UnidentifiedImageError, OSError, SyntaxError):
+            return True
+        finally:
+            ImageFile.LOAD_TRUNCATED_IMAGES = original

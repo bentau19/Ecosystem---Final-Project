@@ -1,16 +1,17 @@
-"""
-Phone request service.
-
-Dispatches incoming TauSync channel requests to registered operation
-handlers on a background thread.
-"""
+import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from time import sleep
 from typing import Callable
 
-from services.connectivity import ConnectivityService
+from domain.enums.backup_channels import BackupChannels
 from domain.enums.file_transfer_channels import FileTransferChannels
 from domain.enums.session_channels import SessionChannels
+from services.backup import BackupService
+from services.connectivity import ConnectivityService
+from services.file_transfer import FileTransferService
+
+logger = logging.getLogger(__name__)
 
 
 class PhoneRequestService:
@@ -25,7 +26,12 @@ class PhoneRequestService:
             callers before :meth:`start` is invoked.
     """
 
-    def __init__(self, connectivity_service: ConnectivityService, file_transfer_service) -> None:
+    def __init__(
+            self,
+            connectivity_service: ConnectivityService,
+            file_transfer_service: FileTransferService,
+            backup_service: BackupService,
+    ) -> None:
         """Initialize the service with the shared connectivity service.
 
         Args:
@@ -33,15 +39,23 @@ class PhoneRequestService:
                 :class:`~services.connectivity.ConnectivityService` instance.
                 ``connectivity_service.tau`` is read at call-time so reconnects
                 are handled transparently.
+            file_transfer_service: The application's shared
+                :class:`~services.file_transfer.FileTransferService` instance,
+                whose :meth:`~services.file_transfer.FileTransferService.receive_metadata`
+                is registered as the handler for incoming file-transfer requests.
+            backup_service: The application's shared
+                :class:`~services.backup.BackupService` instance, whose
+                :meth:`~services.backup.BackupService.receive_manifest` is
+                registered as the handler for incoming backup manifest requests.
         """
         self._connectivity: ConnectivityService = connectivity_service
-        self._threads: list[threading.Thread] = []
+        self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
         self._is_running: threading.Event = threading.Event()
         self._lifecycle_lock: threading.Lock = threading.Lock()
-        self._threads_lock: threading.Lock = threading.Lock()
 
         self.operations: dict[str, Callable[[], None]] = {
             FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC.value: file_transfer_service.receive_metadata,
+            BackupChannels.BACKUP_MANIFEST_FROM_ANDROID.value: backup_service.receive_manifest,
             SessionChannels.DISCONNECT_FROM_PHONE.value: self._connectivity.stop,
         }
 
@@ -60,46 +74,32 @@ class PhoneRequestService:
         with self._lifecycle_lock:
             if self._is_running.is_set():
                 return
+            self._executor = ThreadPoolExecutor()
             self._is_running.set()
-            self._spawn(self._listen_to_channels)
+            self._executor.submit(self._listen_to_channels)
 
     def _stop(self) -> None:
-        # Join every worker except the calling thread to avoid a deadlock.
+        # Clear the running flag then wait for all submitted work to finish.
+        # The executor reference is captured inside the lock so a concurrent
+        # _start() (which swaps self._executor) can never have its fresh pool
+        # shut down by this stop.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            pending_threads: list[threading.Thread] = self._get_pending_threads()
-            for t in pending_threads:
-                if t == threading.current_thread():
-                    continue
-                t.join()
+            executor = self._executor
+        executor.shutdown(wait=True, cancel_futures=True)
 
     # ── Private lifecycle ──────────────────────────────────────────────────────
 
-    def _spawn(self, target, *args) -> None:
-        # Reject new spawns during teardown to avoid work after _is_running is cleared.
-        if not self._is_running.is_set():
-            return
-        t = threading.Thread(target=target, args=args, daemon=True)
-        with self._threads_lock:
-            self._threads.append(t)
-        t.start()
-
-    def _get_pending_threads(self) -> list[threading.Thread]:
-        # Snapshot alive threads under the lock so callers can join without holding it.
-        with self._threads_lock:
-            return [t for t in self._threads if t.is_alive()]
-
     def _listen_to_channels(self) -> None:
         # Block until a device is connected, then dispatch each waiting channel to its handler.
-
         while self._is_running.is_set() and not self._connectivity.connected:
             sleep(5)
 
         while self._is_running.is_set():
+            tau = self._connectivity.tau
             try:
-                tau = self._connectivity.tau
                 channels = tau.get_peer_waiting_words()
                 for channel in channels:
                     handler = self.operations.get(channel)
@@ -110,10 +110,14 @@ class PhoneRequestService:
                 # gone away (e.g. Android crash / force-stop).  Trigger the same
                 # teardown path as a graceful phone-initiated disconnect so the UI
                 # navigates back to the login screen automatically.
-                print(
-                    f"[PhoneRequestService] ⚠ Channel poll failed "
-                    f"— peer may have disconnected: {exc}"
-                )
-                self._connectivity.stop()
+                #
+                # Guard against stale pollers: only tear connectivity down when
+                # the transport this loop was polling is still the current one
+                # and this service is still running.  Otherwise a leftover poll
+                # thread from the previous session could stop a freshly
+                # restarted (re-listening) ConnectivityService.
+                if self._is_running.is_set() and tau is self._connectivity.tau:
+                    logger.warning("Channel poll failed — peer may have disconnected: %s", exc)
+                    self._connectivity.stop()
                 break
             sleep(5)

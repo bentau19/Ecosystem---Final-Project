@@ -4,6 +4,8 @@ import android.content.Context;
 import android.net.Uri;
 import android.util.Log;
 
+import java.io.File;
+
 import com.example.android.data.datasource.BackupDataSource;
 import com.example.android.domain.entities.BackupFileEntry;
 
@@ -31,7 +33,20 @@ public class ScanBackupFilesUseCase {
     /** Backup mode constant — backs up every photo and video via MediaStore. */
     public static final String MODE_ALL_MEDIA = "all_media";
 
-    /** Backup mode constant — scans files under a user-selected SAF folder tree. */
+    /**
+     * Backup mode constant — scans files under a user-selected folder.
+     *
+     * <p>Accepts two URI schemes in {@link #execute}:
+     * <ul>
+     *   <li>{@code file://} — returned by {@link
+     *       com.example.android.ui.fragments.FolderPickerFragment}; routed to
+     *       {@link com.example.android.data.datasource.BackupDataSource#scanFolderByPath}
+     *       (File API, no SAF restrictions — Downloads selectable).</li>
+     *   <li>{@code content://} — returned by {@link android.content.Intent#ACTION_OPEN_DOCUMENT_TREE}
+     *       (SAF fallback); routed to
+     *       {@link com.example.android.data.datasource.BackupDataSource#scanFolder}.</li>
+     * </ul>
+     */
     public static final String MODE_FOLDER = "folder";
 
     private final BackupDataSource dataSource;
@@ -65,30 +80,58 @@ public class ScanBackupFilesUseCase {
     public void execute(String mode, Uri folderUri, ScanCallback callback) {
         Log.d(TAG, "execute: mode=" + mode
                 + (folderUri != null ? ", folderUri=" + folderUri : ""));
-
         try {
-            List<BackupFileEntry> files;
-
-            if (MODE_FOLDER.equals(mode)) {
-                if (folderUri == null) {
-                    throw new IllegalArgumentException(
-                            "folderUri must not be null when mode is MODE_FOLDER");
-                }
-                files = dataSource.scanFolder(context, folderUri);
-
-            } else if (MODE_ALL_MEDIA.equals(mode)) {
-                files = dataSource.scanAllMedia(context);
-
-            } else {
-                throw new IllegalArgumentException("Unknown backup mode: " + mode);
-            }
-
+            List<BackupFileEntry> files = scanByMode(mode, folderUri);
             Log.d(TAG, "execute: scan complete — " + files.size() + " files");
             callback.onScanComplete(files);
-
         } catch (Exception e) {
             Log.e(TAG, "execute: scan failed — " + e.getMessage(), e);
             callback.onScanFailed(e);
+        }
+    }
+
+    /**
+     * Dispatches the scan to the appropriate {@link BackupDataSource} method based on
+     * {@code mode} and {@code folderUri}.
+     *
+     * <p>Routing rules:
+     * <ul>
+     *   <li>{@link #MODE_FOLDER} + {@code file://} URI — delegated to
+     *       {@link BackupDataSource#scanFolderByPath(File)} (File API; no SAF
+     *       restrictions — Downloads, root, etc. all work).</li>
+     *   <li>{@link #MODE_FOLDER} + {@code content://} URI — SAF fallback via
+     *       {@link BackupDataSource#scanFolder(android.content.Context, Uri)}.</li>
+     *   <li>{@link #MODE_ALL_MEDIA} — delegated to
+     *       {@link BackupDataSource#scanAllMedia(android.content.Context)}.</li>
+     * </ul>
+     *
+     * @param mode      One of {@link #MODE_ALL_MEDIA} or {@link #MODE_FOLDER}.
+     * @param folderUri Required when {@code mode == MODE_FOLDER}; ignored otherwise.
+     * @return Non-null, possibly empty list of matching files.
+     * @throws IllegalArgumentException if {@code mode} is unrecognised or
+     *                                  {@code folderUri} is {@code null} for folder mode.
+     * @throws Exception                if the underlying DataSource scan fails.
+     */
+    private List<BackupFileEntry> scanByMode(String mode, Uri folderUri) throws Exception {
+        if (MODE_FOLDER.equals(mode)) {
+            if (folderUri == null) {
+                throw new IllegalArgumentException(
+                        "folderUri must not be null when mode is MODE_FOLDER");
+            }
+            if ("file".equals(folderUri.getScheme())) {
+                // file:// URI from the custom FolderPickerFragment — use File API.
+                // This path has no SAF restrictions (Downloads, root, etc. all work).
+                File folder = new File(folderUri.getPath());
+                Log.d(TAG, "scanByMode: MODE_FOLDER via File API — " + folder.getAbsolutePath());
+                return dataSource.scanFolderByPath(folder);
+            } else {
+                // content:// SAF URI from ACTION_OPEN_DOCUMENT_TREE fallback.
+                return dataSource.scanFolder(context, folderUri);
+            }
+        } else if (MODE_ALL_MEDIA.equals(mode)) {
+            return dataSource.scanAllMedia(context);
+        } else {
+            throw new IllegalArgumentException("Unknown backup mode: " + mode);
         }
     }
 }

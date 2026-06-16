@@ -538,7 +538,7 @@ Then:
 
 **4. Run Tests:** Right-click the java/com.example.android (test) folder and select "Run 'All Tests'" to verify the logic.
 
-**5. Build & Run:** Deploy to a physical device or emulator (API 24+).
+**5. Build & Run:** Deploy to a physical device or emulator (API 29+).
 
 
 ## Adding A New PC-Initiated Channel

@@ -23,13 +23,24 @@ public interface IConnectionManager extends AutoCloseable {
     void initialize(ITransport transport);
 
     /**
-     * Establishes the underlying TCP connection.
+     * Establishes the underlying TCP connection with no timeout.
      * Delegates to {@code ConnectionContext.initializeTransports}.
      *
      * @param targetId peer IP for client mode; null/empty for server mode
      * @return future that completes when connected
      */
     CompletableFuture<Void> connectTransport(String targetId);
+
+    /**
+     * Establishes the underlying TCP connection, giving up after the timeout.
+     * Mirrors C# {@code ConnectTransport(targetId, timeoutSeconds)}.
+     *
+     * @param targetId       peer IP for client mode; null/empty for server mode
+     * @param timeoutSeconds max seconds to wait; null = wait forever
+     * @return future that completes when connected, or completes exceptionally with
+     *         {@link java.util.concurrent.TimeoutException} when the timeout elapses
+     */
+    CompletableFuture<Void> connectTransport(String targetId, Integer timeoutSeconds);
 
     /**
      * @return true when the transport has an active connection
@@ -45,6 +56,17 @@ public interface IConnectionManager extends AutoCloseable {
      * @throws IllegalStateException    if transport not connected or manager disposed
      */
     CompletableFuture<TauSyncStream> connect(String word);
+
+    /**
+     * Same as {@link #connect(String)} but uses a caller-supplied handshake timeout
+     * instead of {@code CoreConfig.HANDSHAKE_TIMEOUT_SECONDS}.
+     *
+     * @param word       the Meeting Word
+     * @param timeoutSec seconds to wait for the peer to call {@code connect(word)} before
+     *                   the internal ownPath / peerPath race resolution gives up
+     * @return future containing a bidirectional stream
+     */
+    CompletableFuture<TauSyncStream> connect(String word, int timeoutSec);
 
     /**
      * Sends data over an existing stream channel.

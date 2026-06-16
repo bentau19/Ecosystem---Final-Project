@@ -82,8 +82,8 @@ public class ReceiveFileRepositoryTest {
 
         ReceiveFileRequest stored = repository.getPendingRequest().getValue();
         assertNotNull(stored);
-        assertEquals("document.pdf", stored.getFileName());
-        assertEquals(1_048_576L, stored.getFileSizeBytes());
+        assertEquals("document.pdf", stored.fileName());
+        assertEquals(1_048_576L, stored.fileSizeBytes());
     }
 
     @Test

@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 
 import resources_qrc  # noqa: F401
 from app.app_state import app_state
-from dto.device_info import DeviceInfoDTO
+from domain.dto.device_info import DeviceInfoDTO
 from resources.spacing import Spacing
 from views.widgets.dashboard.dashboard_content import DashboardContent
 from views.widgets.divider import Divider
@@ -84,11 +84,13 @@ class DashboardScreen(QWidget):
         root_layout.addWidget(right_panel)
 
     def _connect_signals(self) -> None:
-        """Wire device ViewModel signals to the loading overlay."""
+        # Wire device ViewModel signals to the loading overlay.
         vm = app_state.device_viewmodel
         # Stop the device-info overlay once fresh data arrives — guarded so a
         # stale queued update cannot kill the "Disconnecting…" overlay.
         vm.device_infos_updated.connect(self._on_device_infos_updated)
+        # Stop the overlay on a channel-read error so the spinner never hangs.
+        vm.device_info_error.connect(self._on_device_info_error)
         # Logout: show overlay and set guard when disconnect starts.
         vm.device_disconnecting.connect(self._on_device_disconnecting)
         # device_disconnected → navigation (Topbar._move_to_login) → hideEvent
@@ -98,19 +100,25 @@ class DashboardScreen(QWidget):
 
     @Slot(object)
     def _on_device_infos_updated(self, infos: list[DeviceInfoDTO]) -> None:
-        """Stop the loading overlay only when not in the middle of a disconnect.
+        # Stop the loading overlay only when not in the middle of a disconnect.
+        # A queued device_infos_updated from the showEvent fetch could arrive
+        # after device_disconnecting starts the logout overlay; the
+        # _is_disconnecting flag blocks that race.
+        if not self._is_disconnecting:
+            self._loading_overlay.stop()
 
-        A queued ``device_infos_updated`` from the ``showEvent`` fetch could
-        arrive after ``device_disconnecting`` starts the logout overlay.  The
-        ``_is_disconnecting`` flag blocks that race.
-        """
-
+    @Slot(str)
+    def _on_device_info_error(self, _error: str) -> None:
+        # Stop the overlay so the user isn't left staring at a spinner.
+        # The error is already logged by DeviceInfoService; the dashboard will
+        # show stale DB data from the previous fetch which is preferable to
+        # an indefinitely spinning overlay.
         if not self._is_disconnecting:
             self._loading_overlay.stop()
 
     @Slot()
     def _on_device_disconnecting(self) -> None:
-        """Activate the logout overlay and arm the disconnect guard."""
+        # Activate the logout overlay and arm the disconnect guard.
         self._is_disconnecting = True
         self._loading_overlay.start("Disconnecting…")
 

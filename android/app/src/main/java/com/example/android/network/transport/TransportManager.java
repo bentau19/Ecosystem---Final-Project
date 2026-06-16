@@ -78,6 +78,21 @@ public interface TransportManager {
     String readFromChannel(String channel) throws Exception;
 
     /**
+     * Same as {@link #readFromChannel(String)} but uses a caller-supplied TauSync connect
+     * timeout instead of the default 30 s.
+     *
+     * <p>Use when the peer may take longer than 30 s to open the same channel — e.g.
+     * a backup result channel where the PC needs time to classify and copy the file
+     * before sending the result.
+     *
+     * @param channel           Channel name (e.g. {@code "backup_file_result_3"})
+     * @param connectTimeoutSec Seconds to wait for the peer to call {@code connect()}
+     * @return UTF-8 string payload written by the peer
+     * @throws Exception if the connect times out or the read fails
+     */
+    String readFromChannel(String channel, int connectTimeoutSec) throws Exception;
+
+    /**
      * Reads raw bytes from a channel.
      * Used for binary data (file contents) where String conversion would corrupt the data.
      *
@@ -111,40 +126,47 @@ public interface TransportManager {
     void streamInputStreamToChannel(String channel, java.io.InputStream inputStream) throws Exception;
 
     /**
-     * Callback used by {@link #serveJsonExchange} to transform a peer's JSON
-     * request into a JSON response — all on the same underlying TauSyncStream.
+     * Same as {@link #streamInputStreamToChannel(String, java.io.InputStream)} but with a
+     * caller-supplied TauSync connect timeout.
+     *
+     * <p>Use for channels where the peer may take longer than the default 30 s to call
+     * {@code connect()} — e.g. backup data slots whose file-size-proportional timeout
+     * can greatly exceed 30 s for large files. The timeout governs only the
+     * <em>meeting handshake</em> (waiting for the peer to open the same channel);
+     * the actual byte-streaming phase is not time-bounded.
+     *
+     * @param channel           Channel name (e.g. {@code "backup_slot_data_3"})
+     * @param inputStream       Source stream (e.g. opened via ContentResolver for a URI)
+     * @param connectTimeoutSec Seconds to wait for the peer to call {@code connect()} on
+     *                          the same channel before throwing
+     * @throws Exception if the connect times out, or the channel write / stream read fails
      */
-    @FunctionalInterface
-    interface JsonExchangeHandler {
-        /**
-         * @param requestJson Raw JSON string written by the peer.
-         * @return JSON string to write back as the response.
-         * @throws Exception if the request cannot be processed.
-         */
-        String respond(String requestJson) throws Exception;
-    }
+    void streamInputStreamToChannel(String channel,
+                                    java.io.InputStream inputStream,
+                                    int connectTimeoutSec) throws Exception;
 
     /**
-     * Serves a single PC-initiated JSON request-response exchange on one TauSyncStream.
+     * Opens a single TauSync channel, writes a UTF-8 metadata string followed by a
+     * newline delimiter ({@code '\n'}), then streams all bytes from {@code inputStream}.
+     * Closes the channel after the stream is exhausted.
      *
-     * <p>Opens the channel, reads the full JSON string sent by the peer, invokes
-     * {@code handler} with that string, writes the handler's return value as the
-     * response, then closes the stream — all within the same TauSync channel ID.
+     * <p>Used by the backup slot protocol so the PC can read the per-file metadata
+     * ({@code file_name}, {@code file_size}, {@code modified_at}) before receiving the
+     * raw file bytes — all in one {@code tauSync.connect()}, avoiding the 2-second
+     * ID-recycling grace period that would occur if metadata and bytes were sent in
+     * two separate channel connections.
      *
-     * <p>This is required for virtual-drive channels where the PC writes a request
-     * and blocks waiting for the response on the <em>same</em> stream.  Using
-     * separate {@link #readFromChannel} / {@link #writeToChannel} calls would open
-     * two independent streams and break the protocol.
+     * <p>The {@code '\n'} delimiter is safe because well-formed JSON never contains a
+     * bare newline character.
      *
-     * <p>Must be called from a background thread — blocks until the exchange
-     * is complete.
-     *
-     * @param channel Meeting word the peer is blocking on.
-     * @param handler Transforms the request JSON into the response JSON.
-     * @throws Exception if the channel cannot be opened, the read fails,
-     *                   the handler throws, or the write fails.
+     * @param channel     Channel name (e.g. {@code "backup_slot_data_0"})
+     * @param metadata    UTF-8 JSON string; must not contain a bare {@code '\n'}
+     * @param inputStream Source of raw file bytes
+     * @throws Exception if the channel connect, metadata write, or byte stream fails
      */
-    void serveJsonExchange(String channel, JsonExchangeHandler handler) throws Exception;
+    void writeMetadataThenStreamToChannel(String channel,
+                                          String metadata,
+                                          java.io.InputStream inputStream) throws Exception;
 
     /**
      * Checks if the transport is currently connected.
