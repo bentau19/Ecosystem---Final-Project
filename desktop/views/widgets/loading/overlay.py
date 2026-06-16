@@ -1,5 +1,3 @@
-"""Full-coverage loading overlay widget with fade-in / fade-out animation."""
-
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, Qt
 from PySide6.QtGui import QColor, QPainter, QPaintEvent
 from PySide6.QtWidgets import (
@@ -26,7 +24,8 @@ _FADE_OUT_MS: int = 200
 
 
 class LoadingOverlay(QWidget):
-    """Semi-transparent overlay that covers its parent while a task is loading.
+    """Semi-transparent overlay with a fade-in / fade-out animation that covers
+    its parent while a task is loading.
 
     The overlay is created as a direct child of *parent* and fills it
     completely.  It installs an event filter on *parent* so it automatically

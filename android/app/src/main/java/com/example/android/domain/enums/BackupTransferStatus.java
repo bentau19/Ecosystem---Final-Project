@@ -7,6 +7,8 @@ package com.example.android.domain.enums;
  * <pre>
  *   IDLE → SENDING → COMPLETED
  *                  ↘ FAILED
+ *                  ↘ STOPPED          (user tapped Stop in notification)
+ *                  ↘ CANCELED_BY_PC   (PC rejected before any file was sent)
  *   (terminal state) → IDLE  via {@code BackupRepository.resetTransfer()}
  * </pre>
  *
@@ -22,9 +24,25 @@ public enum BackupTransferStatus {
     /** Files are currently being sent to the PC one by one. */
     SENDING,
 
+    /** Transfer suspended by the user; can be resumed. */
+    PAUSED,
+
     /** All files sent successfully. */
     COMPLETED,
 
-    /** Transfer failed due to a network error, PC rejection, or I/O error. */
+    /** Transfer was intentionally stopped by the user via the phone notification. */
+    STOPPED,
+
+    /**
+     * PC explicitly rejected the session before any file was sent — the user
+     * dismissed the destination folder-picker dialog on the PC side.
+     *
+     * <p>Distinct from {@link #STOPPED} (user-initiated mid-transfer stop) so that
+     * {@code BackupFragment} can stay on-screen with a Toast instead of navigating
+     * back to {@code ActionsFragment}.
+     */
+    CANCELED_BY_PC,
+
+    /** Transfer failed due to a network error or I/O error. */
     FAILED
 }

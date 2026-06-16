@@ -47,6 +47,7 @@ class Palette(ColorsEnum):
     GREEN_200 = "#00C853"  # Secondary green color
 
     ORANGE_500 = "#FF9800"  # Orange accent color
+    ORANGE_900 = "#2b1500"  # Deep amber tint — skipped/removed row & badge bg
 
     BLUE_700 = "#0369a1"  # Steel blue — device icon container background
 
@@ -265,6 +266,7 @@ class LightPalette(ColorsEnum):
     GREEN_200 = "#00C853"
 
     ORANGE_500 = "#FF9800"
+    ORANGE_900 = "#FFF3E0"  # Light amber tint — skipped/removed row & badge bg
 
     BLUE_700 = "#0369a1"
 
@@ -499,6 +501,61 @@ class LightBackupReviewColors(ColorsEnum):
     ICON_TEXT     = Palette.CYAN_400        # FileThumbFallback text + Apply button (accent-invariant)
 
 
+# ── Backup Classification Review colors ────────────────────────────────────────
+
+class BackupClassificationReviewColors(ColorsEnum):
+    """Component-scoped color tokens for the single-file confidence review
+    dialog (dark mode).
+
+    Token names match the ``{{PLACEHOLDER}}`` keys used in
+    ``resources/styles/backup/backup-confidence-review.qss``.
+    """
+
+    BACKGROUND     = Palette.DARK_900   # Dialog body surface
+    BORDER         = Palette.GRAY_700   # Dialog border + dividers
+    TEXT_PRIMARY   = Palette.SLATE_100  # Heading / filename text
+    TEXT_SECONDARY = Palette.SLATE_500  # Subtitle / meta text
+    KEEP_BG        = Palette.GREEN_900  # Keep button active background
+    KEEP_BORDER    = Palette.GREEN_400  # Keep button border (default + active)
+    KEEP_TEXT      = Palette.GREEN_400  # Keep button text
+    REMOVE_BG      = Palette.PINK_900   # Remove button active background
+    REMOVE_BORDER  = Palette.PINK_500   # Remove button border (default + active)
+    REMOVE_TEXT    = Palette.PINK_500   # Remove button text
+    ICON_BG        = Palette.CYAN_900   # Thumbnail-fallback circle background
+    ICON_BORDER    = Palette.CYAN_800   # Thumbnail-fallback circle border
+    ICON_TEXT      = Palette.CYAN_400   # Thumbnail-fallback text
+    WARNING_TEXT   = Palette.ORANGE_500  # "Needs review" confidence badge text
+    KEEP_ALL_BG     = Palette.TEAL_700   # KeepAll button hover/pressed background
+    KEEP_ALL_BORDER = Palette.TEAL_400   # KeepAll button border
+    KEEP_ALL_TEXT   = Palette.TEAL_400   # KeepAll button text
+
+
+class LightBackupClassificationReviewColors(ColorsEnum):
+    """Light-mode component tokens for the single-file confidence review dialog.
+
+    Mirror of :class:`BackupClassificationReviewColors` — identical member
+    names, light-appropriate values.
+    """
+
+    BACKGROUND     = LightPalette.DARK_900   # Dialog body surface
+    BORDER         = LightPalette.GRAY_700   # Dialog border + dividers
+    TEXT_PRIMARY   = LightPalette.SLATE_100  # Heading / filename text
+    TEXT_SECONDARY = LightPalette.SLATE_500  # Subtitle / meta text
+    KEEP_BG        = LightPalette.GREEN_900  # Keep button active background
+    KEEP_BORDER    = Palette.GREEN_400       # Keep button border (accent-invariant)
+    KEEP_TEXT      = Palette.GREEN_400       # Keep button text (accent-invariant)
+    REMOVE_BG      = LightPalette.PINK_900   # Remove button active background
+    REMOVE_BORDER  = Palette.PINK_500        # Remove button border (accent-invariant)
+    REMOVE_TEXT    = Palette.PINK_500        # Remove button text (accent-invariant)
+    ICON_BG        = LightPalette.CYAN_900   # Thumbnail-fallback circle background
+    ICON_BORDER    = LightPalette.CYAN_800   # Thumbnail-fallback circle border
+    ICON_TEXT      = Palette.CYAN_400        # Thumbnail-fallback text (accent-invariant)
+    WARNING_TEXT   = Palette.ORANGE_500       # "Needs review" confidence badge text (accent-invariant)
+    KEEP_ALL_BG     = Palette.TEAL_700        # KeepAll button hover/pressed background (accent-invariant)
+    KEEP_ALL_BORDER = Palette.TEAL_400        # KeepAll button border (accent-invariant)
+    KEEP_ALL_TEXT   = Palette.TEAL_400        # KeepAll button text (accent-invariant)
+
+
 # ── Backup Progress colors ─────────────────────────────────────────────────────
 
 class BackupProgressColors(ColorsEnum):
@@ -523,14 +580,16 @@ class BackupProgressColors(ColorsEnum):
     STATUS_QUEUED_TEXT  = Palette.SLATE_600  # "Queued" badge text
     STATUS_ACTIVE_BG    = Palette.CYAN_900   # "Syncing" badge + row background
     STATUS_ACTIVE_TEXT  = Palette.CYAN_400   # "Syncing" badge text + speed label
-    STATUS_DONE_BG      = Palette.GREEN_900  # "Done" badge + row background
-    STATUS_DONE_TEXT    = Palette.GREEN_400  # "Done" badge text + row border
-    STATUS_FAILED_BG    = Palette.PINK_900   # "Failed" badge + row background
-    STATUS_FAILED_TEXT  = Palette.PINK_500   # "Failed" badge text + row border
-    BTN_PAUSE_BORDER    = Palette.GRAY_700   # Pause button border (default)
-    BTN_PAUSE_TEXT      = Palette.SLATE_100  # Pause button text (default)
-    BTN_CANCEL_BORDER   = Palette.PINK_500   # Cancel button border
-    BTN_CANCEL_TEXT     = Palette.PINK_500   # Cancel button text
+    STATUS_DONE_BG      = Palette.GREEN_900   # "Done" badge + row background
+    STATUS_DONE_TEXT    = Palette.GREEN_400   # "Done" badge text + row border
+    STATUS_FAILED_BG    = Palette.PINK_900    # "Failed" badge + row background
+    STATUS_FAILED_TEXT  = Palette.PINK_500    # "Failed" badge text + row border
+    STATUS_SKIPPED_BG   = Palette.ORANGE_900  # "Removed" badge + row background
+    STATUS_SKIPPED_TEXT = Palette.ORANGE_500  # "Removed" badge text + row border
+    BTN_PAUSE_BORDER    = Palette.GRAY_700    # Pause button border (default)
+    BTN_PAUSE_TEXT      = Palette.SLATE_100   # Pause button text (default)
+    BTN_CANCEL_BORDER   = Palette.PINK_500    # Cancel button border
+    BTN_CANCEL_TEXT     = Palette.PINK_500    # Cancel button text
 
 
 class LightBackupProgressColors(ColorsEnum):
@@ -555,11 +614,13 @@ class LightBackupProgressColors(ColorsEnum):
     STATUS_QUEUED_TEXT  = LightPalette.SLATE_600  # "Queued" badge text
     STATUS_ACTIVE_BG    = LightPalette.CYAN_900   # "Syncing" badge + row background
     STATUS_ACTIVE_TEXT  = Palette.CYAN_400        # "Syncing" badge text (invariant)
-    STATUS_DONE_BG      = LightPalette.GREEN_900  # "Done" badge + row background
-    STATUS_DONE_TEXT    = Palette.GREEN_400        # "Done" badge text (invariant)
-    STATUS_FAILED_BG    = LightPalette.PINK_900   # "Failed" badge + row background
-    STATUS_FAILED_TEXT  = Palette.PINK_500        # "Failed" badge text (invariant)
-    BTN_PAUSE_BORDER    = LightPalette.GRAY_700   # Pause button border (default)
-    BTN_PAUSE_TEXT      = LightPalette.SLATE_100  # Pause button text (default)
-    BTN_CANCEL_BORDER   = Palette.PINK_500        # Cancel button border (invariant)
+    STATUS_DONE_BG      = LightPalette.GREEN_900   # "Done" badge + row background
+    STATUS_DONE_TEXT    = Palette.GREEN_400         # "Done" badge text (invariant)
+    STATUS_FAILED_BG    = LightPalette.PINK_900    # "Failed" badge + row background
+    STATUS_FAILED_TEXT  = Palette.PINK_500         # "Failed" badge text (invariant)
+    STATUS_SKIPPED_BG   = LightPalette.ORANGE_900  # "Removed" badge + row background
+    STATUS_SKIPPED_TEXT = Palette.ORANGE_500        # "Removed" badge text (invariant)
+    BTN_PAUSE_BORDER    = LightPalette.GRAY_700    # Pause button border (default)
+    BTN_PAUSE_TEXT      = LightPalette.SLATE_100   # Pause button text (default)
+    BTN_CANCEL_BORDER   = Palette.PINK_500         # Cancel button border (invariant)
     BTN_CANCEL_TEXT     = Palette.PINK_500        # Cancel button text (invariant)

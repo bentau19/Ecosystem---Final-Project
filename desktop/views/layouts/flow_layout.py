@@ -5,17 +5,21 @@ from resources.spacing import Spacing
 
 
 class FlowLayout(QLayout):
-    """
-    A layout that arranges its children in a horizontal flow.
+    """A layout that arranges its children in a left-to-right, top-to-bottom flow.
+
+    Items are wrapped onto a new row once the current row no longer has room
+    for another item of at least :attr:`_min_width`.  The number of columns
+    per row and each item's width are recomputed on every :meth:`setGeometry`
+    call, so the layout adapts as its container is resized.
     """
 
     def __init__(self, min_width: int = 200, parent: QWidget | None = None) -> None:
-        """
-        Initialize the FlowLayout.
+        """Initialize the FlowLayout.
 
         Args:
-            min_width (int): The minimum width of each child widget.
-            parent (Optional[QWidget]): The optional parent widget.
+            min_width: The minimum width of each child widget, used to compute
+                how many columns fit per row.
+            parent: The optional parent widget.
         """
         super().__init__(parent)
 
@@ -27,32 +31,30 @@ class FlowLayout(QLayout):
         self._item_list: list[QLayoutItem] = []
 
     def addItem(self, item: QLayoutItem) -> None:
-        """
-        Add a child item to the layout.
+        """Add a child item to the layout.
 
         Args:
-            item (QLayoutItem): The child item to add.
+            item: The child item to add.
         """
         self._item_list.append(item)
 
     def count(self) -> int:
-        """
-        Return the number of child items in the layout.
+        """Return the number of child items in the layout.
 
         Returns:
-            int: The number of child items.
+            The number of child items.
         """
         return len(self._item_list)
 
     def itemAt(self, index: int) -> QLayoutItem | None:
-        """
-        Return the child item at the specified index.
+        """Return the child item at the specified index.
 
         Args:
-            index (int): The index of the child item.
+            index: The index of the child item.
 
         Returns:
-            QLayoutItem: The child item at the specified index, or None if the index is out of range.
+            The child item at the specified index, or ``None`` if the index
+            is out of range.
         """
         if 0 <= index < len(self._item_list):
             return self._item_list[index]
@@ -60,14 +62,13 @@ class FlowLayout(QLayout):
         return None
 
     def takeAt(self, index: int) -> QLayoutItem | None:
-        """
-        Remove and return the child item at the specified index.
+        """Remove and return the child item at the specified index.
 
         Args:
-            index (int): The index of the child item to remove.
+            index: The index of the child item to remove.
 
         Returns:
-            QLayoutItem: The removed child item, or None if the index is out of range.
+            The removed child item, or ``None`` if the index is out of range.
         """
         if 0 <= index < len(self._item_list):
             return self._item_list.pop(index)
@@ -75,61 +76,56 @@ class FlowLayout(QLayout):
         return None
 
     def expandingDirections(self) -> Qt.Orientation:
-        """
-        Return the directions in which the layout expands.
+        """Return the directions in which the layout expands.
 
         Returns:
-            Qt.Orientation: The directions in which the layout expands.
+            ``Qt.Orientation(0)`` — this layout does not expand in either
+            direction; it wraps items instead.
         """
         return Qt.Orientation(0)
 
     def hasHeightForWidth(self) -> bool:
-        """
-        Return True if the layout provides a height for a given width.
+        """Return whether the layout's height depends on its width.
 
         Returns:
-            bool: True if the layout provides a height for a given width.
+            ``True`` — wrapping means the required height changes with width.
         """
         return True
 
     def heightForWidth(self, width: int) -> int:
-        """
-        Return the height of the layout for the given width.
+        """Return the height required to lay out all items at the given width.
 
         Args:
-            width (int): The width for which to calculate the height.
+            width: The width for which to calculate the height.
 
         Returns:
-            int: The height of the layout for the given width.
+            The height of the layout for the given width.
         """
         height: int = self._do_layout(QRect(0, 0, width, 0), True)
         return height
 
     def setGeometry(self, rect: QRect) -> None:
-        """
-        Set the geometry of the layout.
+        """Position all child items within *rect*.
 
         Args:
-            rect (QRect): The geometry rectangle.
+            rect: The geometry rectangle assigned to this layout.
         """
         super(FlowLayout, self).setGeometry(rect)
         self._do_layout(rect, False)
 
     def sizeHint(self) -> QSize:
-        """
-        Return the size hint of the layout.
+        """Return the preferred size of the layout.
 
         Returns:
-            QSize: The size hint of the layout.
+            The same value as :meth:`minimumSize`.
         """
         return self.minimumSize()
 
     def minimumSize(self) -> QSize:
-        """
-        Return the minimum size of the layout.
+        """Return the minimum size needed to display all child items.
 
         Returns:
-            QSize: The minimum size of the layout.
+            The minimum size of the layout, including content margins.
         """
         # Get the margins of the layout
         margins: QMargins = self.contentsMargins()

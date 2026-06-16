@@ -1,16 +1,3 @@
-"""
-Structural corruption checker for PDF files.
-
-Performs two lightweight checks without loading the full document into memory:
-
-1. Header check  — the file must start with ``%PDF-`` (PDF spec §7.5.2).
-2. EOF check     — the file must contain ``%%EOF`` in its final 1 KB, which
-                   marks the end of the cross-reference table (PDF spec §7.5.5).
-
-These two markers bracket a valid PDF. A file missing either is either not a
-PDF at all, or has had its tail truncated during transfer.
-"""
-
 from pathlib import Path
 
 _PDF_HEADER: bytes = b"%PDF-"
@@ -22,19 +9,24 @@ _EOF_SCAN_SIZE: int = 1024
 
 
 def check_pdf(file_path: Path) -> bool:
-    """
-    Returns True if the PDF file is structurally corrupt.
+    """Check whether a PDF file is structurally corrupt.
 
-    Checks for the mandatory ``%PDF-`` header and the ``%%EOF`` end-of-file
-    marker. Either being absent indicates truncation or a fundamentally
-    broken file structure.
+    Performs two lightweight checks without loading the full document into
+    memory:
+
+    1. Header check — the file must start with ``%PDF-`` (PDF spec §7.5.2).
+    2. EOF check — the file must contain ``%%EOF`` in its final 1 KB, which
+       marks the end of the cross-reference table (PDF spec §7.5.5).
+
+    These two markers bracket a valid PDF. A file missing either is either
+    not a PDF at all, or has had its tail truncated during transfer.
 
     Args:
         file_path: Path to the PDF file to inspect.
 
     Returns:
-        True  → PDF header or EOF marker is missing (file is corrupt).
-        False → both structural markers are present.
+        True if the PDF header or EOF marker is missing (file is corrupt),
+        False if both structural markers are present.
     """
     try:
         with open(file_path, "rb") as f:

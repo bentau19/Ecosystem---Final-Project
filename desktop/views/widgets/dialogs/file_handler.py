@@ -1,10 +1,3 @@
-"""
-File-handler error dialogs for the SyncDose file-send shell extension.
-
-These dialogs run inside a **standalone PyInstaller executable** that has no
-access to the main app's Qt virtual resource filesystem.  QSS is therefore
-loaded from the bundled filesystem via :func:`utils.styles.load_stylesheet_disk`.
-"""
 import sys
 from typing import Final
 
@@ -30,6 +23,11 @@ class _BaseHandlerDialog(QDialog):
 
     Clicking **Try Again** resolves the dialog as :attr:`QDialog.Accepted`.
     Clicking **Dismiss** resolves it as :attr:`QDialog.Rejected`.
+
+    This dialog runs inside a **standalone PyInstaller executable** that has
+    no access to the main app's Qt virtual resource filesystem.  QSS is
+    therefore loaded from the bundled filesystem via
+    :func:`utils.styles.load_stylesheet_disk`.
 
     Args:
         accent: Six-digit hex color string (e.g. ``"#22D3EE"``) applied to
@@ -188,7 +186,11 @@ class PhoneNotDetectedDialog(_BaseHandlerDialog):
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialize with the phone-not-detected copy and cyan accent."""
+        """Initialize with the phone-not-detected copy and cyan accent.
+
+        Args:
+            parent: Optional Qt parent widget.
+        """
         super().__init__(
             accent=HandlerDialogColors.ACCENT,
             icon_char="⊗",
@@ -209,7 +211,11 @@ class TransferErrorDialog(_BaseHandlerDialog):
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialize with the generic-error copy and cyan accent."""
+        """Initialize with the generic-error copy and cyan accent.
+
+        Args:
+            parent: Optional Qt parent widget.
+        """
         super().__init__(
             accent=HandlerDialogColors.ACCENT,
             icon_char="!",

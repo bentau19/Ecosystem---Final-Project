@@ -17,7 +17,7 @@ class PulsingDot(QWidget):
     or ongoing processes. The animation runs continuously with a 2-second cycle.
     """
 
-    opacity = Property(float, lambda self: self._get_opacity(), lambda self, v: self._set_opacity(v))
+    opacity: Property = Property(float, lambda self: self._get_opacity(), lambda self, v: self._set_opacity(v))
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the pulsing dot widget.

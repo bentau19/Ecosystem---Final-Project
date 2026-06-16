@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QFrame
+from PySide6.QtWidgets import QFrame, QWidget
 
 from app.theme_manager import theme_manager
 from resources.colors import Colors, LightColors
@@ -8,22 +8,19 @@ from utils.styles import load_stylesheet, themed
 
 class Divider(QFrame):
     """A horizontal divider line widget for visual separation.
-    
+
     This widget creates a simple 1-pixel high horizontal line that can be used
     to visually separate UI elements. It's styled using QSS and uses the border
     color from the application's color scheme.
-    
-    Args:
-        parent (Optional[QWidget]): Parent widget, defaults to None
     """
 
-    def __init__(self, parent: "QWidget | None" = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the Divider widget.
-        
+
         Sets up the frame shape, dimensions, and applies styling.
-        
+
         Args:
-            parent (Optional[QWidget]): Parent widget, defaults to None
+            parent: Optional parent widget, defaults to ``None``.
         """
         super().__init__(parent)
         self._setup_ui()

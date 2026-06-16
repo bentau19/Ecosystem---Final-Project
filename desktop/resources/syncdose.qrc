@@ -1,6 +1,7 @@
 <RCC>
     <qresource prefix="/icons">
         <file alias="logo.svg">icons/logo.svg</file>
+        <file alias="backup_progress.svg">icons/backup_progress.svg</file>
         <file alias="settings.svg">icons/settings.svg</file>
         <file alias="dashboard.svg">icons/dashboard.svg</file>
         <file alias="battery.svg">icons/battery.svg</file>
@@ -55,6 +56,7 @@
     <qresource prefix="/styles/backup">
         <file alias="backup-review.qss">styles/backup/backup-review.qss</file>
         <file alias="backup-progress.qss">styles/backup/backup-progress.qss</file>
+        <file alias="backup-classification-review.qss">styles/backup/backup-classification-review.qss</file>
     </qresource>
 
 </RCC>

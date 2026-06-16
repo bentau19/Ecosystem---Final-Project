@@ -25,14 +25,14 @@ class BatteryInfo(QFrame):
         and sets the object name for CSS targeting.
 
         Args:
-            battery_percentage (int): Battery percentage (0-100).
-            is_charging (bool): Whether the battery is currently charging.
-            parent (Optional[QWidget]): Parent widget, defaults to None.
+            battery_percentage: Battery percentage (0-100).
+            is_charging: Whether the battery is currently charging.
+            parent: Optional parent widget. Defaults to ``None``.
         """
         super().__init__(parent)
 
-        self._battery_percentage = battery_percentage
-        self._is_charging = is_charging
+        self._battery_percentage: int = battery_percentage
+        self._is_charging: bool = is_charging
 
         self._setup_ui()
         self.setup_style()
@@ -86,7 +86,7 @@ class BatteryInfo(QFrame):
 
     def _create_battery_bar(self) -> Bar:
         # Create the gradient fill bar scaled to current battery percentage.
-        bar = Bar(self._battery_percentage,QColor(BatteryBarColors.GRADIENT_START),QColor (
+        bar = Bar(self._battery_percentage, QColor(BatteryBarColors.GRADIENT_START), QColor(
             BatteryBarColors.GRADIENT_END))
         bar.setObjectName("batteryBar")
         return bar

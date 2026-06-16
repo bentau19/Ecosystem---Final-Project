@@ -1,8 +1,3 @@
-"""
-Device card for the login screen's right panel.
-Shows name, OS/tag meta, status badge, and last-seen time.
-On hover the status column is replaced by a 'Connect →' button.
-"""
 from datetime import datetime, timedelta, date
 
 from PySide6.QtCore import QEvent, QRectF, Qt, Slot
@@ -50,7 +45,8 @@ class PreviousDeviceCard(QWidget):
             device: PreviousDeviceDTO,
             parent: QWidget | None = None,
     ) -> None:
-        """
+        """Initialize the previous-device card and build its content layout.
+
         Args:
             device: Device data to display on this card.
             parent: Optional parent widget.
@@ -80,7 +76,12 @@ class PreviousDeviceCard(QWidget):
 
     @property
     def device(self) -> PreviousDeviceDTO:
-        """The device DTO bound to this card."""
+        """Return the device DTO bound to this card.
+
+        Returns:
+            The :class:`~domain.dto.previous_device.PreviousDeviceDTO` this
+            card was constructed with.
+        """
         return self._device
 
     # ── Setup ──────────────────────────────────────────────────────────────────
@@ -100,7 +101,7 @@ class PreviousDeviceCard(QWidget):
         self._meta_lbl = QLabel(f"{self._device.os}  ·  {self._device.tag}")
         self._meta_lbl.setObjectName("DeviceMeta")
 
-        time:date = self._device.last_connected
+        time: date = self._device.last_connected
         # Classify as 'recent' if last seen within 14 days, otherwise 'idle'
         status = DeviceStatus.RECENT if datetime.now().date() - time < timedelta(days=14) else DeviceStatus.IDLE
         obj_name = _BADGE_CONFIG[status]

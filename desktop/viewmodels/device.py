@@ -51,6 +51,10 @@ class DeviceViewModel(QObject):
     device_disconnecting: Signal = Signal()
     """Emitted immediately when a PC-initiated disconnect begins."""
     device_disconnected: Signal = Signal()
+    device_info_error: Signal = Signal(str)
+    """Emitted when device-info channel reads fail — forwarded from DeviceInfoService.read_error."""
+    connection_error: Signal = Signal(str)
+    """Emitted when the TCP listener crashes — forwarded from ConnectivityService.connection_error."""
 
     _TEN_MINUTES: int = 10 * 60 * 1000
 
@@ -77,9 +81,11 @@ class DeviceViewModel(QObject):
         self._connectivity_service.device_connected.connect(self._on_device_connected)
         self._connectivity_service.device_disconnecting.connect(self.device_disconnecting.emit)
         self._connectivity_service.device_disconnected.connect(self._on_device_disconnected)
+        self._connectivity_service.connection_error.connect(self.connection_error.emit)
         self._device_info_service.device_info_ready.connect(self._on_device_info_ready)
         self._device_info_service.device_fetched.connect(self._on_device_fetched)
         self._device_info_service.all_devices_fetched.connect(self._on_all_devices_fetched)
+        self._device_info_service.read_error.connect(self.device_info_error.emit)
 
         # Start connectivity immediately so it listens before any device connects.
         # DeviceInfoService also starts at launch — its DB read methods
@@ -152,7 +158,7 @@ class DeviceViewModel(QObject):
     def disconnect_device(self) -> None:
         """Disconnect the currently connected device via the connectivity service.
 
-        Delegates to :meth:`~services.connectivity.ConnectivityService.disconnect_device`
+        Delegates to :meth:`~services.connectivity.ConnectivityService.stop`
         which emits ``device_disconnecting`` before any teardown begins.  The
         forwarding wire in ``__init__`` propagates that signal to this
         ViewModel's own ``device_disconnecting`` — no direct emit here to avoid
@@ -204,13 +210,19 @@ class DeviceViewModel(QObject):
 
     @Slot()
     def _on_device_disconnected(self) -> None:
-        # stop() joins any lingering network threads from the previous session.
-        # start() immediately re-enables the service for DB reads — fetch_all_devices
-        # and fetch_device_by_id are needed by the login screen before the next
-        # connection exists. Both calls are async and serialise on _lifecycle_lock,
-        # so the stop-then-start sequence is race-safe.
-        self._device_info_service.stop()
-        self._device_info_service.start()
+        # Only connectivity and device-info restart after a disconnect; every
+        # other service (backup, phone-request, file-transfer) is stopped via
+        # the device_disconnected wiring and starts again on the next connect.
+        #
+        # restart() runs stop-then-start sequentially on one thread, joining
+        # any lingering network threads from the previous session before
+        # re-enabling DB reads (fetch_all_devices / fetch_device_by_id are
+        # needed by the login screen before the next connection exists).
+        #
+        # connectivity.start() is safe here: ConnectivityService emits
+        # device_disconnected only after its own executor is fully drained,
+        # so this restart can never race the previous shutdown.
+        self._device_info_service.restart()
         self._connectivity_service.start()
         self.device_disconnected.emit()
 

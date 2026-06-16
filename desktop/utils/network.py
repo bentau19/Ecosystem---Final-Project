@@ -7,9 +7,8 @@ from tausync_py import TauSync
 def get_ip() -> str:
     """Return the local machine's primary LAN IP address.
 
-    Opens a dummy UDP socket toward a public address to let the OS pick the
-    correct outbound interface, then reads the bound local address.  No
-    packets are actually sent.
+    Resolves the OS-assigned hostname to its IPv4 address via the system's
+    name resolver.
 
     Returns:
         A dotted-decimal IPv4 string (e.g. ``"192.168.1.10"``).

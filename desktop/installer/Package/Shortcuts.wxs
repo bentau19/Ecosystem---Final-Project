@@ -58,7 +58,7 @@
         App icon — WiX extracts it from SyncDose.exe's embedded icon.
         If you have a standalone icon.ico, use SourceFile="icon.ico" instead.
     -->
-    <Icon Id="SyncDoseIcon" SourceFile="dist\SyncDose\SyncDose.exe" />
+    <Icon Id="SyncDoseIcon" SourceFile="../../resources/icons/logo.ico" />
 
   </Fragment>
 </Wix>

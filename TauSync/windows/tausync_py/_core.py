@@ -598,7 +598,12 @@ class TauSync:
         Blocks until a remote peer connects.  Only needs to be called once
         per process - the underlying transport is a singleton.
 
+        Args:
+            timeout_seconds: Max seconds to wait for a client.
+                ``None`` (default) waits forever.
+
         Raises:
+            TimeoutError: If no client connected within *timeout_seconds*.
             RuntimeError: If the transport was already established in
                 client mode, or if already listening.
         """
@@ -640,9 +645,13 @@ class TauSync:
         Args:
             ip: Server IP address (e.g. ``"192.168.1.50"``), or ``""``
                 to listen (server mode).
-            timeout_seconds: Optional timeout in seconds for the connection attempt.
+            timeout_seconds: Max seconds for the connection attempt.
+                ``None`` (default) retries forever.
 
         Raises:
+            TimeoutError: If the connection was not established within
+                *timeout_seconds*.
+            ValueError: If *ip* is non-empty but not a valid IPv4 address.
             RuntimeError: If the transport was already established in
                 the opposite role, or already connected to a different
                 address.
@@ -650,13 +659,17 @@ class TauSync:
 
         from System import TimeoutException
 
-        ipaddress.IPv4Address(ip)
         self._check_not_disposed()
         ip = ip.strip() if ip else ""
 
+        # Empty string = server mode (documented fallback). Validate the address
+        # only for client mode — validating first broke the fallback by raising
+        # AddressValueError before listen() could ever run.
         if not ip:
-            self.listen()
+            self.listen(timeout_seconds)
             return
+
+        ipaddress.IPv4Address(ip)
 
         with TauSync._global_role_lock:
             if TauSync._global_role == _ROLE_SERVER:
@@ -712,7 +725,7 @@ class TauSync:
             self,
             word: str,
             chunk_size: int = 65536,
-            timeout_seconds: int | None = None,
+            timeout_seconds: int | None = 60,
     ) -> TauSyncStream:
         """Open a named duplex stream (meeting-word handshake).
 
@@ -724,13 +737,22 @@ class TauSync:
                 Must be a non-empty, non-blank string.
             chunk_size: Default read buffer size for the returned stream
                 (1 .. 16 MB).
+            timeout_seconds: Max seconds to wait for the peer to call
+                ``connect(word)`` too.  NOTE: unlike ``listen``/``connect_to``,
+                ``None`` here does NOT mean "wait forever" — it falls back to
+                the library default handshake timeout (30 s, CoreConfig
+                ``HandshakeTimeoutSeconds``).
 
         Returns:
             A ``TauSyncStream`` wrapping the paired duplex channel.
 
         Raises:
-            RuntimeError: If the transport is not connected or the
-                manager has been disposed.
+            TimeoutError: If the handshake did not complete within
+                *timeout_seconds*.
+            RuntimeError: If the transport is not connected, the manager has
+                been disposed, or another ``connect()`` with the same word is
+                still in flight (concurrent same-word guard — wait for it to
+                resolve or use a distinct word).
             ValueError: If *word* is empty/blank or *chunk_size* is invalid.
         """
         from System import TimeoutException

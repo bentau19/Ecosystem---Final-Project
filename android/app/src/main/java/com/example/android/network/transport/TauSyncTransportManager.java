@@ -246,24 +246,58 @@ public class TauSyncTransportManager implements TransportManager {
         }
     }
 
+    /**
+     * Default connect timeout for one-shot control channels (meta, config, etc.).
+     * Large data channels use a file-size-proportional timeout passed by the caller.
+     */
+    private static final int DEFAULT_WRITE_CONNECT_TIMEOUT_S = 30;
+
+    /**
+     * Writes a UTF-8 string to a TauSync channel.
+     *
+     * <p><b>Unlike {@link NetworkHandler#writeToChannel}</b>, this method does NOT
+     * swallow exceptions — any failure propagates to the caller so that upstream code
+     * (e.g. {@code BackupTransferUseCase}) can correctly distinguish a failed send
+     * from a successful one and set {@code metaSent} accordingly.
+     */
     @Override
     public void writeToChannel(String channel, String data) throws Exception {
-        if (tauSync != null && status == TransportStatus.CONNECTED) {
-            NetworkHandler.writeToChannel(tauSync, channel, data);
-            Log.v(TAG, "Written to channel [" + channel + "]: " + data);
-        } else {
-            throw new IllegalStateException("Cannot write to channel [" + channel + "]: Not connected");
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException(
+                    "Cannot write to channel [" + channel + "]: Not connected");
         }
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
+                     tauSync.connect(channel, DEFAULT_WRITE_CONNECT_TIMEOUT_S)) {
+            stream.writeString(data);
+        }
+        Log.v(TAG, "Written to channel [" + channel + "]: " + data);
     }
 
     @Override
     public String readFromChannel(String channel) throws Exception {
-        if (tauSync != null && status == TransportStatus.CONNECTED) {
-            String data = NetworkHandler.readFromChannel(tauSync, channel);
-            Log.v(TAG, "Read from channel [" + channel + "]: " + data);
-            return data != null ? data : "";
+        return readFromChannel(channel, DEFAULT_WRITE_CONNECT_TIMEOUT_S);
+    }
+
+    /**
+     * Reads a UTF-8 string from a TauSync channel, waiting up to {@code connectTimeoutSec}
+     * seconds for the peer to open the same channel.
+     *
+     * <p>Use for result channels where the peer may take longer than the default 30 s
+     * (e.g. a backup result channel whose PC-side processing includes ML classification
+     * and a file copy before the result is sent).
+     */
+    @Override
+    public String readFromChannel(String channel, int connectTimeoutSec) throws Exception {
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException(
+                    "Cannot read from channel [" + channel + "]: Not connected");
         }
-        throw new IllegalStateException("Cannot read from channel [" + channel + "]: Not connected");
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
+                     tauSync.connect(channel, connectTimeoutSec)) {
+            String data = new String(stream.readAll(), java.nio.charset.StandardCharsets.UTF_8);
+            Log.v(TAG, "Read from channel [" + channel + "]: " + data);
+            return data;
+        }
     }
 
     @Override
@@ -309,14 +343,32 @@ public class TauSyncTransportManager implements TransportManager {
      * Reads in 64 KB chunks until the InputStream is exhausted (EOF), then flushes
      * so the peer's read_to_file() sees a clean EOF and returns.
      * No full-file buffering in RAM — safe for arbitrarily large files.
+     *
+     * <p>Uses the default 30-second connect timeout. For file-size-proportional
+     * timeouts (e.g. backup data slots) use
+     * {@link #streamInputStreamToChannel(String, java.io.InputStream, int)}.
      */
     @Override
     public void streamInputStreamToChannel(String channel, java.io.InputStream inputStream) throws Exception {
+        streamInputStreamToChannel(channel, inputStream, 30);
+    }
+
+    /**
+     * Same as {@link #streamInputStreamToChannel(String, java.io.InputStream)} but
+     * uses {@code connectTimeoutSec} for the TauSync channel handshake instead of
+     * the default 30 s.  Use for backup data slots whose file-size-proportional
+     * connect timeout can greatly exceed 30 s for large files.
+     */
+    @Override
+    public void streamInputStreamToChannel(String channel,
+                                           java.io.InputStream inputStream,
+                                           int connectTimeoutSec) throws Exception {
         if (tauSync == null || status != TransportStatus.CONNECTED) {
             throw new IllegalStateException("Cannot stream to channel [" + channel + "]: Not connected");
         }
 
-        try (com.example.tausync_lib.implementations.management.TauSyncStream stream = tauSync.connect(channel)) {
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
+                     tauSync.connect(channel, connectTimeoutSec)) {
             java.io.OutputStream out = stream.getOutputStream();
             byte[] buf = new byte[FILE_CHUNK_SIZE];
             int n;
@@ -328,7 +380,54 @@ public class TauSyncTransportManager implements TransportManager {
                 chunkCount++;
             }
             out.flush();
-            Log.d(TAG, "Streamed " + totalBytes + " bytes in " + chunkCount + " chunks to [" + channel + "]");
+            Log.d(TAG, "Streamed " + totalBytes + " bytes in " + chunkCount
+                    + " chunks to [" + channel + "] (connectTimeout=" + connectTimeoutSec + "s)");
+        }
+    }
+
+    /**
+     * Opens a single TauSync channel, writes UTF-8 metadata + {@code '\n'}, then
+     * streams all bytes from {@code inputStream} before closing the channel.
+     *
+     * <p>A single {@code tauSync.connect(channel)} is used for both the metadata write
+     * and the binary stream, avoiding the 2-second ID-recycling grace period that would
+     * result from two consecutive {@code connect()} calls on the same channel name.
+     *
+     * <p>The PC reads up to the first {@code '\n'} to obtain the JSON metadata, then
+     * treats the remainder of the stream as raw file bytes.
+     */
+    @Override
+    public void writeMetadataThenStreamToChannel(String channel,
+                                                 String metadata,
+                                                 java.io.InputStream inputStream) throws Exception {
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException(
+                    "Cannot write to channel [" + channel + "]: Not connected");
+        }
+
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
+                     tauSync.connect(channel)) {
+            java.io.OutputStream out = stream.getOutputStream();
+
+            // ── 1. Metadata line ──────────────────────────────────────────────
+            byte[] metaBytes = (metadata + "\n")
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            out.write(metaBytes);
+
+            // ── 2. Raw file bytes ─────────────────────────────────────────────
+            byte[] buf = new byte[FILE_CHUNK_SIZE];
+            int n;
+            long totalBytes = 0;
+            int chunkCount = 0;
+            while ((n = inputStream.read(buf, 0, buf.length)) > 0) {
+                out.write(buf, 0, n);
+                totalBytes += n;
+                chunkCount++;
+            }
+            out.flush();
+            Log.d(TAG, "writeMetadataThenStreamToChannel [" + channel + "]: meta="
+                    + metaBytes.length + "B + data=" + totalBytes
+                    + "B in " + chunkCount + " chunks");
         }
     }
 

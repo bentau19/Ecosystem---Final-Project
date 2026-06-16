@@ -78,6 +78,21 @@ public interface TransportManager {
     String readFromChannel(String channel) throws Exception;
 
     /**
+     * Same as {@link #readFromChannel(String)} but uses a caller-supplied TauSync connect
+     * timeout instead of the default 30 s.
+     *
+     * <p>Use when the peer may take longer than 30 s to open the same channel — e.g.
+     * a backup result channel where the PC needs time to classify and copy the file
+     * before sending the result.
+     *
+     * @param channel           Channel name (e.g. {@code "backup_file_result_3"})
+     * @param connectTimeoutSec Seconds to wait for the peer to call {@code connect()}
+     * @return UTF-8 string payload written by the peer
+     * @throws Exception if the connect times out or the read fails
+     */
+    String readFromChannel(String channel, int connectTimeoutSec) throws Exception;
+
+    /**
      * Reads raw bytes from a channel.
      * Used for binary data (file contents) where String conversion would corrupt the data.
      *
@@ -109,6 +124,49 @@ public interface TransportManager {
      * @throws Exception if the channel write or the read from inputStream fails
      */
     void streamInputStreamToChannel(String channel, java.io.InputStream inputStream) throws Exception;
+
+    /**
+     * Same as {@link #streamInputStreamToChannel(String, java.io.InputStream)} but with a
+     * caller-supplied TauSync connect timeout.
+     *
+     * <p>Use for channels where the peer may take longer than the default 30 s to call
+     * {@code connect()} — e.g. backup data slots whose file-size-proportional timeout
+     * can greatly exceed 30 s for large files. The timeout governs only the
+     * <em>meeting handshake</em> (waiting for the peer to open the same channel);
+     * the actual byte-streaming phase is not time-bounded.
+     *
+     * @param channel           Channel name (e.g. {@code "backup_slot_data_3"})
+     * @param inputStream       Source stream (e.g. opened via ContentResolver for a URI)
+     * @param connectTimeoutSec Seconds to wait for the peer to call {@code connect()} on
+     *                          the same channel before throwing
+     * @throws Exception if the connect times out, or the channel write / stream read fails
+     */
+    void streamInputStreamToChannel(String channel,
+                                    java.io.InputStream inputStream,
+                                    int connectTimeoutSec) throws Exception;
+
+    /**
+     * Opens a single TauSync channel, writes a UTF-8 metadata string followed by a
+     * newline delimiter ({@code '\n'}), then streams all bytes from {@code inputStream}.
+     * Closes the channel after the stream is exhausted.
+     *
+     * <p>Used by the backup slot protocol so the PC can read the per-file metadata
+     * ({@code file_name}, {@code file_size}, {@code modified_at}) before receiving the
+     * raw file bytes — all in one {@code tauSync.connect()}, avoiding the 2-second
+     * ID-recycling grace period that would occur if metadata and bytes were sent in
+     * two separate channel connections.
+     *
+     * <p>The {@code '\n'} delimiter is safe because well-formed JSON never contains a
+     * bare newline character.
+     *
+     * @param channel     Channel name (e.g. {@code "backup_slot_data_0"})
+     * @param metadata    UTF-8 JSON string; must not contain a bare {@code '\n'}
+     * @param inputStream Source of raw file bytes
+     * @throws Exception if the channel connect, metadata write, or byte stream fails
+     */
+    void writeMetadataThenStreamToChannel(String channel,
+                                          String metadata,
+                                          java.io.InputStream inputStream) throws Exception;
 
     /**
      * Checks if the transport is currently connected.

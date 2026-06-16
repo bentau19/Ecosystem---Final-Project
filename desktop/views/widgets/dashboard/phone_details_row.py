@@ -1,10 +1,3 @@
-"""
-Phone details row widget.
-
-Renders a flow-layout row of device-info cards (name, OS, battery, storage)
-populated from :class:`~viewmodels.device.DeviceViewModel`.  Cards are rebuilt
-on every ``device_infos_updated`` signal so that reconnects always show fresh data.
-"""
 from PySide6.QtCore import Slot
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
@@ -35,10 +28,12 @@ from views.widgets.dashboard.storage_info import StorageInfo
 
 
 class PhoneDetailsRow(QWidget):
-    """Scrollable row of device-info cards on the dashboard.
+    """Scrollable flow-layout row of device-info cards on the dashboard.
 
-    On construction, it loads all device-info entities via the
-    ``DeviceInfoViewModel`` and renders one ``InfoCard`` per entity.
+    Renders one :class:`~views.widgets.dashboard.info_card.InfoCard` per
+    device-info DTO (name, OS, battery, storage) supplied by
+    :class:`~viewmodels.device.DeviceViewModel`.  Cards are rebuilt on every
+    ``device_infos_updated`` signal so that reconnects always show fresh data.
     """
 
     _DEVICE_TYPE_COLORS: dict[DeviceType, str] = {

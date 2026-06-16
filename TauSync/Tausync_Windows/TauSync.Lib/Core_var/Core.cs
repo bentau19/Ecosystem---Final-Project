@@ -42,5 +42,12 @@ namespace TauSync.Core
         /// <summary>Default TCP port.</summary>
         public const int DefaultPort = 8888;
         public const int ClientConnectRetryDelaySeconds = 2;
+
+        /// <summary>
+        /// Maximum accepted payload size per frame (16 MB). A peer can advertise any 32-bit
+        /// payload length in the header; without this cap a crafted header could trigger a
+        /// multi-gigabyte allocation and OOM the receiver.
+        /// </summary>
+        public const int MaxPayloadSize = 16 * 1024 * 1024;
     }
 }

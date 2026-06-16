@@ -1,5 +1,3 @@
-"""Metaclass utilities for combining Qt and Python abstract base classes."""
-
 from abc import ABCMeta
 
 from PySide6.QtCore import QObject
