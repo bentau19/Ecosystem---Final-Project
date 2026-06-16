@@ -329,12 +329,16 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     public void onPeerRequestsAvailable(java.util.List<String> channels) {
         Log.d(TAG, "Peer requests available for channels: " + channels);
 
-        // Handle sequential polling requests from the desktop server on a dedicated worker thread to maintain thread safety
-        new Thread(() -> {
-            for (String channel : channels) {
-                handlerRegistry.handlePeerRequest(channel);
-            }
-        }, "PeerRequestHandlerThread").start();
+        // Dispatch each waiting channel on its own thread so multiple concurrent
+        // desktop ops (the PC now serves N pipe connections in parallel) are
+        // handled in parallel instead of serially. One entry == one pending PC
+        // connect, so duplicates in the list are dispatched separately on purpose.
+        for (String channel : channels) {
+            new Thread(
+                    () -> handlerRegistry.handlePeerRequest(channel),
+                    "PeerReq-" + channel
+            ).start();
+        }
     }
 
     @Override

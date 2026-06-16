@@ -9,7 +9,10 @@
 // Every request and every response is a single MESSAGE composed of two
 // length-prefixed frames laid out back to back:
 //
-//     [4B LE jsonLen][json bytes][4B LE payloadLen][payload bytes]
+//     [4B LE jsonLen][4B LE payloadLen][json bytes][payload bytes]
+//
+// Both lengths are packed first so readers can coalesce them into a single
+// 8-byte read instead of two separate 4-byte reads.
 //
 //   • json    — UTF-8 JSON object.  Request: {"op": "...", ...}.
 //                Response: {"ok": true|false, "error": "...", ...op-specific...}.

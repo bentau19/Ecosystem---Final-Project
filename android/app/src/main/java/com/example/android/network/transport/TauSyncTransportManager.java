@@ -35,7 +35,9 @@ public class TauSyncTransportManager implements TransportManager {
     private static final int INITIAL_RETRY_DELAY_MS = 1000;      // 1 second
     private static final int MAX_RETRY_DELAY_MS = 30000;         // 30 seconds
     private static final int MAX_RETRY_ATTEMPTS = 2;
-    private static final int POLLING_INTERVAL_MS = 2000;         // 2 seconds
+    private static final int POLLING_INTERVAL_MS = 100;          // 100 ms — low latency so each
+                                                                 // serialized virtual-drive op is
+                                                                 // discovered promptly
 
     // State management
     private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
@@ -340,10 +342,22 @@ public class TauSyncTransportManager implements TransportManager {
         }
         try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
                      tauSync.connect(channel)) {
-            // Read the full request the peer wrote on this stream.
-            String request = new String(stream.readAll(), java.nio.charset.StandardCharsets.UTF_8);
+            Log.d(TAG, "serveJsonExchange: connected");
+            // Read the newline-terminated JSON request the peer wrote.
+            // readLine() returns at '\n' without waiting for the peer to close the stream,
+            // which avoids the mutual-readAll deadlock (both sides waiting for the other's FIN).
+            String request = stream.readLine();
+            if (request == null) {
+                throw new java.io.EOFException(
+                        "serveJsonExchange: peer closed without sending request on [" + channel + "]");
+            }
+            Log.d(TAG, "serveJsonExchange: request:-----    " + request + " -------");
             // Compute the response (may spawn background threads for data-phase ops).
+            // The full JSON request is forwarded — every handler parses the fields
+            // it needs (path, offset, length, uuid, from, to, ...) from it.
             String response = handler.respond(request);
+
+            Log.d(TAG, "serveJsonExchange: response= " + response);
             // Write the response back on the same stream before it closes.
             stream.writeString(response);
             Log.v(TAG, "serveJsonExchange [" + channel + "]: req=" + request

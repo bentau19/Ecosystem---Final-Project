@@ -14,8 +14,12 @@ typedef NTSTATUS* PNTSTATUS;
 
 #include <winfsp/winfsp.h>
 
+#include <condition_variable>
+#include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
+#include <vector>
 
 #include "ClientNamedPipe.h"
 #include "Protocol.h"
@@ -31,24 +35,38 @@ struct FileNode {
 
 class VirtualDrive {
 public:
-    // pipe must remain valid for the lifetime of this object.
-    explicit VirtualDrive(ClientNamedPipe& pipe);
+    // Takes ownership of a pool of pipe connections; all must remain valid for
+    // the lifetime of this object. Concurrency = pool size: each WinFsp
+    // dispatcher thread checks out one idle connection per request.
+    explicit VirtualDrive(std::vector<std::unique_ptr<ClientNamedPipe>> pipes);
     ~VirtualDrive();
 
     // Mount the filesystem at mountPoint (e.g. L"E:") and block until the
-    // WinFsp dispatcher stops or the pipe breaks.
+    // WinFsp dispatcher stops or a pipe breaks.
     void Mount(const std::wstring& mountPoint);
 
 private:
-    ClientNamedPipe& _pipe;
-    std::mutex       _pipeMtx;      // serialises every req/resp round-trip
+    // Connection pool. _pipes owns the connections; _idle is the free-list of
+    // those not currently checked out by a request. Each ClientNamedPipe owns
+    // its own I/O event, so distinct connections are safe to use concurrently;
+    // the pool only ensures one connection is never used by two threads at once.
+    std::vector<std::unique_ptr<ClientNamedPipe>> _pipes;
+    std::queue<ClientNamedPipe*> _idle;
+    std::mutex                   _poolMtx;
+    std::condition_variable      _poolCv;
+
     FSP_FILE_SYSTEM* _fs = nullptr;
     HANDLE           _stopEvent = nullptr; // signalled by SendReq on pipe failure
 
-    // Thread-safe single round-trip to the Python server.
-    // Must NOT be called while _pipeMtx is already held by the caller.
+    // Thread-safe single round-trip to the Python server. Checks out an idle
+    // pooled connection, sends the request, reads the response, returns the
+    // connection. Blocks only if every connection is busy.
     protocol::Message SendReq(const std::string& json,
                               const std::string& payload = {});
+
+    // Pool check-out / return.
+    ClientNamedPipe* AcquirePipe();
+    void             ReleasePipe(ClientNamedPipe* pipe);
 
     // Helper: populate a FSP_FSCTL_FILE_INFO from a FileNode.
     static void FillFileInfo(const FileNode& node, FSP_FSCTL_FILE_INFO* fi);

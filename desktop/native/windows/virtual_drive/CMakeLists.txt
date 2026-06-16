@@ -133,6 +133,7 @@ target_link_libraries(VirtualDrive PRIVATE
     ${VIRTUAL_DRIVE_WINFSP_LIB}
     delayimp                                # delay-load helper (__delayLoadHelper2)
     nlohmann_json::nlohmann_json
+    Advapi32                                # ConvertStringSecurityDescriptor... (sddl.h)
 )
 
 # Delay-load winfsp-x64.dll: the loader must NOT resolve it at process start

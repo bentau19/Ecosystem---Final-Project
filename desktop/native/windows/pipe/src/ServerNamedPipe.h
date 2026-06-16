@@ -11,6 +11,7 @@ class ServerNamedPipe
 {
 private:
     HANDLE hPipe;
+    HANDLE hIoEvent;  // pre-allocated, reused for all overlapped I/O
     int inputBufferSize;
     int outputBufferSize;
     std::wstring StringToWstring(const std::string& str);

@@ -52,7 +52,7 @@ public class VirtualDriveUseCase {
     public VirtualDriveUseCase(TransportManager transportManager,
                                VirtualDriveDataSource dataSource) {
         this.transportManager = transportManager;
-        this.dataSource        = dataSource;
+        this.dataSource = dataSource;
     }
 
     // ── list ──────────────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ public class VirtualDriveUseCase {
                             arr.put(e.toJson());
                         }
                         JSONObject resp = new JSONObject();
-                        resp.put("ok",      true);
+                        resp.put("ok", true);
                         resp.put("entries", arr);
                         return resp.toString();
                     } catch (Exception e) {
@@ -99,13 +99,15 @@ public class VirtualDriveUseCase {
      * or {@code {"ok": false}} if the path does not exist.
      */
     public void handleStat() throws Exception {
+        Log.d(TAG, "handleStat: starting");
         transportManager.serveJsonExchange(
                 VirtualDriveChannels.VIRTUAL_DRIVE_STAT.getValue(),
                 requestJson -> {
                     try {
                         JSONObject req = new JSONObject(requestJson);
-                        String path = req.getString("path");
-                        VDriveEntry entry = dataSource.stat(path);
+                        VDriveEntry entry = dataSource.stat(req.getString("path"));
+
+                        Log.d(TAG, "handleStat: entry=" + entry);
 
                         if (entry == null) {
                             return new JSONObject().put("ok", false).toString();
@@ -137,7 +139,7 @@ public class VirtualDriveUseCase {
                 requestJson -> {
                     try {
                         JSONObject req = new JSONObject(requestJson);
-                        String  path  = req.getString("path");
+                        String path = req.getString("path");
                         boolean isDir = req.optBoolean("is_dir", false);
                         dataSource.create(path, isDir);
                         return okJson();
@@ -240,26 +242,26 @@ public class VirtualDriveUseCase {
      */
     public void handleRead() throws Exception {
         // Capture fields from Phase 1 JSON so the data thread can reference them.
-        final String[] capturedPath   = {null};
-        final long[]   capturedOffset = {0L};
-        final int[]    capturedLength = {0};
-        final String[] capturedUuid   = {null};
+        final String[] capturedPath = {null};
+        final long[] capturedOffset = {0L};
+        final int[] capturedLength = {0};
+        final String[] capturedUuid = {null};
 
         transportManager.serveJsonExchange(
                 VirtualDriveChannels.VIRTUAL_DRIVE_READ.getValue(),
                 requestJson -> {
                     JSONObject req = new JSONObject(requestJson);
-                    capturedPath[0]   = req.getString("path");
+                    capturedPath[0] = req.getString("path");
                     capturedOffset[0] = req.getLong("offset");
                     capturedLength[0] = req.getInt("length");
-                    capturedUuid[0]   = req.getString("uuid");
+                    capturedUuid[0] = req.getString("uuid");
 
                     // Spawn data thread BEFORE returning the ack — the thread will
                     // call connect(dataChannel) which may block until PC starts Phase 2.
-                    final String path   = capturedPath[0];
-                    final long   offset = capturedOffset[0];
-                    final int    length = capturedLength[0];
-                    final String uuid   = capturedUuid[0];
+                    final String path = capturedPath[0];
+                    final long offset = capturedOffset[0];
+                    final int length = capturedLength[0];
+                    final String uuid = capturedUuid[0];
                     final String dataCh = VirtualDriveChannels.VIRTUAL_DRIVE_READ.getValue()
                             + "_" + uuid;
 
@@ -307,12 +309,12 @@ public class VirtualDriveUseCase {
         transportManager.serveJsonExchange(
                 VirtualDriveChannels.VIRTUAL_DRIVE_WRITE.getValue(),
                 requestJson -> {
-                    JSONObject req  = new JSONObject(requestJson);
+                    JSONObject req = new JSONObject(requestJson);
                     capturedPath[0] = req.getString("path");
                     capturedUuid[0] = req.getString("uuid");
 
-                    final String path   = capturedPath[0];
-                    final String uuid   = capturedUuid[0];
+                    final String path = capturedPath[0];
+                    final String uuid = capturedUuid[0];
                     final String dataCh = VirtualDriveChannels.VIRTUAL_DRIVE_WRITE.getValue()
                             + "_" + uuid;
 
@@ -332,7 +334,10 @@ public class VirtualDriveUseCase {
                                     + e.getMessage());
                         } finally {
                             if (fos != null) {
-                                try { fos.close(); } catch (Exception ignored) {}
+                                try {
+                                    fos.close();
+                                } catch (Exception ignored) {
+                                }
                             }
                         }
                     }, "VDriveWrite-" + uuid).start();
@@ -355,7 +360,7 @@ public class VirtualDriveUseCase {
     private static String errorJson(Exception e) {
         try {
             return new JSONObject()
-                    .put("ok",    false)
+                    .put("ok", false)
                     .put("error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
                     .toString();
         } catch (Exception ignored) {

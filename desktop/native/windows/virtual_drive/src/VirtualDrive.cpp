@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include <windows.h>
+#include <sddl.h>   // ConvertStringSecurityDescriptorToSecurityDescriptorW
 
 // winfsp.h is pulled in transitively by VirtualDrive.h, which also inserts
 // the PNTSTATUS typedef that winfsp v2.0 requires.  Including it here before
@@ -35,24 +36,41 @@ static constexpr uint16_t SECTORS_PER_CLUSTER = 8;   // 4 KB clusters
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Build a minimal security descriptor that grants Everyone full access.
-// WinFsp requires GetSecurityByName to return *something* — we return this
-// placeholder so Explorer can open any path without an access-denied error.
+// Build a self-relative security descriptor granting Everyone full access.
+// WinFsp's GetSecurityByName / GetSecurity hand the raw descriptor bytes to the
+// kernel, which requires a SELF-RELATIVE descriptor.  An absolute
+// SECURITY_DESCRIPTOR copied verbatim fails kernel validation with
+// ERROR_INVALID_SECURITY_DESCR (1338) — surfacing in Explorer as
+// "The security descriptor structure is invalid" the moment root "/" is queried.
+// ConvertStringSecurityDescriptorToSecurityDescriptorW returns a self-relative
+// blob, which is exactly what the callbacks must return.
+//   O:BA G:BA   owner/group = Administrators
+//   D:P         protected DACL (no inheritance)
+//   (A;;FA;;;WD) allow Full Access to Everyone (World)
+// The descriptor is allocated once and intentionally leaked for process lifetime
+// (matches the previous static pattern) — a single long-lived SD.
 static PSECURITY_DESCRIPTOR MakeEveryoneFullSD()
 {
-    static SECURITY_DESCRIPTOR sd = {};
-    static bool initialised = false;
-    if (!initialised) {
-        InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
-        SetSecurityDescriptorDacl(&sd, TRUE, nullptr, FALSE);
-        initialised = true;
+    static PSECURITY_DESCRIPTOR sd = nullptr;
+    if (!sd) {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            L"O:BAG:BAD:P(A;;FA;;;WD)",
+            SDDL_REVISION_1,
+            &sd,
+            nullptr);
     }
-    return &sd;
+    return sd;
 }
 
 // ── VirtualDrive implementation ───────────────────────────────────────────────
 
-VirtualDrive::VirtualDrive(ClientNamedPipe& pipe) : _pipe(pipe) {}
+VirtualDrive::VirtualDrive(std::vector<std::unique_ptr<ClientNamedPipe>> pipes)
+    : _pipes(std::move(pipes))
+{
+    // Seed the free-list with every owned connection.
+    for (auto& p : _pipes)
+        _idle.push(p.get());
+}
 
 VirtualDrive::~VirtualDrive()
 {
@@ -64,16 +82,41 @@ VirtualDrive::~VirtualDrive()
     }
 }
 
+ClientNamedPipe* VirtualDrive::AcquirePipe()
+{
+    std::unique_lock<std::mutex> lk(_poolMtx);
+    _poolCv.wait(lk, [this] { return !_idle.empty(); });
+    ClientNamedPipe* p = _idle.front();
+    _idle.pop();
+    return p;
+}
+
+void VirtualDrive::ReleasePipe(ClientNamedPipe* pipe)
+{
+    {
+        std::lock_guard<std::mutex> lk(_poolMtx);
+        _idle.push(pipe);
+    }
+    _poolCv.notify_one();
+}
+
 protocol::Message VirtualDrive::SendReq(const std::string& json_str,
                                          const std::string& payload)
 {
-    std::lock_guard<std::mutex> lk(_pipeMtx);
+    // Check out an idle connection so concurrent dispatcher threads each get
+    // their own pipe — no global serialisation. The pool is sized to the
+    // dispatcher thread count, so this rarely blocks.
+    ClientNamedPipe* pipe = AcquirePipe();
     try {
-        return protocol::send(_pipe, {json_str, payload});
+        protocol::Message resp = protocol::send(*pipe, {json_str, payload});
+        ReleasePipe(pipe);
+        return resp;
     } catch (...) {
-        // Pipe broke — wake Mount() so it can stop the dispatcher from its thread.
-        // We must NOT call FspFileSystemStopDispatcher here because we may be
-        // running on a WinFsp dispatcher thread, which would deadlock.
+        // Pipe broke — return it (we are tearing down anyway) and wake Mount()
+        // so it can stop the dispatcher from its thread. We must NOT call
+        // FspFileSystemStopDispatcher here: we may be on a WinFsp dispatcher
+        // thread, which would deadlock.
+        ReleasePipe(pipe);
         if (_stopEvent) SetEvent(_stopEvent);
         return protocol::Message{R"({"ok":false,"error":"not_connected"})", ""};
     }
@@ -104,6 +147,7 @@ NTSTATUS VirtualDrive::ErrorToStatus(const std::string& error)
     if (error == "not_dir")       return STATUS_NOT_A_DIRECTORY;
     if (error == "exists")        return STATUS_OBJECT_NAME_COLLISION;
     if (error == "not_empty")     return STATUS_DIRECTORY_NOT_EMPTY;
+    if (error == "timeout")       return STATUS_IO_TIMEOUT;
     return STATUS_IO_DEVICE_ERROR;
 }
 
@@ -141,7 +185,9 @@ void VirtualDrive::Mount(const std::wstring& mountPoint)
     params.SectorsPerAllocationUnit= SECTORS_PER_CLUSTER;
     params.VolumeCreationTime      = 0;
     params.VolumeSerialNumber      = 0x53594E43; // "SYNC"
-    params.FileInfoTimeout         = 1000;        // ms — keep stat cache short
+    params.FileInfoTimeout         = 10000;       // ms — trust FileInfo from ReadDirectory
+                                                   // so WinFsp reuses listed metadata instead
+                                                   // of re-stating every child on each access.
     params.CaseSensitiveSearch     = 0;
     params.CasePreservedNames      = 1;
     params.UnicodeOnDisk           = 1;
@@ -174,8 +220,23 @@ void VirtualDrive::Mount(const std::wstring& mountPoint)
         throw std::runtime_error("FspFileSystemSetMountPoint failed: " + std::to_string(st));
     }
 
-    st = FspFileSystemStartDispatcher(_fs, 0);
+    // Create the stop-event BEFORE starting the dispatcher so that if SendReq
+    // detects a pipe break on an early callback thread the SetEvent() null-guard
+    // is never hit and the event is already there to be signalled.
+    _stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!_stopEvent) {
+        FspFileSystemDelete(_fs);
+        _fs = nullptr;
+        throw std::runtime_error("CreateEventW failed");
+    }
+
+    // Cap dispatcher threads to the connection-pool size so the number of
+    // concurrent callers never exceeds available pipe connections (a caller
+    // would otherwise block in AcquirePipe waiting for one to free up).
+    st = FspFileSystemStartDispatcher(_fs, static_cast<ULONG>(_pipes.size()));
     if (!NT_SUCCESS(st)) {
+        CloseHandle(_stopEvent);
+        _stopEvent = nullptr;
         FspFileSystemDelete(_fs);
         _fs = nullptr;
         throw std::runtime_error("FspFileSystemStartDispatcher failed: " + std::to_string(st));
@@ -185,7 +246,6 @@ void VirtualDrive::Mount(const std::wstring& mountPoint)
     // FspFileSystemWaitDispatcher was removed in WinFsp v2.0; we use a manual
     // event instead.  StopDispatcher must be called from this thread (not a
     // WinFsp callback thread) to avoid deadlock.
-    _stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     WaitForSingleObject(_stopEvent, INFINITE);
     CloseHandle(_stopEvent);
     _stopEvent = nullptr;
