@@ -26,11 +26,13 @@ import com.example.android.enums.SessionChannels;
 import com.example.android.network.handlers.ChannelHandlerRegistry;
 import com.example.android.network.handlers.DeviceInfoChannelHandler;
 import com.example.android.domain.usecases.BackupTransferUseCase;
+import com.example.android.domain.usecases.ClipboardSyncUseCase;
 import com.example.android.domain.usecases.ReceiveFileUseCase;
 import com.example.android.domain.usecases.RespondToFileTransferUseCase;
 import com.example.android.domain.usecases.SendFileUseCase;
 import com.example.android.repositories.BackupRepository;
 import com.example.android.repositories.SendFileRepository;
+import com.example.android.network.handlers.ClipboardFromPCHandler;
 import com.example.android.network.handlers.FileDataChannelHandler;
 import com.example.android.network.handlers.FileMetadataChannelHandler;
 import com.example.android.network.handlers.PCNameChannelHandler;
@@ -63,6 +65,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     private ReceiveFileUseCase receiveFileUseCase;
     private SendFileUseCase sendFileUseCase;
     private BackupTransferUseCase backupTransferUseCase;
+    private ClipboardSyncUseCase clipboardSyncUseCase;
 
     // Observer for outgoing file transfer notifications — kept so we can remove it in onDestroy
     private Observer<SendFileStatus> sendFileStatusObserver;
@@ -102,6 +105,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         receiveFileUseCase = new ReceiveFileUseCase(transportManager, ReceiveFileRepository.getInstance(), this);
         sendFileUseCase = new SendFileUseCase(transportManager, SendFileRepository.getInstance(), this);
         backupTransferUseCase = new BackupTransferUseCase(transportManager, BackupRepository.getInstance(), this);
+        clipboardSyncUseCase = new ClipboardSyncUseCase(transportManager, this);
 
         registerChannelHandlers();
         registerFileTransferActionListener();
@@ -143,6 +147,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         handlerRegistry.registerHandler(
                 FileTransferChannels.REGULAR_FILE_DATA_PC_TO_ANDROID.getValue(),
                 new FileDataChannelHandler(receiveFileUseCase, ReceiveFileRepository.getInstance())
+        );
+
+        // CLIPBOARD_PC_TO_ANDROID receives clipboard text pushed automatically by the Desktop
+        // whenever its QClipboard changes.  Writing to ClipboardManager is always allowed on
+        // Android — no foreground restriction — so this works even when the app is in the background.
+        handlerRegistry.registerHandler(
+                com.example.android.enums.ClipboardChannels.CLIPBOARD_PC_TO_ANDROID.getValue(),
+                new ClipboardFromPCHandler(transportManager, this)
         );
 
         // All other device telemetry data types are registered inline as Getters using generic Lambda functional interfaces
@@ -187,6 +199,12 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // for this service (FLAG_GRANT_READ_URI_PERMISSION on the incoming Intent).
         // Starting the send flow from here guarantees the grant is fully active before
         // any ContentResolver I/O runs in SendFileUseCase.
+        if (intent != null && "com.example.android.ACTION_SEND_CLIPBOARD".equals(intent.getAction())) {
+            Log.d(TAG, "Received clipboard send action");
+            new Thread(() -> clipboardSyncUseCase.execute(), "ClipboardSync").start();
+            return START_NOT_STICKY;
+        }
+
         if (intent != null && "com.example.android.ACTION_GRANT_FILE_URI".equals(intent.getAction())) {
             android.net.Uri fileUri = intent.getData();
             String fileName = intent.getStringExtra("FILE_NAME");

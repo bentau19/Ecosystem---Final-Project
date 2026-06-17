@@ -52,6 +52,7 @@ class MainWindow(QMainWindow):
         self._screens: dict[Screen, QWidget]
 
         self._file_transfer_vm = app_state.file_transfer_viewmodel
+        self._clipboard_service = app_state.clipboard_service
 
         self._setup_ui()
         self._connect_signals()
@@ -92,11 +93,14 @@ class MainWindow(QMainWindow):
         self._tray_icon.show()
 
     def _connect_signals(self) -> None:
-        # Wire navigation, file-transfer, and theme signals to their slots.
+        # Wire navigation, file-transfer, theme, and clipboard signals to their slots.
         self._navigation_manager.navigate.connect(self._change_page)
         self._file_transfer_vm.receive_error.connect(self._on_file_receive_error)
         self._file_transfer_vm.metadata_received.connect(self._on_file_received_metadata)
+        self._clipboard_service.clipboard_text_received.connect(self._on_clipboard_text_received)
         theme_manager.theme_changed.connect(self._restyle_tray)
+        # PC → Android: delegate clipboard changes entirely to the service.
+        QApplication.clipboard().dataChanged.connect(self._on_clipboard_changed)
 
     def changeEvent(self, event: QEvent) -> None:
         """Intercept minimize events and hide the window to the system tray.
@@ -150,3 +154,15 @@ class MainWindow(QMainWindow):
     def _on_file_receive_error(self, error: str) -> None:
         # Show the generic transfer-error dialog; error string is displayed inside it.
         TransferErrorDialog()
+
+    @Slot(str)
+    def _on_clipboard_text_received(self, text: str) -> None:
+        # Always called on the main thread via Qt's queued connection — safe to touch QClipboard.
+        # Hash management is handled inside ClipboardService._receive() before this signal
+        # was emitted, so no logic needed here.
+        QApplication.clipboard().setText(text)
+
+    @Slot()
+    def _on_clipboard_changed(self) -> None:
+        # Thin relay — all sync logic (hash guard, send decision) lives in ClipboardService.
+        self._clipboard_service.on_clipboard_changed(QApplication.clipboard().text())

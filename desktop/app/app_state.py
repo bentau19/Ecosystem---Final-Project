@@ -1,7 +1,9 @@
 from typing import Final
 
+from domain.enums.clipboard_channels import ClipboardChannels
 from repositories.device import DeviceRepository
 from repositories.tool import ToolRepository
+from services.clipboard import ClipboardService
 from services.connectivity import ConnectivityService
 from services.device_info import DeviceInfoService
 from services.file_transfer import FileTransferService
@@ -35,6 +37,9 @@ class AppState:
         self.file_transfer_service: Final[FileTransferService] = FileTransferService(
             connectivity=self.connectivity_service,
         )
+        self.clipboard_service: Final[ClipboardService] = ClipboardService(
+            connectivity=self.connectivity_service,
+        )
         self.tool_service: Final[ToolService] = ToolService(
             repository=self.tools_repository,
         )
@@ -55,6 +60,9 @@ class AppState:
             connectivity_service=self.connectivity_service,
             file_transfer_service=self.file_transfer_service,
         )
+        self.phone_request_service.operations[
+            ClipboardChannels.CLIPBOARD_ANDROID_TO_PC.value
+        ] = self.clipboard_service.receive
 
         # Wire PhoneRequestService lifecycle to device connection events.
         # On connect  → start() is idempotent (guarded by _is_running); the thread

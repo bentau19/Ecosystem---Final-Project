@@ -118,6 +118,7 @@ public class ActionsFragment extends Fragment {
 
         List<ToolItem> toolList = new ArrayList<>();
         toolList.add(new ToolItem("backup", "File Backup", R.drawable.ic_backup));
+        toolList.add(new ToolItem("clipboard", "Clipboard Sync", R.drawable.ic_clipboard));
         toolList.add(new ToolItem("camera", "Camera Mirror", R.drawable.ic_camera));
         toolList.add(new ToolItem("security", "Antivirus Scan", R.drawable.ic_security));
 
@@ -143,6 +144,12 @@ public class ActionsFragment extends Fragment {
             case "backup":
                 if (getActivity() instanceof MainActivity) {
                     ((MainActivity) getActivity()).navigateToBackup();
+                }
+                break;
+            case "clipboard":
+                if (getActivity() instanceof MainActivity) {
+                    ((MainActivity) getActivity()).sendClipboard();
+                    Toast.makeText(getContext(), "Clipboard sent to PC!", Toast.LENGTH_SHORT).show();
                 }
                 break;
             default:
