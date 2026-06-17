@@ -4,14 +4,11 @@ import android.util.Log;
 
 import com.example.android.data.datasource.VirtualDriveDataSource;
 import com.example.android.domain.entities.VDriveEntry;
-import com.example.android.enums.VirtualDriveChannels;
 import com.example.android.network.transport.TransportManager;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.util.List;
 
 /**
@@ -19,28 +16,28 @@ import java.util.List;
  * and the local file system.
  *
  * <p>Each public method handles one WinFsp operation forwarded by the desktop's
- * {@code VirtualDriveService}:
+ * {@code VirtualDriveService}.  The desktop generates a unique per-request meeting word
+ * ({@code {base}_{uuid8}}, e.g. {@code "virtual_drive_stat_a1b2c3d4"}) for every op, so
+ * every method receives the <em>exact</em> channel name to connect on.
+ *
+ * <h3>Protocol</h3>
  * <ul>
- *   <li>Simple ops ({@code list}, {@code stat}, {@code create}, {@code delete},
- *       {@code rename}, {@code truncate}) use a single
- *       {@link TransportManager#serveJsonExchange} call — the entire request/
- *       response round-trip happens on one TauSyncStream.
- *   <li>Two-phase ops ({@code read}, {@code write}) negotiate a UUID on a base
- *       channel then spawn a dedicated background thread that streams bytes on
- *       a UUID-suffixed data channel, keeping the
- *       {@code PeerRequestHandlerThread} free for the next operation.
+ *   <li><b>Simple ops</b> (list / stat / create / delete / rename / truncate): one
+ *       {@link TransportManager#serveJsonExchange} call — PC writes JSON request line,
+ *       Android writes JSON response, channel closes.
+ *   <li><b>Read</b>: one {@link TransportManager#serveJsonThenStreamOut} call — PC writes
+ *       {@code {path, offset, length}\n}, Android opens the file range and streams the
+ *       bytes back until EOF.
+ *   <li><b>Write</b>: one {@link TransportManager#serveJsonHeaderThenStreamIn} call — PC
+ *       writes {@code {path}\n} header then pushes the file bytes until {@code write_close}
+ *       closes the stream.  Android pipes the bytes into a temp file; after the method
+ *       returns (OutputStream closed) {@link VirtualDriveDataSource#finalizeWrite} atomically
+ *       renames the temp file to its final path.
  * </ul>
  *
- * <p>All methods must be called from a background thread (they block briefly
- * on network I/O for the negotiation phase).  Data-phase threads are named
- * {@code VDriveRead-<uuid>} / {@code VDriveWrite-<uuid>} for easy logcat
- * identification.
- *
- * <p>Threading contract for two-phase ops: the data thread is spawned
- * <em>inside</em> the {@link TransportManager.JsonExchangeHandler} callback —
- * before the ack string is returned.  This guarantees the data thread is
- * already blocking on {@code connect(dataChannel)} by the time the PC exits
- * its own Phase 1 and starts Phase 2, eliminating any race on the data channel.
+ * <p>All methods must be called from a background thread — they block on network I/O.
+ * No dedicated data threads are spawned; streaming happens inline on the calling thread
+ * via the chunked transport primitives.
  */
 public class VirtualDriveUseCase {
 
@@ -58,15 +55,17 @@ public class VirtualDriveUseCase {
     // ── list ──────────────────────────────────────────────────────────────────
 
     /**
-     * Serves a {@code virtual_drive_list} request.
+     * Serves a {@code virtual_drive_list_{uuid8}} request.
      *
      * <p>PC sends {@code {"path": "..."}}.  Android responds with:
      * <pre>{"ok": true, "entries": [{"name","is_dir","size","mtime_ms"}, ...]}</pre>
      * or {@code {"ok": false, "error": "..."}} on failure.
+     *
+     * @param channel The exact meeting word the desktop opened (includes UUID suffix).
      */
-    public void handleList() throws Exception {
+    public void handleList(String channel) throws Exception {
         transportManager.serveJsonExchange(
-                VirtualDriveChannels.VIRTUAL_DRIVE_LIST.getValue(),
+                channel,
                 requestJson -> {
                     try {
                         JSONObject req = new JSONObject(requestJson);
@@ -92,16 +91,18 @@ public class VirtualDriveUseCase {
     // ── stat ──────────────────────────────────────────────────────────────────
 
     /**
-     * Serves a {@code virtual_drive_stat} request.
+     * Serves a {@code virtual_drive_stat_{uuid8}} request.
      *
      * <p>PC sends {@code {"path": "..."}}.  Android responds with the entry's
      * fields inlined at the top level ({@code {"ok":true,"name","is_dir","size","mtime_ms"}})
      * or {@code {"ok": false}} if the path does not exist.
+     *
+     * @param channel The exact meeting word the desktop opened (includes UUID suffix).
      */
-    public void handleStat() throws Exception {
-        Log.d(TAG, "handleStat: starting");
+    public void handleStat(String channel) throws Exception {
+        Log.d(TAG, "handleStat: starting on " + channel);
         transportManager.serveJsonExchange(
-                VirtualDriveChannels.VIRTUAL_DRIVE_STAT.getValue(),
+                channel,
                 requestJson -> {
                     try {
                         JSONObject req = new JSONObject(requestJson);
@@ -128,14 +129,16 @@ public class VirtualDriveUseCase {
     // ── create ────────────────────────────────────────────────────────────────
 
     /**
-     * Serves a {@code virtual_drive_create} request.
+     * Serves a {@code virtual_drive_create_{uuid8}} request.
      *
      * <p>PC sends {@code {"path": "...", "is_dir": bool}}.
      * Android responds with {@code {"ok": true}} or {@code {"ok": false, "error": "..."}}.
+     *
+     * @param channel The exact meeting word the desktop opened (includes UUID suffix).
      */
-    public void handleCreate() throws Exception {
+    public void handleCreate(String channel) throws Exception {
         transportManager.serveJsonExchange(
-                VirtualDriveChannels.VIRTUAL_DRIVE_CREATE.getValue(),
+                channel,
                 requestJson -> {
                     try {
                         JSONObject req = new JSONObject(requestJson);
@@ -154,13 +157,15 @@ public class VirtualDriveUseCase {
     // ── delete ────────────────────────────────────────────────────────────────
 
     /**
-     * Serves a {@code virtual_drive_delete} request.
+     * Serves a {@code virtual_drive_delete_{uuid8}} request.
      *
      * <p>PC sends {@code {"path": "..."}}.
+     *
+     * @param channel The exact meeting word the desktop opened (includes UUID suffix).
      */
-    public void handleDelete() throws Exception {
+    public void handleDelete(String channel) throws Exception {
         transportManager.serveJsonExchange(
-                VirtualDriveChannels.VIRTUAL_DRIVE_DELETE.getValue(),
+                channel,
                 requestJson -> {
                     try {
                         JSONObject req = new JSONObject(requestJson);
@@ -177,13 +182,15 @@ public class VirtualDriveUseCase {
     // ── rename ────────────────────────────────────────────────────────────────
 
     /**
-     * Serves a {@code virtual_drive_rename} request.
+     * Serves a {@code virtual_drive_rename_{uuid8}} request.
      *
      * <p>PC sends {@code {"from": "...", "to": "..."}}.
+     *
+     * @param channel The exact meeting word the desktop opened (includes UUID suffix).
      */
-    public void handleRename() throws Exception {
+    public void handleRename(String channel) throws Exception {
         transportManager.serveJsonExchange(
-                VirtualDriveChannels.VIRTUAL_DRIVE_RENAME.getValue(),
+                channel,
                 requestJson -> {
                     try {
                         JSONObject req = new JSONObject(requestJson);
@@ -200,13 +207,15 @@ public class VirtualDriveUseCase {
     // ── truncate ──────────────────────────────────────────────────────────────
 
     /**
-     * Serves a {@code virtual_drive_truncate} request.
+     * Serves a {@code virtual_drive_truncate_{uuid8}} request.
      *
      * <p>PC sends {@code {"path": "...", "new_size": N}}.
+     *
+     * @param channel The exact meeting word the desktop opened (includes UUID suffix).
      */
-    public void handleTruncate() throws Exception {
+    public void handleTruncate(String channel) throws Exception {
         transportManager.serveJsonExchange(
-                VirtualDriveChannels.VIRTUAL_DRIVE_TRUNCATE.getValue(),
+                channel,
                 requestJson -> {
                     try {
                         JSONObject req = new JSONObject(requestJson);
@@ -220,129 +229,122 @@ public class VirtualDriveUseCase {
         );
     }
 
-    // ── read (two-phase) ──────────────────────────────────────────────────────
+    // ── read ──────────────────────────────────────────────────────────────────
 
     /**
-     * Serves a {@code virtual_drive_read} negotiation and its data phase.
+     * Serves a {@code virtual_drive_read_{uuid8}} request.
      *
      * <h3>Protocol</h3>
-     * <ol>
-     *   <li><b>Phase 1</b> — negotiation on {@code virtual_drive_read}:
-     *       PC sends {@code {"path","offset","length","uuid"}}; Android spawns the
-     *       data thread, then returns {@code {"ok":true}} as the ack.
-     *   <li><b>Phase 2</b> — data on {@code virtual_drive_read_{uuid}}:
-     *       data thread calls
-     *       {@link TransportManager#streamInputStreamToChannel(String, InputStream)}
-     *       which streams the requested file range until the stream is closed.
-     * </ol>
+     * <p>PC opens {@code virtual_drive_read_{uuid8}}, writes
+     * {@code {"path","offset","length"}\n}, then calls {@code read_all()} to consume the
+     * file bytes.  Android reads the JSON request, opens the requested file range via
+     * {@link VirtualDriveDataSource#openReadRange}, and streams the bytes back on the
+     * same channel.  The channel closes (sending FIN) when the {@code InputStream} is
+     * exhausted, which unblocks the desktop's {@code read_all()}.
      *
-     * <p>The data thread is spawned <em>before</em> the ack is written so it is
-     * already blocking on {@code connect("virtual_drive_read_{uuid}")} when the
-     * PC begins Phase 2 — no race condition.
+     * <p>No separate negotiation phase or UUID in the payload — the UUID is the channel
+     * name suffix itself.  No background thread is spawned; streaming is inline.
+     *
+     * @param channel The exact meeting word the desktop opened (e.g.
+     *                {@code "virtual_drive_read_a1b2c3d4"}).
      */
-    public void handleRead() throws Exception {
-        // Capture fields from Phase 1 JSON so the data thread can reference them.
-        final String[] capturedPath = {null};
-        final long[] capturedOffset = {0L};
-        final int[] capturedLength = {0};
-        final String[] capturedUuid = {null};
-
-        transportManager.serveJsonExchange(
-                VirtualDriveChannels.VIRTUAL_DRIVE_READ.getValue(),
-                requestJson -> {
-                    JSONObject req = new JSONObject(requestJson);
-                    capturedPath[0] = req.getString("path");
-                    capturedOffset[0] = req.getLong("offset");
-                    capturedLength[0] = req.getInt("length");
-                    capturedUuid[0] = req.getString("uuid");
-
-                    // Spawn data thread BEFORE returning the ack — the thread will
-                    // call connect(dataChannel) which may block until PC starts Phase 2.
-                    final String path = capturedPath[0];
-                    final long offset = capturedOffset[0];
-                    final int length = capturedLength[0];
-                    final String uuid = capturedUuid[0];
-                    final String dataCh = VirtualDriveChannels.VIRTUAL_DRIVE_READ.getValue()
-                            + "_" + uuid;
-
-                    new Thread(() -> {
-                        try (InputStream is = dataSource.openReadRange(path, offset, length)) {
-                            transportManager.streamInputStreamToChannel(dataCh, is);
-                            Log.d(TAG, "read data sent: " + path
-                                    + " [" + offset + "+" + length + "] → " + dataCh);
-                        } catch (Exception e) {
-                            Log.e(TAG, "read data thread error [" + dataCh + "]: "
-                                    + e.getMessage());
-                            // Channel close (stream goes out of scope on exception) sends
-                            // FIN to the PC — it will surface as an IO error in WinFsp.
-                        }
-                    }, "VDriveRead-" + uuid).start();
-
-                    // Ack triggers PC to exit Phase 1 and open the data channel.
-                    return okJson();
-                }
-        );
+    public void handleRead(String channel) throws Exception {
+        transportManager.serveJsonThenStreamOut(channel, jsonRequest -> {
+            JSONObject req = new JSONObject(jsonRequest);
+            String path   = req.getString("path");
+            long   offset = req.getLong("offset");
+            int    length = req.getInt("length");
+            Log.d(TAG, "handleRead: path=" + path
+                    + " offset=" + offset + " length=" + length + " ch=" + channel);
+            return dataSource.openReadRange(path, offset, length);
+        });
     }
 
-    // ── write (two-phase) ─────────────────────────────────────────────────────
+    // ── write ─────────────────────────────────────────────────────────────────
 
     /**
-     * Serves a {@code virtual_drive_write} negotiation and its data phase.
+     * Serves a {@code virtual_drive_write_{uuid8}} write session.
      *
      * <h3>Protocol</h3>
-     * <ol>
-     *   <li><b>Phase 1</b> — negotiation on {@code virtual_drive_write}:
-     *       PC sends {@code {"path","uuid"}}; Android spawns the data thread, then
-     *       returns {@code {"ok":true}} as the ack.
-     *   <li><b>Phase 2</b> — data on {@code virtual_drive_write_{uuid}}:
-     *       PC holds the stream open and pushes chunks (forwarded from
-     *       VirtualDrive.exe write ops via the named pipe).  Android's data thread
-     *       calls {@link TransportManager#streamChannelToOutputStream} which
-     *       blocks reading until the PC closes the stream on {@code write_close}.
-     *       Android then renames the temp file to the final path.
-     * </ol>
+     * <p>PC opens {@code virtual_drive_write_{uuid8}}, writes {@code {"path"}\n} as a
+     * header, then streams the file bytes across one or more internal {@code write} pipe
+     * operations, and finally closes the stream on {@code write_close}.  Android reads
+     * the path from the header, opens a temp file via
+     * {@link VirtualDriveDataSource#openWriteTemp}, and receives all bytes until EOF.
+     * After {@link TransportManager#serveJsonHeaderThenStreamIn} returns (temp
+     * {@link java.io.FileOutputStream} already closed), Android calls
+     * {@link VirtualDriveDataSource#finalizeWrite} to atomically rename temp → final.
+     *
+     * <p>No separate negotiation phase or UUID in the payload — the UUID is the channel
+     * name suffix itself.  No background thread is spawned; streaming is inline.
+     *
+     * @param channel The exact meeting word the desktop opened (e.g.
+     *                {@code "virtual_drive_write_a1b2c3d4"}).
      */
-    public void handleWrite() throws Exception {
+    public void handleWrite(String channel) throws Exception {
+        // Capture the path from the JSON header so we can call finalizeWrite after streaming.
         final String[] capturedPath = {null};
-        final String[] capturedUuid = {null};
 
+        transportManager.serveJsonHeaderThenStreamIn(channel, jsonHeader -> {
+            JSONObject req = new JSONObject(jsonHeader);
+            String path = req.getString("path");
+            capturedPath[0] = path;
+            Log.d(TAG, "handleWrite: path=" + path + " ch=" + channel);
+            return dataSource.openWriteTemp(path);
+        });
+
+        // serveJsonHeaderThenStreamIn has closed the temp OutputStream — safe to rename.
+        if (capturedPath[0] != null) {
+            dataSource.finalizeWrite(capturedPath[0]);
+            Log.d(TAG, "handleWrite: finalized " + capturedPath[0] + " ← " + channel);
+        }
+    }
+
+    // ── list_page ─────────────────────────────────────────────────────────────
+
+    /**
+     * Serves a {@code virtual_drive_list_page_{uuid8}} paginated-listing request.
+     *
+     * <h3>Protocol</h3>
+     * <p>PC sends:
+     * <pre>{"path": "...", "after": "last_name_or_null", "limit": N}</pre>
+     * Android responds with:
+     * <pre>{"ok": true, "entries": [...], "has_more": bool, "next_after": "name_or_null"}</pre>
+     * Entries are sorted alphabetically by name.  Pass the returned
+     * {@code next_after} value as {@code after} on the next call to advance the
+     * cursor.  When {@code has_more} is {@code false} the directory is exhausted.
+     *
+     * @param channel The exact meeting word the desktop opened (includes UUID suffix).
+     */
+    public void handleListPage(String channel) throws Exception {
         transportManager.serveJsonExchange(
-                VirtualDriveChannels.VIRTUAL_DRIVE_WRITE.getValue(),
+                channel,
                 requestJson -> {
-                    JSONObject req = new JSONObject(requestJson);
-                    capturedPath[0] = req.getString("path");
-                    capturedUuid[0] = req.getString("uuid");
+                    try {
+                        JSONObject req      = new JSONObject(requestJson);
+                        String     path     = req.getString("path");
+                        String     after    = req.isNull("after") ? null : req.optString("after", null);
+                        int        limit    = req.optInt("limit", 200);
 
-                    final String path = capturedPath[0];
-                    final String uuid = capturedUuid[0];
-                    final String dataCh = VirtualDriveChannels.VIRTUAL_DRIVE_WRITE.getValue()
-                            + "_" + uuid;
+                        VirtualDriveDataSource.ListPageResult result =
+                                dataSource.listDirPage(path, after, limit);
 
-                    new Thread(() -> {
-                        FileOutputStream fos = null;
-                        try {
-                            fos = dataSource.openWriteTemp(path);
-                            // Block until PC closes the data channel (write_close).
-                            transportManager.streamChannelToOutputStream(dataCh, fos);
-                            fos.close();
-                            fos = null;
-                            // Atomically publish the file.
-                            dataSource.finalizeWrite(path);
-                            Log.d(TAG, "write data received: " + path + " ← " + dataCh);
-                        } catch (Exception e) {
-                            Log.e(TAG, "write data thread error [" + dataCh + "]: "
-                                    + e.getMessage());
-                        } finally {
-                            if (fos != null) {
-                                try {
-                                    fos.close();
-                                } catch (Exception ignored) {
-                                }
-                            }
+                        JSONArray arr = new JSONArray();
+                        for (VDriveEntry e : result.entries) {
+                            arr.put(e.toJson());
                         }
-                    }, "VDriveWrite-" + uuid).start();
-
-                    return okJson();
+                        JSONObject resp = new JSONObject();
+                        resp.put("ok",         true);
+                        resp.put("entries",    arr);
+                        resp.put("has_more",   result.hasMore);
+                        resp.put("next_after", result.nextAfter != null
+                                ? result.nextAfter
+                                : JSONObject.NULL);
+                        return resp.toString();
+                    } catch (Exception e) {
+                        Log.e(TAG, "handleListPage error: " + e.getMessage());
+                        return errorJson(e);
+                    }
                 }
         );
     }

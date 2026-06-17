@@ -19,7 +19,12 @@ typedef NTSTATUS* PNTSTATUS;
 #include <mutex>
 #include <queue>
 #include <string>
+#include <chrono>
+#include <optional>
+#include <unordered_map>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "ClientNamedPipe.h"
 #include "Protocol.h"
@@ -31,6 +36,35 @@ struct FileNode {
     uint64_t    size;
     uint64_t    mtime_ms;   // Unix epoch milliseconds; 0 = unknown
     bool        write_open; // true between write_open and write_close pipe ops
+
+    // ── Directory listing (directories only) ──────────────────────────────
+    //
+    // Strategy: fetch entries lazily in pages of LIST_PAGE_SIZE via the
+    // "list_page" op.  The first page is fetched on the first ReadDirectory
+    // call (Marker == null); subsequent pages are fetched on demand as the
+    // buffered entries are consumed.  All Marker-continuation calls on this
+    // handle are served from the in-memory buffer with zero pipe overhead
+    // until the buffer is drained and another page is needed.
+    //
+    // ListCursor tracks pagination state for one open directory handle.
+    struct ListCursor {
+        std::vector<nlohmann::json> buffer;    // fetched but not yet given to WinFsp
+        size_t      bufIdx     = 0;            // next unconsumed index in buffer
+        bool        hasMore    = true;         // false once Android says last page
+        std::string nextAfter;                 // cursor: last name of previous page
+        bool        initialized = false;       // true after the first page fetch
+    };
+    std::unique_ptr<ListCursor> listCursor;    // null for files
+
+    // ── Sequential read-ahead cache (files only) ───────────────────────────
+    // When a Read is issued we fetch a larger prefetch window from Android and
+    // store the surplus here.  Sequential reads that fall inside the window
+    // (common for file copies) are served without any named-pipe round-trip.
+    struct ReadCache {
+        std::vector<uint8_t> data;
+        uint64_t             startOffset = 0; // byte offset of data[0] in the file
+    };
+    std::unique_ptr<ReadCache> readCache;
 };
 
 class VirtualDrive {
@@ -57,6 +91,38 @@ private:
 
     FSP_FILE_SYSTEM* _fs = nullptr;
     HANDLE           _stopEvent = nullptr; // signalled by SendReq on pipe failure
+
+    // ── C++ metadata caches ───────────────────────────────────────────────────
+    // Caching at this layer eliminates the named-pipe round-trip to Python for
+    // stat hits that Python itself would serve from its own short-TTL cache.
+    // Mutations (Create, Cleanup-write, Delete, Rename, Overwrite) always call
+    // InvalidateStat so stale data is bounded.
+
+    struct StatEntry {
+        bool     is_dir;
+        uint64_t size;
+        uint64_t mtime_ms;
+        std::chrono::steady_clock::time_point expiry;
+    };
+
+    struct CachedVolume {
+        uint64_t total;
+        uint64_t free;
+        std::chrono::steady_clock::time_point expiry;
+    };
+
+    // TTLs in seconds — match the Python-side _CACHE_TTL_SECONDS (30 s).
+    static constexpr int STAT_CACHE_TTL_S   = 30;
+    static constexpr int VOLUME_CACHE_TTL_S = 60;
+
+    std::unordered_map<std::string, StatEntry> _statCache;
+    std::mutex                                  _statMtx;
+    std::optional<CachedVolume>                 _volumeCache;
+    std::mutex                                  _volumeMtx;
+
+    void CacheStat(const std::string& path, const StatEntry& e);
+    bool LookupStat(const std::string& path, StatEntry& out);
+    void InvalidateStat(const std::string& path);
 
     // Thread-safe single round-trip to the Python server. Checks out an idle
     // pooled connection, sends the request, reads the response, returns the

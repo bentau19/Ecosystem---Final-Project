@@ -74,13 +74,27 @@ public interface TransportManager {
     void disconnect();
 
     /**
-     * Writes data to a specific channel.
+     * Writes data to a specific channel using the default 30-second connect timeout.
      *
      * @param channel Channel name (e.g., "battery_level", "pc_name")
      * @param data Data to write
      * @throws Exception if write fails
      */
     void writeToChannel(String channel, String data) throws Exception;
+
+    /**
+     * Same as {@link #writeToChannel(String, String)} but uses a caller-supplied connect
+     * timeout instead of the default 30 s.
+     *
+     * <p>Use when you need a shorter deadline — e.g. a best-effort disconnect signal where
+     * waiting 30 s for the peer to join would visibly stall the UI.
+     *
+     * @param channel    Channel name
+     * @param data       Data to write
+     * @param timeoutSec Seconds to wait for the peer to join the channel
+     * @throws Exception if the connect times out or the write fails
+     */
+    void writeToChannel(String channel, String data, int timeoutSec) throws Exception;
 
     /**
      * Reads data from a specific channel (non-blocking).
@@ -187,14 +201,104 @@ public interface TransportManager {
      * passes it to {@code handler}, and writes the handler's JSON response back on the same
      * channel before closing it.
      *
-     * <p>Used by the virtual-drive protocol: the desktop opens a meeting word
-     * (e.g. {@code "virtual_drive_stat"}), writes a JSON request, and reads the response.
+     * <p>Used by the virtual-drive protocol for simple metadata ops: the desktop opens a
+     * unique meeting word (e.g. {@code "virtual_drive_stat_a1b2c3d4"}), writes a JSON
+     * request line, and reads the JSON response.
      *
      * @param channel Channel name (meeting word) to serve.
      * @param handler Computes the JSON response from the JSON request.
      * @throws Exception if the channel connect, read, handler, or write fails.
      */
     void serveJsonExchange(String channel, JsonExchangeHandler handler) throws Exception;
+
+    /**
+     * Callback for {@link #serveJsonThenStreamOut}: given the peer's newline-terminated
+     * JSON request string, opens and returns the {@link java.io.InputStream} whose bytes
+     * will be streamed back to the peer on the same channel.
+     *
+     * <p>The returned stream is closed by the transport after all bytes have been sent.
+     */
+    @FunctionalInterface
+    interface JsonToInputStreamHandler {
+        /**
+         * @param jsonRequest The newline-terminated JSON request read from the channel.
+         * @return An open {@link java.io.InputStream} to stream back to the peer.
+         * @throws Exception if opening the source stream fails.
+         */
+        java.io.InputStream openInputStream(String jsonRequest) throws Exception;
+    }
+
+    /**
+     * Opens a single TauSync channel, reads one newline-terminated JSON request from the
+     * peer, calls {@code handler} to obtain a source {@link java.io.InputStream}, and
+     * streams all bytes from that stream back to the peer before closing the channel.
+     *
+     * <p>Used by the virtual-drive {@code read} op: the desktop opens
+     * {@code virtual_drive_read_{uuid8}}, writes {@code {path, offset, length}\n}, and
+     * reads the file bytes back. Android reads the request, opens the file range via the
+     * handler, then streams the bytes until EOF. The handler's stream is closed by
+     * this method via try-with-resources.
+     *
+     * @param channel Channel name (meeting word) to serve.
+     * @param handler Opens the source byte stream for the given JSON request.
+     * @throws Exception if the channel connect, JSON read, handler, stream, or write fails.
+     */
+    void serveJsonThenStreamOut(String channel, JsonToInputStreamHandler handler) throws Exception;
+
+    /**
+     * Callback for {@link #serveJsonHeaderThenStreamIn}: given the peer's newline-terminated
+     * JSON header string, opens and returns the {@link java.io.OutputStream} into which the
+     * remaining bytes from the peer will be piped.
+     *
+     * <p>The returned stream is closed by the transport after all peer bytes have been written.
+     * The caller is responsible for any post-close finalization (e.g. renaming a temp file).
+     */
+    @FunctionalInterface
+    interface JsonHeaderThenStreamInHandler {
+        /**
+         * @param jsonHeader The newline-terminated JSON header read from the channel.
+         * @return An open {@link java.io.OutputStream} to receive the byte stream.
+         * @throws Exception if opening the destination stream fails.
+         */
+        java.io.OutputStream openOutputStream(String jsonHeader) throws Exception;
+    }
+
+    /**
+     * Opens a single TauSync channel, reads one newline-terminated JSON header from the
+     * peer, calls {@code handler} to obtain a destination {@link java.io.OutputStream},
+     * and pipes all remaining bytes from the channel into that stream until the peer closes
+     * it (EOF / FIN). The handler's stream is then closed via try-with-resources.
+     *
+     * <p>Used by the virtual-drive {@code write} op: the desktop opens
+     * {@code virtual_drive_write_{uuid8}}, writes {@code {path}\n} then pushes the file
+     * bytes across multiple internal pipe writes, and finally closes the stream on
+     * {@code write_close}. Android reads the path from the header, opens a temp
+     * {@link java.io.FileOutputStream} via the handler, and receives all bytes. After
+     * this method returns the temp file is fully written and closed; the caller should
+     * call {@code finalizeWrite(path)} to atomically rename it.
+     *
+     * @param channel Channel name (meeting word) to serve.
+     * @param handler Opens the destination byte stream for the given JSON header.
+     * @throws Exception if the channel connect, JSON read, handler, stream, or write fails.
+     */
+    void serveJsonHeaderThenStreamIn(String channel, JsonHeaderThenStreamInHandler handler) throws Exception;
+
+    /**
+     * Stops the polling loop and transitions the transport to DISCONNECTING,
+     * <em>without</em> closing the underlying socket or resetting the retry state.
+     *
+     * <p>Call this before {@link #writeToChannel} when sending a disconnect signal so
+     * the polling executor (which fires every 20 ms) can no longer race with the
+     * outbound {@code tauSync.connect()} call.  If the poll were allowed to fail
+     * concurrently, {@code handlePollingFailure} would dispose the socket before the
+     * desktop has a chance to join the {@code disconnect_phone} meeting word, stalling
+     * Android for up to 30 seconds (the {@code writeToChannel} connect timeout).
+     *
+     * <p>This method blocks briefly (up to 5 s) waiting for any in-flight polling task
+     * to complete, then returns with polling fully stopped.  Call it from a background
+     * thread — never from the main thread.
+     */
+    void prepareForDisconnect();
 
     /**
      * Checks if the transport is currently connected.

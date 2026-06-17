@@ -113,6 +113,7 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Processes raw QR data scanned from the PC client.
+     *
      * @param qrData The string content extracted from the QR code.
      */
     public void processScannedData(String qrData) {
@@ -222,6 +223,7 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Helper method to replace the current fragment with a new one.
+     *
      * @param fragment The fragment to display.
      */
     private void replaceFragment(Fragment fragment) {
@@ -249,13 +251,13 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Observes FileTransferViewModel LiveData.
-     *
+     * <p>
      * PENDING_APPROVAL:
-     *   - Foreground → AlertDialog with Accept / Reject buttons
-     *   - Background → heads-up notification with action buttons
-     *
+     * - Foreground → AlertDialog with Accept / Reject buttons
+     * - Background → heads-up notification with action buttons
+     * <p>
      * COMPLETED / REJECTED / FAILED:
-     *   - Dismiss notification (if shown), display Toast, reset state
+     * - Dismiss notification (if shown), display Toast, reset state
      */
     private void observeFileTransfer() {
 
@@ -317,7 +319,6 @@ public class MainActivity extends AppCompatActivity {
                 .setCancelable(false)
                 .show();
     }
-
 
 
     // --- UI Configurations ---

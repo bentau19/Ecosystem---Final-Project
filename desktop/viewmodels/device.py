@@ -222,8 +222,9 @@ class DeviceViewModel(QObject):
         # connectivity.start() is safe here: ConnectivityService emits
         # device_disconnected only after its own executor is fully drained,
         # so this restart can never race the previous shutdown.
-        self._device_info_service.restart()
+        # self._device_info_service.stop()
         self._connectivity_service.start()
+        # self._device_info_service.start()
         self.device_disconnected.emit()
 
     # ── Conversion ────────────────────────────────────────────────────────────

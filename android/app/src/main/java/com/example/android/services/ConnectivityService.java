@@ -76,6 +76,12 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     // Virtual drive UseCase — serves all WinFsp filesystem ops forwarded by the desktop
     private VirtualDriveUseCase virtualDriveUseCase;
 
+    // PC-name handler. Driven proactively from onStatusChanged(CONNECTED) — Android pulls the
+    // PC name (the desktop only answers on request), so this is NOT registered for reactive
+    // peer-request dispatch. Kept as a field so the connect-time request can reuse its
+    // read+apply logic.
+    private PCNameChannelHandler pcNameHandler;
+
     // Observer for outgoing file transfer notifications — kept so we can remove it in onDestroy
     private Observer<SendFileStatus> sendFileStatusObserver;
 
@@ -151,11 +157,11 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     private void registerChannelHandlers() {
         Log.d(TAG, "Registering channel handlers using generic DeviceInfoChannelHandler...");
 
-        // PC_NAME uses a specialized class because it acts as a Setter (receives data and modifies local state)
-        handlerRegistry.registerHandler(
-                DeviceInfoChannels.PC_NAME.getValue(),
-                new PCNameChannelHandler(deviceRepository, transportManager)
-        );
+        // PC_NAME is a Setter (receives data and modifies local state). Android pulls it
+        // proactively on connect — see requestPcName() — so it is intentionally NOT registered
+        // for reactive peer-request dispatch: the desktop never opens this channel itself, it
+        // only responds once Android opens it.
+        pcNameHandler = new PCNameChannelHandler(deviceRepository, transportManager);
 
         // DISCONNECT_FROM_PC uses a specialized class to handle PC-initiated disconnects
         handlerRegistry.registerHandler(
@@ -184,10 +190,13 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                 new BackupControlChannelHandler(transportManager, backupTransferUseCase)
         );
 
-        // Virtual drive — one handler instance per channel; all backed by the same UseCase
+        // Virtual drive — one handler instance per op-type, registered under the prefix key
+        // (base + "_", e.g. "virtual_drive_list_"). The ChannelHandlerRegistry prefix-fallback
+        // routes each UUID-suffixed incoming channel (e.g. "virtual_drive_list_a1b2c3d4") to
+        // the matching handler without any changes to the registry logic.
         for (VirtualDriveChannels vdCh : VirtualDriveChannels.values()) {
             handlerRegistry.registerHandler(
-                    vdCh.getValue(),
+                    vdCh.getValue() + "_",                        // prefix key
                     new VirtualDriveChannelHandler(vdCh.getValue(), virtualDriveUseCase)
             );
         }
@@ -303,9 +312,15 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
-        Log.d(TAG, "App removed from recent apps, shutting down");
-        cleanup();
-        stopSelf();
+        Log.d(TAG, "App removed from recents — sending disconnect before cleanup");
+        if (transportManager != null && transportManager.isConnected()) {
+            // sendDisconnectToPC() opens the DISCONNECT_FROM_PHONE channel so
+            // the desktop transitions cleanly instead of detecting a socket drop.
+            // It calls stopSelf() in its finally block → onDestroy() → cleanup().
+            sendDisconnectToPC();
+        } else {
+            cleanup();  // includes stopSelf()
+        }
         super.onTaskRemoved(rootIntent);
     }
 
@@ -332,7 +347,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     }
 
     /**
-     * Gracefully releases open sockets, unregisters sub-components, and resets the local connection state.
+     * Gracefully releases open sockets, unregisters subcomponents, and resets the local connection state.
      */
     private void cleanup() {
         Log.d(TAG, "Cleanup started - stopping threads and shutting down network");
@@ -383,11 +398,40 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
         if (status == TransportStatus.CONNECTED) {
             deviceRepository.updateConnectionStatus(ConnectionStatus.CONNECTED);
+            requestPcName();
         } else if (status == TransportStatus.CONNECTING || status == TransportStatus.RECONNECTING) {
             deviceRepository.updateConnectionStatus(connectionStatus);
         } else if (status == TransportStatus.FAILED) {
             deviceRepository.updateConnectionStatus(ConnectionStatus.FAILED);
         }
+    }
+
+    /**
+     * Proactively pulls the PC name on a background thread once the transport is connected.
+     *
+     * <p>Android initiates the {@code pc_name} channel (the desktop only answers on request via
+     * its {@code PhoneRequestService} listener loop), so this read must be kicked off actively
+     * rather than waiting for a peer request that never comes. {@code onStatusChanged} runs on
+     * the main thread and {@link com.example.android.network.handlers.PCNameChannelHandler}'s
+     * read blocks, hence the dedicated thread.
+     *
+     * <p>The channel is claimed in {@link #inProgressChannels} first so a re-fired
+     * {@code CONNECTED} (e.g. a reconnect) cannot overlap an in-flight request; reconnects
+     * legitimately re-fetch the name once the prior request has completed.
+     */
+    private void requestPcName() {
+        String channel = DeviceInfoChannels.PC_NAME.getValue();
+        if (!inProgressChannels.add(channel)) {
+            Log.d(TAG, "PC name request already in progress, skipping");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                pcNameHandler.onPeerRequest();
+            } finally {
+                inProgressChannels.remove(channel);
+            }
+        }, "PcNameRequest").start();
     }
 
     @Override
@@ -483,17 +527,36 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     /**
      * Sends a disconnect notification to the PC when the user initiates a disconnect on the phone.
      *
-     * <p>Writes to the {@code DISCONNECT_FROM_PHONE} TauSync channel, then stops this service.
-     * {@code stopSelf()} triggers {@link #onDestroy()} → {@link #cleanup()}, which shuts down
-     * the transport and resets the repository — no explicit sleep is needed because
-     * {@code writeToChannel} closes the stream (and flushes data) before returning.
+     * <p>Stops the polling loop first via {@link TransportManager#prepareForDisconnect()} to
+     * prevent a race condition: the 20 ms polling tick calls {@code getPeerWaitingWords()} on the
+     * same {@code TauSync} object that {@code writeToChannel} is about to block inside.  If the
+     * poll fails concurrently it triggers {@code handlePollingFailure → tauSync.dispose()} which
+     * kills the socket before the desktop can join the {@code disconnect_phone} meeting word.
+     *
+     * <p>A 3-second connect timeout is used instead of the default 30 s.  The desktop polls
+     * every 200 ms and responds (via {@code tau.disconnect()}) within ~200 ms of detecting the
+     * channel, so 3 s provides safe headroom while preventing a 30-second UI hang when the PC
+     * is slow or unreachable.  The desktop's {@code tau.disconnect()} closes the TCP socket,
+     * which causes {@code tauSync.connect()} here to throw — the exception is caught and cleanup
+     * proceeds via the {@code finally} block regardless.
+     *
+     * <p>After the channel write (or on any exception) {@code stopSelf()} triggers
+     * {@link #onDestroy()} → {@link #cleanup()}, which shuts down the transport and resets the
+     * repository.
      */
     private void sendDisconnectToPC() {
         new Thread(() -> {
             try {
                 if (transportManager != null && transportManager.isConnected()) {
+                    // Stop the polling executor BEFORE opening the disconnect channel.
+                    // This eliminates the race where a concurrent 20 ms poll failure
+                    // causes handlePollingFailure → socket disposed → desktop can't join
+                    // 'disconnect_phone' → stall on Android.
+                    transportManager.prepareForDisconnect();
+                    // 3-second timeout: desktop detects the channel in ≤200 ms normally.
+                    // Caps worst-case disconnect latency at ~4 s instead of 30 s.
                     transportManager.writeToChannel(
-                            SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect");
+                            SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect", 3);
                     Log.d(TAG, "Disconnect signal sent to PC");
                 }
             } catch (Exception e) {

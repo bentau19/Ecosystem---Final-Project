@@ -25,7 +25,7 @@ static constexpr int RETRY_TIMEOUT_MS  = 30000;
 // Number of pipe connections to open. Sets the desktop-side concurrency ceiling:
 // this many virtual-drive ops can be in flight at once. Must be <= the Python
 // server's _MAX_CONNECTIONS.
-static constexpr int PIPE_POOL_SIZE = 4;
+static constexpr int PIPE_POOL_SIZE = 8;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 

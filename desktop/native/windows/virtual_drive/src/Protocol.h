@@ -23,6 +23,7 @@
 //
 // Operations ("op" field):
 //   "list"        {path}                  -> {ok, entries:[{name,is_dir,size,mtime_ms}]}
+//   "list_page"   {path,after,limit}      -> {ok, entries:[...], has_more, next_after}
 //   "stat"        {path}                  -> {ok, name,is_dir,size,mtime_ms} | {ok:false}
 //   "read"        {path,offset,length}    -> {ok} + payload(file bytes)
 //   "write_open"  {path}                  -> {ok}

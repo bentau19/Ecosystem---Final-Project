@@ -1,7 +1,7 @@
 from PySide6.QtCore import Slot
 from PySide6.QtGui import QHideEvent, QShowEvent
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QApplication
+    QWidget, QHBoxLayout, QVBoxLayout
 )
 
 import resources_qrc  # noqa: F401
@@ -139,9 +139,9 @@ class DashboardScreen(QWidget):
             event: The show event delivered by Qt.
         """
         super().showEvent(event)
-        self._loading_overlay.start("Fetching device info…")
-        app_state.device_viewmodel.load_current_device_info()
-        app_state.tool_viewmodel.load_enabled_tools()
+        # self._loading_overlay.start("Fetching device info…")
+        # app_state.device_viewmodel.load_current_device_info()
+        # app_state.tool_viewmodel.load_enabled_tools()
 
     def hideEvent(self, event: QHideEvent) -> None:
         """Reset overlay and disconnect guard when navigation hides this screen.
@@ -152,4 +152,3 @@ class DashboardScreen(QWidget):
         super().hideEvent(event)
         self._is_disconnecting = False
         self._loading_overlay.hide()
-

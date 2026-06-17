@@ -300,8 +300,7 @@ class FileTransferService(QObject):
                 try:
                     timeout = datetime.timedelta(seconds=3)
                     server.wait_for_client(timeout)
-                    # read() now returns raw bytes; the path is UTF-8 text on the wire.
-                    file_path: str = server.read(timeout).decode("utf-8")
+                    file_path: str = server.read(timeout)
                     self.send_file(file_path)
                 except TimeoutError:
                     # No client connected within the poll window — wait and retry.

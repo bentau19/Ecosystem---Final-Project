@@ -23,7 +23,9 @@ using json = nlohmann::json;
 // Volume label shown in Explorer's sidebar.
 static constexpr wchar_t VOLUME_LABEL[] = L"Phone";
 
-// Reported total and free space — these are display-only.
+// Fallback total/free space (bytes) used only until SyncDose can report the
+// connected device's real storage via the "volume" op (e.g. before the first
+// device-info read completes, or when no phone is connected).
 static constexpr uint64_t TOTAL_SIZE = 1ULL * 1024 * 1024 * 1024 * 1024; // 1 TB
 static constexpr uint64_t FREE_SIZE  = 500ULL * 1024 * 1024 * 1024;      // 500 GB
 
@@ -98,6 +100,39 @@ void VirtualDrive::ReleasePipe(ClientNamedPipe* pipe)
         _idle.push(pipe);
     }
     _poolCv.notify_one();
+}
+
+// ── C++ metadata cache helpers ────────────────────────────────────────────────
+
+void VirtualDrive::CacheStat(const std::string& path, const StatEntry& e)
+{
+    std::lock_guard<std::mutex> lk(_statMtx);
+    _statCache[path] = e;
+}
+
+bool VirtualDrive::LookupStat(const std::string& path, StatEntry& out)
+{
+    std::lock_guard<std::mutex> lk(_statMtx);
+    auto it = _statCache.find(path);
+    if (it == _statCache.end()) return false;
+    if (std::chrono::steady_clock::now() > it->second.expiry) {
+        _statCache.erase(it);
+        return false;
+    }
+    out = it->second;
+    return true;
+}
+
+void VirtualDrive::InvalidateStat(const std::string& path)
+{
+    // Evict the path itself and its parent directory (parent listing changed).
+    std::lock_guard<std::mutex> lk(_statMtx);
+    _statCache.erase(path);
+    auto slash = path.rfind('/');
+    if (slash != std::string::npos && slash > 0)
+        _statCache.erase(path.substr(0, slash));
+    else if (slash == 0 && path.size() > 1)
+        _statCache.erase("/");
 }
 
 protocol::Message VirtualDrive::SendReq(const std::string& json_str,
@@ -185,9 +220,10 @@ void VirtualDrive::Mount(const std::wstring& mountPoint)
     params.SectorsPerAllocationUnit= SECTORS_PER_CLUSTER;
     params.VolumeCreationTime      = 0;
     params.VolumeSerialNumber      = 0x53594E43; // "SYNC"
-    params.FileInfoTimeout         = 10000;       // ms — trust FileInfo from ReadDirectory
+    params.FileInfoTimeout         = 30000;       // ms — trust FileInfo from ReadDirectory
                                                    // so WinFsp reuses listed metadata instead
                                                    // of re-stating every child on each access.
+                                                   // Matches the 30 s C++ and Python cache TTLs.
     params.CaseSensitiveSearch     = 0;
     params.CasePreservedNames      = 1;
     params.UnicodeOnDisk           = 1;
@@ -258,9 +294,53 @@ void VirtualDrive::Mount(const std::wstring& mountPoint)
 NTSTATUS VirtualDrive::GetVolumeInfo(FSP_FILE_SYSTEM* fs,
                                       FSP_FSCTL_VOLUME_INFO* vi)
 {
+    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
+
     std::memset(vi, 0, sizeof(*vi));
-    vi->TotalSize  = TOTAL_SIZE;
-    vi->FreeSize   = FREE_SIZE;
+
+    // FSP_FSCTL_VOLUME_INFO.TotalSize / FreeSize are expressed in BYTES.
+    // Default to the placeholder constants and override with the connected
+    // device's real storage when SyncDose can supply it. The desktop answers
+    // the "volume" op from its periodically-refreshed device-info snapshot.
+    // We also cache the result for VOLUME_CACHE_TTL_S seconds at this layer so
+    // Explorer's periodic sidebar refreshes cost zero named-pipe calls.
+    uint64_t totalBytes = TOTAL_SIZE;
+    uint64_t freeBytes  = FREE_SIZE;
+
+    {
+        std::lock_guard<std::mutex> lk(self->_volumeMtx);
+        if (self->_volumeCache.has_value() &&
+            std::chrono::steady_clock::now() < self->_volumeCache->expiry) {
+            totalBytes = self->_volumeCache->total;
+            freeBytes  = self->_volumeCache->free;
+            vi->TotalSize  = totalBytes;
+            vi->FreeSize   = freeBytes;
+            std::wcsncpy(vi->VolumeLabel, VOLUME_LABEL,
+                         sizeof(vi->VolumeLabel) / sizeof(wchar_t) - 1);
+            vi->VolumeLabelLength =
+                static_cast<UINT16>(std::wcslen(VOLUME_LABEL) * sizeof(wchar_t));
+            return STATUS_SUCCESS;
+        }
+    }
+
+    try {
+        json req = {{"op", "volume"}};
+        json j = json::parse(self->SendReq(req.dump()).json);
+        if (j.value("ok", false)) {
+            totalBytes = j.value("total", totalBytes);
+            freeBytes  = j.value("free",  freeBytes);
+            std::lock_guard<std::mutex> lk(self->_volumeMtx);
+            self->_volumeCache = CachedVolume{
+                totalBytes, freeBytes,
+                std::chrono::steady_clock::now() + std::chrono::seconds(VOLUME_CACHE_TTL_S)
+            };
+        }
+    } catch (...) {
+        // Not connected yet or malformed response — keep the fallback constants.
+    }
+
+    vi->TotalSize  = totalBytes;
+    vi->FreeSize   = freeBytes;
     std::wcsncpy(vi->VolumeLabel, VOLUME_LABEL, sizeof(vi->VolumeLabel) / sizeof(wchar_t) - 1);
     vi->VolumeLabelLength = static_cast<UINT16>(std::wcslen(VOLUME_LABEL) * sizeof(wchar_t));
     return STATUS_SUCCESS;
@@ -277,16 +357,27 @@ NTSTATUS VirtualDrive::GetSecurityByName(FSP_FILE_SYSTEM* fs,
     std::string path = WcharToUtf8(FileName);
     NormalizeVPath(path);
 
-    // stat the path to know if it exists and whether it's a directory.
-    json req = {{"op", "stat"}, {"path", path}};
-    protocol::Message resp = self->SendReq(req.dump());
-    json j = json::parse(resp.json);
-
-    if (!j.value("ok", false))
-        return ErrorToStatus(j.value("error", "not_found"));
+    // Check C++ stat cache first — ReadDirectory seeds it for all listed
+    // entries, so the per-entry GetSecurityByName storm after a directory
+    // open is usually answered without any named-pipe call.
+    StatEntry cached{};
+    if (!self->LookupStat(path, cached)) {
+        json req = {{"op", "stat"}, {"path", path}};
+        protocol::Message resp = self->SendReq(req.dump());
+        json j = json::parse(resp.json);
+        if (!j.value("ok", false))
+            return ErrorToStatus(j.value("error", "not_found"));
+        cached = StatEntry{
+            j.value("is_dir",   false),
+            j.value("size",     uint64_t(0)),
+            j.value("mtime_ms", uint64_t(0)),
+            std::chrono::steady_clock::now() + std::chrono::seconds(STAT_CACHE_TTL_S)
+        };
+        self->CacheStat(path, cached);
+    }
 
     if (PFileAttributes)
-        *PFileAttributes = j.value("is_dir", false)
+        *PFileAttributes = cached.is_dir
             ? FILE_ATTRIBUTE_DIRECTORY
             : FILE_ATTRIBUTE_NORMAL;
 
@@ -313,20 +404,23 @@ NTSTATUS VirtualDrive::Open(FSP_FILE_SYSTEM* fs,
     std::string path = WcharToUtf8(FileName);
     NormalizeVPath(path);
 
-    json req = {{"op", "stat"}, {"path", path}};
-    protocol::Message resp = self->SendReq(req.dump());
-    json j = json::parse(resp.json);
+    StatEntry cached{};
+    if (!self->LookupStat(path, cached)) {
+        json req = {{"op", "stat"}, {"path", path}};
+        protocol::Message resp = self->SendReq(req.dump());
+        json j = json::parse(resp.json);
+        if (!j.value("ok", false))
+            return ErrorToStatus(j.value("error", "not_found"));
+        cached = StatEntry{
+            j.value("is_dir",   false),
+            j.value("size",     uint64_t(0)),
+            j.value("mtime_ms", uint64_t(0)),
+            std::chrono::steady_clock::now() + std::chrono::seconds(STAT_CACHE_TTL_S)
+        };
+        self->CacheStat(path, cached);
+    }
 
-    if (!j.value("ok", false))
-        return ErrorToStatus(j.value("error", "not_found"));
-
-    auto* node = new FileNode{
-        path,
-        j.value("is_dir",   false),
-        j.value("size",     uint64_t(0)),
-        j.value("mtime_ms", uint64_t(0)),
-        false
-    };
+    auto* node = new FileNode{path, cached.is_dir, cached.size, cached.mtime_ms, false};
     *PFileContext = node;
     FillFileInfo(*node, FileInfo);
     return STATUS_SUCCESS;
@@ -355,6 +449,8 @@ NTSTATUS VirtualDrive::Create(FSP_FILE_SYSTEM* fs,
     if (!j.value("ok", false))
         return ErrorToStatus(j.value("error", ""));
 
+    // Evict parent's cached stat (its listing now includes the new entry).
+    self->InvalidateStat(path);
     auto* node = new FileNode{path, is_dir, 0, 0, false};
     *PFileContext = node;
     FillFileInfo(*node, FileInfo);
@@ -378,6 +474,8 @@ NTSTATUS VirtualDrive::Overwrite(FSP_FILE_SYSTEM* fs,
     if (!j.value("ok", false))
         return ErrorToStatus(j.value("error", ""));
 
+    // File was truncated; cached size is now stale.
+    self->InvalidateStat(node->path);
     node->size = 0;
     FillFileInfo(*node, FileInfo);
     return STATUS_SUCCESS;
@@ -396,12 +494,16 @@ VOID VirtualDrive::Cleanup(FSP_FILE_SYSTEM* fs,
         json req = {{"op", "write_close"}, {"path", node->path}};
         self->SendReq(req.dump());
         node->write_open = false;
+        // File contents changed; cached size/mtime are now stale.
+        self->InvalidateStat(node->path);
     }
 
     // Delete if Explorer flagged this handle for deletion.
     if (Flags & FspCleanupDelete) {
         json req = {{"op", "delete"}, {"path", node->path}};
         self->SendReq(req.dump());
+        // File is gone; evict its cache entry and parent's listing stat.
+        self->InvalidateStat(node->path);
     }
 }
 
@@ -409,6 +511,13 @@ VOID VirtualDrive::Close(FSP_FILE_SYSTEM* /*fs*/, PVOID FileContext)
 {
     delete static_cast<FileNode*>(FileContext);
 }
+
+// Read-ahead window size. When a Read misses the cache we ask Android for
+// this many bytes starting at Offset. Android naturally stops at EOF, so
+// requesting more than the remaining file size is always safe.
+// 4 MB reduces named-pipe round-trips by ~64× for sequential file copies
+// (e.g. 64 KB WinFsp chunks × 64 = one round-trip per 4 MB of data).
+static constexpr uint64_t READ_PREFETCH_BYTES = 4ULL * 1024 * 1024;
 
 NTSTATUS VirtualDrive::Read(FSP_FILE_SYSTEM* fs,
                              PVOID FileContext,
@@ -428,11 +537,33 @@ NTSTATUS VirtualDrive::Read(FSP_FILE_SYSTEM* fs,
     ULONG actual = static_cast<ULONG>(
         std::min(static_cast<uint64_t>(Length), node->size - Offset));
 
+    // ── Cache hit path ─────────────────────────────────────────────────────
+    // Serve the request entirely from the prefetch buffer when the requested
+    // range [Offset, Offset+actual) falls within the cached window.
+    if (node->readCache) {
+        const auto& rc = *node->readCache;
+        uint64_t cacheEnd = rc.startOffset + static_cast<uint64_t>(rc.data.size());
+        if (Offset >= rc.startOffset && (Offset + actual) <= cacheEnd) {
+            size_t idx = static_cast<size_t>(Offset - rc.startOffset);
+            std::memcpy(Buffer, rc.data.data() + idx, actual);
+            *PBytesTransferred = actual;
+            return STATUS_SUCCESS;
+        }
+    }
+
+    // ── Cache miss: fetch a prefetch-sized chunk ───────────────────────────
+    // Request up to READ_PREFETCH_BYTES starting at Offset so that subsequent
+    // sequential reads hit the cache.  Clamped to the remaining file size so
+    // we never ask for bytes past EOF.
+    uint64_t fetchLen = std::min(
+        std::max(static_cast<uint64_t>(actual), READ_PREFETCH_BYTES),
+        node->size - Offset);
+
     json req = {
         {"op",     "read"},
         {"path",   node->path},
         {"offset", Offset},
-        {"length", actual}
+        {"length", fetchLen}
     };
     protocol::Message resp = self->SendReq(req.dump());
     json j = json::parse(resp.json);
@@ -440,8 +571,16 @@ NTSTATUS VirtualDrive::Read(FSP_FILE_SYSTEM* fs,
     if (!j.value("ok", false))
         return ErrorToStatus(j.value("error", ""));
 
-    ULONG received = static_cast<ULONG>(resp.payload.size());
-    if (received > actual) received = actual;
+    // Store the full prefetched chunk in the per-handle read cache.
+    if (!node->readCache)
+        node->readCache = std::make_unique<FileNode::ReadCache>();
+    node->readCache->startOffset = Offset;
+    node->readCache->data.assign(resp.payload.begin(), resp.payload.end());
+
+    // Deliver only the bytes WinFsp asked for this call.
+    ULONG received = static_cast<ULONG>(
+        std::min(static_cast<uint64_t>(resp.payload.size()),
+                 static_cast<uint64_t>(actual)));
     std::memcpy(Buffer, resp.payload.data(), received);
     *PBytesTransferred = received;
     return STATUS_SUCCESS;
@@ -558,7 +697,12 @@ NTSTATUS VirtualDrive::CanDelete(FSP_FILE_SYSTEM* fs,
     auto* node = static_cast<FileNode*>(FileContext);
     auto* self = static_cast<VirtualDrive*>(fs->UserContext);
 
-    // Verify the path still exists; let the server decide if it can be deleted.
+    // The node was stat'd during Open, so it is almost certainly still in the
+    // C++ cache.  Only fall back to a round-trip on a cache miss (rare).
+    StatEntry cached{};
+    if (self->LookupStat(node->path, cached))
+        return STATUS_SUCCESS;
+
     json req = {{"op", "stat"}, {"path", node->path}};
     protocol::Message resp = self->SendReq(req.dump());
     json j = json::parse(resp.json);
@@ -585,6 +729,9 @@ NTSTATUS VirtualDrive::Rename(FSP_FILE_SYSTEM* fs,
     if (!j.value("ok", false))
         return ErrorToStatus(j.value("error", ""));
 
+    // Evict both old and new paths (and their parents) from the C++ cache.
+    self->InvalidateStat(node->path);
+    self->InvalidateStat(to);
     node->path = to;
     return STATUS_SUCCESS;
 }
@@ -611,6 +758,11 @@ NTSTATUS VirtualDrive::SetSecurity(FSP_FILE_SYSTEM* /*fs*/,
     return STATUS_SUCCESS;
 }
 
+// Page size for paginated directory listings.  200 entries × ~60 bytes each
+// ≈ 12 KB of JSON per round-trip — fast over Wi-Fi and small enough that
+// the first page is visible in Explorer before the rest of the directory loads.
+static constexpr int LIST_PAGE_SIZE = 200;
+
 NTSTATUS VirtualDrive::ReadDirectory(FSP_FILE_SYSTEM* fs,
                                       PVOID FileContext,
                                       PWSTR Pattern,
@@ -622,51 +774,135 @@ NTSTATUS VirtualDrive::ReadDirectory(FSP_FILE_SYSTEM* fs,
     auto* node = static_cast<FileNode*>(FileContext);
     auto* self = static_cast<VirtualDrive*>(fs->UserContext);
 
-    json req = {{"op", "list"}, {"path", node->path}};
-    protocol::Message resp = self->SendReq(req.dump());
-    json j = json::parse(resp.json);
+    // ── Initialise listing cursor on the very first call ──────────────────
+    if (!node->listCursor) {
+        node->listCursor = std::make_unique<FileNode::ListCursor>();
+    }
+    FileNode::ListCursor& cur = *node->listCursor;
 
-    if (!j.value("ok", false))
-        return ErrorToStatus(j.value("error", ""));
+    // ── Stat-cache seeding helper ──────────────────────────────────────────
+    // Seed the class-level C++ stat cache from every freshly fetched page so
+    // that the GetSecurityByName / Open stat storm WinFsp issues right after
+    // a directory open is answered without any additional named-pipe call.
+    auto seedStatCache = [&](const std::vector<json>& entries) {
+        auto seedExpiry = std::chrono::steady_clock::now()
+                        + std::chrono::seconds(STAT_CACHE_TTL_S);
+        for (const auto& entry : entries) {
+            std::string name = entry.value("name", "");
+            if (name.empty()) continue;
+            std::string childPath = (node->path == "/")
+                ? "/" + name
+                : node->path + "/" + name;
+            self->CacheStat(childPath, StatEntry{
+                entry.value("is_dir",   false),
+                entry.value("size",     uint64_t(0)),
+                entry.value("mtime_ms", uint64_t(0)),
+                seedExpiry
+            });
+        }
+    };
 
-    // Track whether we have passed the Marker entry (for partial reads).
+    // ── Fetch the first page on the very first ReadDirectory call ──────────
+    if (!cur.initialized) {
+        json req = {
+            {"op",    "list_page"},
+            {"path",  node->path},
+            {"after", nullptr},          // null → start from beginning
+            {"limit", LIST_PAGE_SIZE}
+        };
+        protocol::Message resp = self->SendReq(req.dump());
+        json j = json::parse(resp.json);
+        if (!j.value("ok", false))
+            return ErrorToStatus(j.value("error", ""));
+
+        cur.buffer    = j["entries"].get<std::vector<json>>();
+        cur.bufIdx    = 0;
+        cur.hasMore   = j.value("has_more", false);
+        cur.nextAfter = j.value("next_after", "");
+        cur.initialized = true;
+
+        seedStatCache(cur.buffer);
+    }
+
+    // ── Fill the WinFsp buffer from the cursor ─────────────────────────────
+    // Marker-based continuation: when WinFsp calls us with a non-empty Marker
+    // we must skip entries up to and including the named entry before filling
+    // the output buffer.  Because Android's sort order is deterministic (by
+    // name), Marker always names an entry we have already served — it will be
+    // found somewhere in the already-fetched portion of the cursor.
     std::string markerUtf8 = Marker ? WcharToUtf8(Marker) : "";
     bool pastMarker = markerUtf8.empty();
 
-    for (const auto& entry : j["entries"]) {
-        std::string name    = entry.value("name",     "");
-        bool        is_dir  = entry.value("is_dir",   false);
-        uint64_t    size    = entry.value("size",     uint64_t(0));
-        uint64_t    mtime   = entry.value("mtime_ms", uint64_t(0));
+    for (;;) {
+        // Drain the current page buffer first.
+        while (cur.bufIdx < cur.buffer.size()) {
+            const auto& entry = cur.buffer[cur.bufIdx];
+            std::string name  = entry.value("name",     "");
+            bool        is_dir= entry.value("is_dir",   false);
+            uint64_t    size  = entry.value("size",     uint64_t(0));
+            uint64_t    mtime = entry.value("mtime_ms", uint64_t(0));
 
-        if (!pastMarker) {
-            if (name == markerUtf8) pastMarker = true;
-            continue;
+            if (!pastMarker) {
+                if (name == markerUtf8) pastMarker = true;
+                cur.bufIdx++;
+                continue;
+            }
+
+            std::wstring wname = Utf8ToWchar(name);
+            UINT64 ft = MsToFileTime(mtime);
+
+            // FSP_FSCTL_DIR_INFO has a flexible array FileName[] at the end.
+            size_t nameBytes = (wname.size() + 1) * sizeof(wchar_t);
+            size_t totalSize = sizeof(FSP_FSCTL_DIR_INFO) + nameBytes;
+            std::vector<uint8_t> buf(totalSize, 0);
+            auto* di = reinterpret_cast<FSP_FSCTL_DIR_INFO*>(buf.data());
+
+            di->Size                    = static_cast<UINT16>(totalSize);
+            di->FileInfo.FileAttributes = is_dir ? FILE_ATTRIBUTE_DIRECTORY
+                                                  : FILE_ATTRIBUTE_NORMAL;
+            di->FileInfo.FileSize       = size;
+            di->FileInfo.AllocationSize = (size + 4095) & ~uint64_t(4095);
+            di->FileInfo.CreationTime   = ft;
+            di->FileInfo.LastWriteTime  = ft;
+            di->FileInfo.LastAccessTime = ft;
+            di->FileInfo.ChangeTime     = ft;
+            std::memcpy(di->FileNameBuf, wname.c_str(), wname.size() * sizeof(wchar_t));
+
+            cur.bufIdx++;
+
+            if (!FspFileSystemAddDirInfo(di, Buffer, Length, PBytesTransferred)) {
+                // WinFsp output buffer full — undo the increment so we re-emit
+                // this entry when WinFsp calls us again with the previous entry
+                // name as the new Marker.
+                cur.bufIdx--;
+                return STATUS_SUCCESS;
+            }
         }
 
-        std::wstring wname = Utf8ToWchar(name);
-        UINT64 ft = MsToFileTime(mtime);
+        // Current page drained — fetch next page if available.
+        if (!cur.hasMore) break;
 
-        // Allocate the dir-info struct on the stack.
-        // FSP_FSCTL_DIR_INFO has a flexible array FileName[] at the end.
-        size_t nameBytes = (wname.size() + 1) * sizeof(wchar_t);
-        size_t totalSize = sizeof(FSP_FSCTL_DIR_INFO) + nameBytes;
-        std::vector<uint8_t> buf(totalSize, 0);
-        auto* di = reinterpret_cast<FSP_FSCTL_DIR_INFO*>(buf.data());
+        json req = {
+            {"op",    "list_page"},
+            {"path",  node->path},
+            {"after", cur.nextAfter.empty() ? json(nullptr) : json(cur.nextAfter)},
+            {"limit", LIST_PAGE_SIZE}
+        };
+        protocol::Message resp = self->SendReq(req.dump());
+        json j = json::parse(resp.json);
+        if (!j.value("ok", false))
+            return ErrorToStatus(j.value("error", ""));
 
-        di->Size                    = static_cast<UINT16>(totalSize);
-        di->FileInfo.FileAttributes = is_dir ? FILE_ATTRIBUTE_DIRECTORY
-                                              : FILE_ATTRIBUTE_NORMAL;
-        di->FileInfo.FileSize       = size;
-        di->FileInfo.AllocationSize = (size + 4095) & ~uint64_t(4095);
-        di->FileInfo.CreationTime   = ft;
-        di->FileInfo.LastWriteTime  = ft;
-        di->FileInfo.LastAccessTime = ft;
-        di->FileInfo.ChangeTime     = ft;
-        std::memcpy(di->FileNameBuf, wname.c_str(), wname.size() * sizeof(wchar_t));
+        cur.buffer    = j["entries"].get<std::vector<json>>();
+        cur.bufIdx    = 0;
+        cur.hasMore   = j.value("has_more", false);
+        cur.nextAfter = j.value("next_after", "");
 
-        if (!FspFileSystemAddDirInfo(di, Buffer, Length, PBytesTransferred))
-            return STATUS_SUCCESS; // buffer full — WinFsp will call again with Marker
+        seedStatCache(cur.buffer);
+
+        // If Android returned an empty page (shouldn't happen, but guard it)
+        // and claims there's no more data, break to avoid infinite loop.
+        if (cur.buffer.empty()) break;
     }
 
     // Signal end-of-directory.

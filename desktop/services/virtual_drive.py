@@ -1,5 +1,8 @@
 import json
+import os
 import struct
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -9,9 +12,11 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
+from domain.entities.device_info import DeviceEntity
 from domain.enums.virtual_drive_channels import VirtualDriveChannels
 from native import Server
 from services.connectivity import ConnectivityService
+from services.device_info import DeviceInfoService
 
 
 class VirtualDriveService(QObject):
@@ -21,15 +26,26 @@ class VirtualDriveService(QObject):
     VirtualDrive.exe connects and sends framed requests; this service dispatches
     each ``"op"`` to the appropriate TauSync channel and writes a framed response.
 
-    Read and write sessions each use a unique UUID-suffixed TauSync channel to
-    prevent collisions when multiple files are transferred simultaneously:
+    Every request opens its own unique ``{op}_{uuid}`` TauSync meeting word
+    (e.g. ``virtual_drive_stat_a1b2c3d4``). This is required for concurrency:
+    connections are served in parallel, and both the PC's ``_inFlightWords`` and
+    Android's ``inProgressChannels`` guards reject a *second* concurrent
+    ``connect()`` on the same word. Unique words per request guarantee no two
+    concurrent ops ever collide. Android routes each dynamic word to the correct
+    handler via its registry prefix fallback (``channel.startsWith(prefix)``).
 
-    - ``virtual_drive_read_{uuid}``  — data channel per read request
-    - ``virtual_drive_write_{uuid}`` — persistent data channel per write session
+    Each op is a single round-trip on its own channel:
 
-    The negotiation for both happens on the base meeting word
-    (``virtual_drive_read`` / ``virtual_drive_write``); Android learns the UUID
-    from the JSON payload and opens the unique data channel.
+    - Metadata ops (list/stat/create/delete/rename/truncate): write a JSON
+      request line, read a JSON response.
+    - ``volume``: answered locally from the device-info service's latest
+      ``DeviceEntity`` snapshot (no TauSync round-trip) so Explorer shows the
+      phone's real total/free storage.
+    - ``read``: write a ``{path, offset, length}`` request line, then read the
+      file bytes back on the same stream.
+    - ``write``: write a ``{path}`` header line, then stream chunks (forwarded
+      from VirtualDrive.exe ``write`` ops) until ``write_close`` closes the
+      stream — Android sees EOF and renames temp -> final.
 
     Lifecycle is managed externally: ``start()`` on ``device_connected``,
     ``stop()`` on ``device_disconnected``.
@@ -46,7 +62,7 @@ class VirtualDriveService(QObject):
     # Seconds a cached stat/list entry stays valid before a fresh round-trip is
     # forced. Bounds how stale phone-side changes can appear; mutations made
     # through this service invalidate their paths immediately regardless.
-    _CACHE_TTL_SECONDS: float = 5.0
+    _CACHE_TTL_SECONDS: float = 30.0
 
     # Max concurrent VirtualDrive.exe connections served in parallel. Must be
     # >= the C++ client's pipe-pool size so every pooled connection can be
@@ -56,28 +72,46 @@ class VirtualDriveService(QObject):
     def __init__(
             self,
             connectivity: ConnectivityService,
+            device_info: DeviceInfoService,
             parent: QObject | None = None,
     ) -> None:
-        """Initialize with the shared connectivity service.
+        """Initialize with the shared connectivity and device-info services.
 
         Args:
             connectivity: Application-level connectivity service; ``tau`` is
                 read per-call so reconnects are handled transparently.
+            device_info: Application-level device-info service. Its
+                ``device_info_ready`` signal carries the connected
+                :class:`~domain.entities.device_info.DeviceEntity`, whose
+                ``storage_total`` / ``storage_used`` fields back the WinFsp
+                ``GetVolumeInfo`` callback (the ``volume`` op). Because device
+                info is refreshed periodically, the cached entity — and thus the
+                drive's reported free space — stays current without any extra
+                round-trip to the phone.
             parent: Optional parent QObject for Qt memory management.
         """
         super().__init__(parent)
         self._connectivity: ConnectivityService = connectivity
+        self._device_info: DeviceInfoService = device_info
         self._is_running: threading.Event = threading.Event()
+        # Latest connected-device snapshot, refreshed on every device-info read.
+        # Guarded by _device_lock because _on_device_info runs on the Qt event
+        # thread while _op_volume reads it from a pipe-worker thread.
+        self._device_lock: threading.Lock = threading.Lock()
+        self._current_device: DeviceEntity | None = None
+        device_info.device_info_ready.connect(self._on_device_info)
         self._executor: ThreadPoolExecutor | None = None
+        self._process: subprocess.Popen | None = None
         self._lifecycle_lock: threading.Lock = threading.Lock()
         # Active write sessions: virtual path → open TauSync stream. Now that
         # connections are served concurrently, mutations are guarded by a lock.
         self._write_sessions_lock: threading.Lock = threading.Lock()
         self._write_sessions: dict[str, Any] = {}
-        # Short-TTL metadata caches: virtual path → (response_dict, expiry_monotonic).
-        # _stat_cache answers `stat`; _list_cache answers `list`. Both cut the
-        # repeated round-trips WinFsp issues while browsing (root-stat storm,
-        # per-entry stats). Guarded by _cache_lock for safety.
+        # Metadata caches: virtual path → (response_dict, expiry_monotonic).
+        # _stat_cache answers `stat`; _list_cache answers `list`. TTL is 30 s,
+        # covering a full browsing session without re-fetching from Android.
+        # Mutations always call _invalidate() immediately so staleness is bounded.
+        # Guarded by _cache_lock for concurrent pipe-worker access.
         self._cache_lock: threading.Lock = threading.Lock()
         self._stat_cache: dict[str, tuple[dict, float]] = {}
         self._list_cache: dict[str, tuple[dict, float]] = {}
@@ -103,6 +137,12 @@ class VirtualDriveService(QObject):
             # One worker for the accept loop + one per concurrent connection.
             self._executor = ThreadPoolExecutor(max_workers=self._MAX_CONNECTIONS + 1)
             self._executor.submit(self._serve_loop)
+            # Launch the exe inside the lock so _stop() cannot race with process
+            # creation. The exe retries connecting to the pipe server for 30 s,
+            # so starting it after the serve_loop is submitted is safe.
+            self._launch_exe()
+            # Pre-warm root listing so Explorer opens without cold-start latency.
+            threading.Thread(target=self._prefetch_root, daemon=True).start()
 
     def _stop(self) -> None:
         # _stop uses a bare thread (not executor) so it can call shutdown(wait=True)
@@ -111,7 +151,112 @@ class VirtualDriveService(QObject):
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            self._executor.shutdown(wait=True)
+            # Terminate the exe before draining the executor so it cannot send
+            # new ops into a server that is already shutting down.
+            if self._process is not None and self._process.poll() is None:
+                self._process.terminate()
+            self._process = None
+            # Capture the executor reference inside the lock so a concurrent
+            # _start() that swaps self._executor cannot have its fresh pool
+            # shut down by this stop.  Shutdown runs outside the lock so a
+            # racing _start() is never blocked behind it.
+            executor = self._executor
+        executor.shutdown(wait=True, cancel_futures=True)
+
+        # All worker threads have exited — safe to purge shared state so the
+        # next session never sees stale cache entries or dead write streams.
+        with self._write_sessions_lock:
+            for stream in self._write_sessions.values():
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+            self._write_sessions.clear()
+
+        with self._cache_lock:
+            self._stat_cache.clear()
+            self._list_cache.clear()
+
+    # ── Exe management ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _find_exe() -> str:
+        # Frozen (PyInstaller): bundled under sys._MEIPASS.
+        if getattr(sys, 'frozen', False):
+            return os.path.join(
+                sys._MEIPASS, 'native', 'windows', 'virtual_drive', 'VirtualDrive.exe',
+            )
+        # Dev: CMake Release output relative to the desktop/ root.
+        desktop_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(
+            desktop_root, 'native', 'windows', 'virtual_drive',
+            'build', 'Release', 'VirtualDrive.exe',
+        )
+
+    def _launch_exe(self) -> None:
+        # Spawn VirtualDrive.exe without a console window. It polls
+        # \\.\pipe\SyncDoseVDrive for up to 30 s, so the pipe server (already
+        # submitted to the executor above) will be ready before the first retry.
+        # A global mutex inside the exe ensures only one instance ever runs;
+        # a duplicate launch exits immediately without side-effects.
+        exe = self._find_exe()
+        if not os.path.isfile(exe):
+            self.drive_error.emit(f"VirtualDrive.exe not found: {exe}")
+            return
+        try:
+            self._process = subprocess.Popen(
+                [exe],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except OSError as exc:
+            self.drive_error.emit(f"Failed to launch VirtualDrive.exe: {exc}")
+
+    # ── Connect-time prefetch ─────────────────────────────────────────────────
+
+    def _prefetch_root(self) -> None:
+        """Pre-warm the root and immediate subdirectory listings on connect.
+
+        Called on a background thread after :meth:`_launch_exe`.  Waits briefly
+        for VirtualDrive.exe to finish mounting before sending the first request.
+        Caches root entries so the first Explorer open sees no cold-start delay,
+        then fetches each immediate subdirectory (up to 10) so tree-view
+        expansion feels instant too.
+        """
+        time.sleep(2.0)
+        if not self._is_running.is_set():
+            return
+        try:
+            resp, _ = self._op_list({"path": "/"}, b"")
+            if not resp.get("ok"):
+                return
+            subdirs = [
+                e["name"]
+                for e in resp.get("entries", [])
+                if e.get("is_dir") and e.get("name")
+            ]
+            for name in subdirs[:10]:
+                if not self._is_running.is_set():
+                    break
+                self._op_list({"path": f"/{name}"}, b"")
+        except Exception:
+            pass
+
+    # ── Device-info cache ──────────────────────────────────────────────────────
+
+    def _on_device_info(self, entity: object) -> None:
+        """Cache the latest connected-device entity for ``volume`` queries.
+
+        Connected to :attr:`DeviceInfoService.device_info_ready`, which fires on
+        every (periodic) device-info read. Stores the entity under
+        :attr:`_device_lock` so :meth:`_op_volume`, running on a pipe-worker
+        thread, always reads a consistent snapshot.
+
+        Args:
+            entity: The :class:`~domain.entities.device_info.DeviceEntity`
+                emitted by the device-info service.
+        """
+        with self._device_lock:
+            self._current_device = entity if isinstance(entity, DeviceEntity) else None
 
     # ── Pipe server loop ───────────────────────────────────────────────────────
 
@@ -211,7 +356,9 @@ class VirtualDriveService(QObject):
         op = req.get("op", "")
         handlers = {
             "list": self._op_list,
+            "list_page": self._op_list_page,
             "stat": self._op_stat,
+            "volume": self._op_volume,
             "read": self._op_read,
             "write_open": self._op_write_open,
             "write": self._op_write,
@@ -225,6 +372,26 @@ class VirtualDriveService(QObject):
         if handler is None:
             return {"ok": False, "error": f"unknown op: {op}"}, b''
         return handler(req, payload)
+
+    # ── Meeting-word helper ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _unique_word(base: str) -> str:
+        """Return a collision-free meeting word ``{base}_{uuid}``.
+
+        Each request opens its own unique word so concurrent ops never share a
+        meeting word — the PC's ``_inFlightWords`` guard and Android's
+        ``inProgressChannels`` guard both reject a second concurrent
+        ``connect()`` on the same word. Android routes the dynamic word to the
+        correct handler via its registry prefix fallback.
+
+        Args:
+            base: The op's base meeting word (a ``VirtualDriveChannels`` value).
+
+        Returns:
+            ``base`` suffixed with an 8-char hex token unique to this request.
+        """
+        return f"{base}_{uuid.uuid4().hex[:8]}"
 
     # ── Metadata cache helpers ─────────────────────────────────────────────────
 
@@ -253,7 +420,7 @@ class VirtualDriveService(QObject):
                     self._stat_cache.pop(parent, None)
                     self._list_cache.pop(parent, None)
 
-    # ── One-shot ops (fixed meeting word) ──────────────────────────────────────
+    # ── One-shot metadata ops (unique meeting word per request) ────────────────
 
     def _op_list(self, req: dict, _: bytes) -> tuple[dict, bytes]:
         """List directory entries at ``req["path"]``.
@@ -270,9 +437,8 @@ class VirtualDriveService(QObject):
                 return hit[0], b''
 
         tau = self._connectivity.tau
-        with tau.connect(
-                VirtualDriveChannels.VIRTUAL_DRIVE_LIST.value, timeout_seconds=30
-        ) as s:
+        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_LIST.value)
+        with tau.connect(word, timeout_seconds=30) as s:
             s.write_string(json.dumps({"path": path}) + "\n")
             resp = json.loads(s.read_all().decode())
 
@@ -289,6 +455,34 @@ class VirtualDriveService(QObject):
                     self._stat_cache[child] = ({**entry, "ok": True}, expiry)
         return resp, b''
 
+    def _op_list_page(self, req: dict, _: bytes) -> tuple[dict, bytes]:
+        """Return a page of directory entries starting after ``req["after"]``.
+
+        Forwards a ``virtual_drive_list_page_{uuid}`` request to Android, which
+        returns entries sorted by name.  Pass ``req["after"] = None`` for the
+        first page; use the returned ``next_after`` value as ``after`` on the
+        next call to advance the cursor.  ``has_more`` is ``True`` when more
+        entries exist beyond this page.
+
+        Unlike ``_op_list``, this op is *not* cached at the Python layer —
+        caching is done per-FileNode in C++ for the lifetime of the directory
+        handle.
+
+        Args:
+            req: Must contain ``"path"`` (str), optionally ``"after"`` (str|None)
+                 and ``"limit"`` (int, default 200).
+        """
+        tau  = self._connectivity.tau
+        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_LIST_PAGE.value)
+        with tau.connect(word, timeout_seconds=30) as s:
+            s.write_string(json.dumps({
+                "path":  req["path"],
+                "after": req.get("after"),   # None → JSON null → first page
+                "limit": req.get("limit", 200),
+            }) + "\n")
+            resp = json.loads(s.read_all().decode())
+        return resp, b''
+
     def _op_stat(self, req: dict, _: bytes) -> tuple[dict, bytes]:
         """Return metadata for the file or directory at ``req["path"]``.
 
@@ -303,7 +497,8 @@ class VirtualDriveService(QObject):
                 return hit[0], b''
 
         tau = self._connectivity.tau
-        with tau.connect(VirtualDriveChannels.VIRTUAL_DRIVE_STAT.value, timeout_seconds=30) as s:
+        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_STAT.value)
+        with tau.connect(word, timeout_seconds=30) as s:
             s.write_string(json.dumps({"path": path}) + "\n")
             resp = json.loads(s.read_all().decode())
 
@@ -312,12 +507,35 @@ class VirtualDriveService(QObject):
                 self._stat_cache[path] = (resp, time.monotonic() + self._CACHE_TTL_SECONDS)
         return resp, b''
 
+    def _op_volume(self, _req: dict, _: bytes) -> tuple[dict, bytes]:
+        """Report the connected device's storage for WinFsp ``GetVolumeInfo``.
+
+        Answers from the cached :class:`DeviceEntity` populated by the
+        device-info service (refreshed periodically) — no TauSync round-trip.
+        ``storage_total`` / ``storage_used`` are decimal GB, so values are
+        scaled back to bytes; ``free = total - used``.
+
+        Returns:
+            ``({"ok": True, "total": <bytes>, "free": <bytes>}, b'')`` when a
+            device snapshot is available, else ``({"ok": False}, b'')`` so the
+            VirtualDrive.exe caller falls back to its placeholder capacity until
+            the first device-info read completes.
+        """
+        gb_to_bytes = 1000 ** 3
+        with self._device_lock:
+            device = self._current_device
+        if device is None:
+            return {"ok": False}, b''
+        total_bytes = int(device.storage_total * gb_to_bytes)
+        free_gb = max(device.storage_total - device.storage_used, 0.0)
+        free_bytes = int(free_gb * gb_to_bytes)
+        return {"ok": True, "total": total_bytes, "free": free_bytes}, b''
+
     def _op_create(self, req: dict, _: bytes) -> tuple[dict, bytes]:
         """Create a file or directory at ``req["path"]``."""
         tau = self._connectivity.tau
-        with tau.connect(
-                VirtualDriveChannels.VIRTUAL_DRIVE_CREATE.value, timeout_seconds=30
-        ) as s:
+        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_CREATE.value)
+        with tau.connect(word, timeout_seconds=30) as s:
             s.write_string(json.dumps({
                 "path": req["path"],
                 "is_dir": req.get("is_dir", False),
@@ -329,9 +547,8 @@ class VirtualDriveService(QObject):
     def _op_delete(self, req: dict, _: bytes) -> tuple[dict, bytes]:
         """Delete the file or directory at ``req["path"]``."""
         tau = self._connectivity.tau
-        with tau.connect(
-                VirtualDriveChannels.VIRTUAL_DRIVE_DELETE.value, timeout_seconds=30
-        ) as s:
+        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_DELETE.value)
+        with tau.connect(word, timeout_seconds=30) as s:
             s.write_string(json.dumps({"path": req["path"]}) + "\n")
             resp = json.loads(s.read_all().decode())
         self._invalidate(req["path"])
@@ -340,9 +557,8 @@ class VirtualDriveService(QObject):
     def _op_rename(self, req: dict, _: bytes) -> tuple[dict, bytes]:
         """Rename or move ``req["from"]`` to ``req["to"]``."""
         tau = self._connectivity.tau
-        with tau.connect(
-                VirtualDriveChannels.VIRTUAL_DRIVE_RENAME.value, timeout_seconds=30
-        ) as s:
+        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_RENAME.value)
+        with tau.connect(word, timeout_seconds=30) as s:
             s.write_string(json.dumps({
                 "from": req["from"],
                 "to": req["to"],
@@ -354,9 +570,8 @@ class VirtualDriveService(QObject):
     def _op_truncate(self, req: dict, _: bytes) -> tuple[dict, bytes]:
         """Resize ``req["path"]`` to ``req["new_size"]`` bytes."""
         tau = self._connectivity.tau
-        with tau.connect(
-                VirtualDriveChannels.VIRTUAL_DRIVE_TRUNCATE.value, timeout_seconds=30
-        ) as s:
+        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_TRUNCATE.value)
+        with tau.connect(word, timeout_seconds=30) as s:
             s.write_string(json.dumps({
                 "path": req["path"],
                 "new_size": req["new_size"],
@@ -365,68 +580,44 @@ class VirtualDriveService(QObject):
         self._invalidate(req["path"])
         return resp, b''
 
-    # ── Read (negotiate on base channel → data on UUID channel) ───────────────
+    # ── Read (single unique channel: request line → byte stream) ───────────────
 
     def _op_read(self, req: dict, _: bytes) -> tuple[dict, bytes]:
         """Read ``req["length"]`` bytes from ``req["path"]`` at ``req["offset"]``.
 
-        Two-phase protocol:
-
-        1. Negotiate on ``virtual_drive_read`` — tell Android the UUID so it
-           opens the unique data channel.
-        2. Receive file bytes on ``virtual_drive_read_{uuid}``.
-
-        Two concurrent reads each open ``virtual_drive_read`` independently;
-        TauSync pairs each with its own Android worker and its own channel ID,
-        so there is no collision on the negotiation channel either.
+        One round-trip on a unique ``virtual_drive_read_{uuid}`` channel: write a
+        ``{path, offset, length}`` request line, then read the file bytes back on
+        the same stream until Android closes it (EOF). The unique word means
+        concurrent reads never collide on a shared meeting word.
         """
         tau = self._connectivity.tau
-        uid = uuid.uuid4().hex[:8]
-
-        # Phase 1 — announce session; Android opens the UUID data channel.
-        with tau.connect(
-                VirtualDriveChannels.VIRTUAL_DRIVE_READ.value, timeout_seconds=30
-        ) as neg:
-            neg.write_string(json.dumps({
+        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_READ.value)
+        with tau.connect(word, timeout_seconds=30) as s:
+            s.write_string(json.dumps({
                 "path": req["path"],
                 "offset": req["offset"],
                 "length": req["length"],
-                "uuid": uid,
             }) + "\n")
-            neg.read_all()  # Android's "ready" ack
-
-        # Phase 2 — receive bytes on the unique, collision-free channel.
-        with tau.connect(
-                f"{VirtualDriveChannels.VIRTUAL_DRIVE_READ.value}_{uid}"
-        ) as data:
-            file_bytes = data.read_all()
-
+            file_bytes = s.read_all()
         return {"ok": True}, file_bytes
 
-    # ── Write (negotiate on base channel → persistent UUID data stream) ────────
+    # ── Write (single unique channel: header line → held byte stream) ──────────
 
     def _op_write_open(self, req: dict, _: bytes) -> tuple[dict, bytes]:
         """Open a write session for ``req["path"]``.
 
-        Negotiates a UUID with Android on ``virtual_drive_write``, then opens
-        and holds a persistent stream on ``virtual_drive_write_{uuid}``.
-        The stream is stored in ``_write_sessions`` keyed by virtual path and
-        used by subsequent ``write`` ops until ``write_close`` is received.
+        Opens a unique ``virtual_drive_write_{uuid}`` stream and writes a
+        ``{path}`` header line so Android knows the target before any bytes
+        arrive. The stream is then *held open* in ``_write_sessions`` keyed by
+        virtual path and fed by subsequent ``write`` ops until ``write_close``.
+        The unique word means concurrent write sessions never collide.
         """
         tau = self._connectivity.tau
-        uid = uuid.uuid4().hex[:8]
+        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_WRITE.value)
 
-        # Announce session; Android opens virtual_drive_write_{uid}.
-        with tau.connect(
-                VirtualDriveChannels.VIRTUAL_DRIVE_WRITE.value, timeout_seconds=30
-        ) as neg:
-            neg.write_string(json.dumps({"path": req["path"], "uuid": uid}) + "\n")
-            neg.read_all()  # Android ack
-
-        # Open and HOLD the data stream for this write session.
-        stream = tau.connect(
-            f"{VirtualDriveChannels.VIRTUAL_DRIVE_WRITE.value}_{uid}"
-        ).__enter__()
+        # Open and HOLD the stream; the header line tells Android the target path.
+        stream = tau.connect(word, timeout_seconds=30)
+        stream.write_string(json.dumps({"path": req["path"]}) + "\n")
         with self._write_sessions_lock:
             self._write_sessions[req["path"]] = stream
         return {"ok": True}, b''
@@ -457,7 +648,7 @@ class VirtualDriveService(QObject):
             # write_open was never called or already closed — no-op.
             return {"ok": True}, b''
         # Android sees EOF when the stream closes and renames temp → final path.
-        stream.__exit__(None, None, None)
+        stream.close()
         # The file's size/mtime changed and its parent listing now includes it.
         self._invalidate(req["path"])
         return {"ok": True}, b''

@@ -3,13 +3,14 @@
   "description": "TauSync meeting-word identifiers for the virtual drive protocol. PC initiates all channels; Android responds. Both sides call tau.connect() with the exact same string.",
   "type": "string",
   "members": [
-    { "name": "VIRTUAL_DRIVE_LIST",     "value": "virtual_drive_list",     "description": "PC requests a directory listing at a given path. Fixed meeting word." },
-    { "name": "VIRTUAL_DRIVE_STAT",     "value": "virtual_drive_stat",     "description": "PC requests file or folder metadata (size, mtime, is_dir). Fixed meeting word." },
-    { "name": "VIRTUAL_DRIVE_READ",     "value": "virtual_drive_read",     "description": "Base prefix for read sessions. Negotiation channel: PC sends {path, offset, length, uuid}; actual data flows on virtual_drive_read_{uuid}." },
-    { "name": "VIRTUAL_DRIVE_WRITE",    "value": "virtual_drive_write",    "description": "Base prefix for write sessions. Negotiation channel: PC sends {path, uuid}; actual data streams on virtual_drive_write_{uuid}." },
-    { "name": "VIRTUAL_DRIVE_CREATE",   "value": "virtual_drive_create",   "description": "PC requests creation of a file or directory. Fixed meeting word." },
-    { "name": "VIRTUAL_DRIVE_DELETE",   "value": "virtual_drive_delete",   "description": "PC requests deletion of a file or directory. Fixed meeting word." },
-    { "name": "VIRTUAL_DRIVE_RENAME",   "value": "virtual_drive_rename",   "description": "PC requests rename or move of a file or directory. Fixed meeting word." },
-    { "name": "VIRTUAL_DRIVE_TRUNCATE", "value": "virtual_drive_truncate", "description": "PC requests a file size change (truncate or extend). Fixed meeting word." }
+    { "name": "VIRTUAL_DRIVE_LIST",     "value": "virtual_drive_list",     "description": "Base prefix for directory listing ops. Meeting word: virtual_drive_list_{uuid8}. PC sends {path}; Android responds with entries array." },
+    { "name": "VIRTUAL_DRIVE_STAT",     "value": "virtual_drive_stat",     "description": "Base prefix for metadata (stat) ops. Meeting word: virtual_drive_stat_{uuid8}. PC sends {path}; Android responds with entry fields." },
+    { "name": "VIRTUAL_DRIVE_READ",     "value": "virtual_drive_read",     "description": "Base prefix for read ops. Meeting word: virtual_drive_read_{uuid8}. PC sends {path, offset, length}\\n; Android streams file bytes back then closes." },
+    { "name": "VIRTUAL_DRIVE_WRITE",    "value": "virtual_drive_write",    "description": "Base prefix for write sessions. Meeting word: virtual_drive_write_{uuid8}. PC sends {path}\\n header then streams bytes until channel close; Android stores to temp file then finalizes." },
+    { "name": "VIRTUAL_DRIVE_CREATE",   "value": "virtual_drive_create",   "description": "Base prefix for create ops. Meeting word: virtual_drive_create_{uuid8}. PC sends {path, is_dir}; Android creates file or directory." },
+    { "name": "VIRTUAL_DRIVE_DELETE",   "value": "virtual_drive_delete",   "description": "Base prefix for delete ops. Meeting word: virtual_drive_delete_{uuid8}. PC sends {path}; Android deletes file or directory." },
+    { "name": "VIRTUAL_DRIVE_RENAME",   "value": "virtual_drive_rename",   "description": "Base prefix for rename ops. Meeting word: virtual_drive_rename_{uuid8}. PC sends {from, to}; Android renames or moves the entry." },
+    { "name": "VIRTUAL_DRIVE_TRUNCATE",   "value": "virtual_drive_truncate",   "description": "Base prefix for truncate ops. Meeting word: virtual_drive_truncate_{uuid8}. PC sends {path, new_size}; Android resizes the file." },
+    { "name": "VIRTUAL_DRIVE_LIST_PAGE", "value": "virtual_drive_list_page", "description": "Base prefix for paginated listing ops. Meeting word: virtual_drive_list_page_{uuid8}. PC sends {path, after, limit}; Android responds with {ok, entries, has_more, next_after}. Entries are sorted by name; 'after' is the last name received (null for first page)." }
   ]
 }

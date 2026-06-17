@@ -22,6 +22,11 @@
          such as Android/data/com.whatsapp/…/Private/ that MediaStore never indexes.
          Play Store requires a policy declaration for this permission — see publish notes. -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- Resolve friendly app labels for the virtual-drive per-app folders. On API 30+
+         PackageManager.getApplicationInfo() throws NameNotFoundException for third-party
+         packages without this; Play Store requires a declared justification (like
+         MANAGE_EXTERNAL_STORAGE above) — see publish notes. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

@@ -28,7 +28,7 @@ def configure_logging() -> None:
     )
 
     # ── Rotating file handler ─────────────────────────────────────────────────
-    log_path = Path(__file__).resolve().parent.parent / "data" / "syncdose.log"
+    log_path = Path(__file__).parent.parent / "data" / "syncdose.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     file_handler = logging.handlers.RotatingFileHandler(
         log_path,

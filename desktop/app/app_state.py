@@ -68,6 +68,7 @@ class AppState:
         )
         self.virtual_drive_service: Final[VirtualDriveService] = VirtualDriveService(
             connectivity=self.connectivity_service,
+            device_info=self.device_info_service,
         )
 
         # Wire service lifecycles to device connection events.
@@ -75,14 +76,14 @@ class AppState:
         # PhoneRequestService can dispatch receive_manifest() on the first poll.
         self.device_viewmodel.device_connected.connect(self.backup_service.start)
         self.device_viewmodel.device_connected.connect(self.phone_request_service.start)
+        self.device_viewmodel.device_connected.connect(self.virtual_drive_service.start)
+
         self.device_viewmodel.device_disconnected.connect(self.backup_service.stop)
         self.device_viewmodel.device_disconnected.connect(self.phone_request_service.stop)
-
+        self.device_viewmodel.device_disconnected.connect(self.virtual_drive_service.stop)
         # Wire VirtualDriveService lifecycle to device connection events.
         # start() opens \\.\pipe\SyncDoseVDrive and begins serving VirtualDrive.exe.
         # stop() shuts the executor down after all in-flight ops complete.
-        self.device_viewmodel.device_connected.connect(self.virtual_drive_service.start)
-        self.device_viewmodel.device_disconnected.connect(self.virtual_drive_service.stop)
 
 
 app_state: Final[AppState] = AppState()
