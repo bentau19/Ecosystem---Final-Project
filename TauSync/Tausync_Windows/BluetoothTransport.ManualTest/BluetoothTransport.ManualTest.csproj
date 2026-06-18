@@ -1,12 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- Windows 10 build 19041 target so the WinRT Bluetooth/RFCOMM APIs used by
-         BluetoothTransport and BleAdvertiser are projected and reachable. -->
+    <OutputType>Exe</OutputType>
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TauSync.Lib\TauSync.Lib.csproj" />
+  </ItemGroup>
 
 </Project>

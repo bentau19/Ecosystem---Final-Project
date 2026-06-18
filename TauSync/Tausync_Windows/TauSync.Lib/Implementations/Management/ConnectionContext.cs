@@ -63,6 +63,14 @@ namespace TauSync.Implementations.Management
 
         private readonly ITransport _wifiTransport;
 
+        /// <summary>
+        /// Number of transports currently brought up by the app (intentional connects minus
+        /// intentional disconnects). Unexpected drops do NOT change this count — they
+        /// reconnect under the hood — so the session only ends when the last transport is
+        /// explicitly disconnected. See <see cref="NotifyTransportDisconnected"/>.
+        /// </summary>
+        private int _activeTransportCount;
+
         private ConnectionContext()
         {
             _wifiTransport = new SocketTransport();
@@ -105,6 +113,29 @@ namespace TauSync.Implementations.Management
             }
             _routingMap.Clear();
             _targetMap.Clear();
+        }
+
+        /// <summary>
+        /// Records that a transport has been intentionally brought up. Paired with
+        /// <see cref="NotifyTransportDisconnected"/> on the matching explicit disconnect.
+        /// Reconnects after an unexpected drop do NOT call this — the transport never
+        /// logically left the session.
+        /// </summary>
+        public void NotifyTransportConnected() => Interlocked.Increment(ref _activeTransportCount);
+
+        /// <summary>
+        /// Records that a transport has been intentionally torn down. Only when the LAST
+        /// live transport disconnects (count reaches zero) are the open channels aborted and
+        /// the session state reset. Disconnecting one transport while another stays up (e.g.
+        /// dropping Wi-Fi but keeping Bluetooth) leaves that transport's channels untouched.
+        /// </summary>
+        public void NotifyTransportDisconnected()
+        {
+            if (Interlocked.Decrement(ref _activeTransportCount) <= 0)
+            {
+                AbortAllChannels();
+                Reset();
+            }
         }
 
         /// <summary>

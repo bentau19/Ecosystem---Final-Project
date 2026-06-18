@@ -51,6 +51,17 @@ public interface ITransport extends AutoCloseable {
     boolean isServerMode();
 
     /**
+     * @return the physical medium this transport carries bytes over
+     */
+    TransportKind getTransportType();
+
+    /**
+     * Identifies which physical medium a transport carries bytes over.
+     * Lets higher layers (e.g. HybridConnectionManager) tell the two transports apart.
+     */
+    enum TransportKind { WIFI, BLUETOOTH }
+
+    /**
      * Registers the listener that receives unhandled control frames.
      *
      * @param listener the callback, or null to clear

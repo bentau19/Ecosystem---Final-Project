@@ -38,6 +38,23 @@ public final class CoreConfig {
     /** Delay between TCP connection retries in client mode. */
     public static final int CLIENT_CONNECT_RETRY_DELAY_SECONDS = 2;
 
+    /**
+     * First delay before retrying after an unexpected transport drop. Each subsequent
+     * retry doubles the wait up to {@link #RECONNECT_MAX_DELAY_MS}. Reconnect keeps
+     * retrying until it succeeds or the app explicitly disconnects — an unexpected drop
+     * never ends the session.
+     */
+    public static final int RECONNECT_INITIAL_DELAY_MS = 1_000;
+
+    /** Cap on the exponential reconnect back-off between retry attempts. */
+    public static final int RECONNECT_MAX_DELAY_MS = 30_000;
+
+    /**
+     * Max time a queued send waits for the transport to come back after an unexpected
+     * drop before failing. Lets a write issued mid-reconnect resume transparently.
+     */
+    public static final int SEND_RECONNECT_WAIT_MS = 30_000;
+
     /** Max queued REQs per word before the service is registered. */
     public static final int MAX_PENDING_DISCOVERY_PER_WORD = 64;
 
@@ -53,4 +70,24 @@ public final class CoreConfig {
      * multi-gigabyte allocation and OOM the receiver.
      */
     public static final int MAX_PAYLOAD_SIZE = 16 * 1024 * 1024;
+
+    // ── Bluetooth transport (must match Windows CoreConfig) ──────────────
+
+    /** BLE service UUID advertised by Windows for first-time discovery/pairing. */
+    public static final String BLE_SERVICE_UUID = "12345678-1234-5678-1234-56789abcde01";
+
+    /** RFCOMM service UUID both platforms use for SDP lookup of the data channel. */
+    public static final String RFCOMM_SERVICE_UUID = "12345678-1234-5678-1234-56789abcde02";
+
+    /** Max time to wait for an RFCOMM connection to establish. */
+    public static final int BT_CONNECT_TIMEOUT_MS = 15_000;
+
+    /** Max time the Wi-Fi client waits for SESSION_JOIN_ACK after joining. */
+    public static final int SESSION_JOIN_ACK_TIMEOUT_MS = 10_000;
+
+    /**
+     * Guide threshold (64 KB) the app uses to pick the Eco (BT) vs Performance (Wi-Fi)
+     * manager per channel in Hybrid mode. HybridConnectionManager never routes on this.
+     */
+    public static final int HYBRID_SMALL_THRESHOLD_BYTES = 65_536;
 }

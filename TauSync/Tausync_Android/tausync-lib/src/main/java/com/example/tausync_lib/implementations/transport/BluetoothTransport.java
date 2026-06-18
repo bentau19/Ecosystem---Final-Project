@@ -1,5 +1,14 @@
 package com.example.tausync_lib.implementations.transport;
 
+import android.Manifest;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothSocket;
+import android.content.Context;
+
+import androidx.annotation.RequiresPermission;
+
 import com.example.tausync_lib.core.CoreConfig;
 import com.example.tausync_lib.implementations.management.ConnectionContext;
 import com.example.tausync_lib.implementations.protocol.ProtocolHandler;
@@ -9,36 +18,35 @@ import com.example.tausync_lib.interfaces.ITransport;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * TCP socket transport. Protocol-agnostic: reads frames via {@link IProtocolHandler} only.
+ * Bluetooth Classic (RFCOMM) transport. Protocol-agnostic: reads frames via
+ * {@link IProtocolHandler} only, exactly like {@link SocketTransport}.
+ * The RFCOMM byte stream is a drop-in replacement for the TCP stream, so the framing,
+ * dispatch, and send-lock logic are identical to the Wi-Fi transport.
  *
- * <p>Server mode ({@code connect(null)}/{@code connect("")}): binds to
- * {@code 0.0.0.0:DefaultPort}, accepts one client, then stops listening.
- * Client mode: retries every {@link CoreConfig#CLIENT_CONNECT_RETRY_DELAY_SECONDS}
- * until success or disposal.
+ * <p>Android always acts as the RFCOMM <b>client</b>: it connects out to a paired Windows
+ * device by MAC address. Server mode is not supported here — Windows is always the RFCOMM
+ * server. Requires {@link Manifest.permission#BLUETOOTH_CONNECT} (API 31+).
  *
- * <p>Matches C# SocketTransport.
+ * <p>Matches C# BluetoothTransport.
  */
-public class SocketTransport implements ITransport {
+public class BluetoothTransport implements ITransport {
 
-    private Socket socket;
-    private ServerSocket serverSocket;
+    private final Context context;
+    private final IProtocolHandler protocolHandler;
+
+    private BluetoothSocket btSocket;
     private InputStream inputStream;
     private OutputStream outputStream;
     private volatile boolean connected;
     private volatile boolean disposed;
-    private volatile boolean serverMode;
     private Thread receiveThread;
-    private Thread acceptThread;
     private Thread reconnectThread;
     private final Semaphore sendLock = new Semaphore(1);
-    private final IProtocolHandler protocolHandler;
     private OnDataReceivedListener dataReceivedListener;
 
     /** True only while an explicit {@link #disconnect()} is tearing the transport down — distinguishes a deliberate close (ends the session) from an unexpected drop (triggers reconnect). */
@@ -47,8 +55,8 @@ public class SocketTransport implements ITransport {
     /** True once this transport has been counted in {@link ConnectionContext}, so the matching disconnect decrements exactly once. */
     private volatile boolean counted;
 
-    /** Peer host saved on connect so the reconnect loop (client mode) can re-dial it. */
-    private volatile String lastTargetId;
+    /** Peer MAC saved on connect so the reconnect loop can re-open the RFCOMM socket. */
+    private volatile String lastDeviceAddress;
 
     /**
      * Completed while a live connection exists; replaced with an incomplete future during a
@@ -57,30 +65,27 @@ public class SocketTransport implements ITransport {
      */
     private volatile CompletableFuture<Void> sendGate = new CompletableFuture<>();
 
-    private int port = CoreConfig.DEFAULT_PORT;
-
-    public SocketTransport() {
-        this(null);
+    public BluetoothTransport(Context context) {
+        this(context, null);
     }
 
     /**
+     * @param context        used to obtain the {@link BluetoothManager}
      * @param protocolHandler framing handler; defaults to {@link ProtocolHandler}
      */
-    public SocketTransport(IProtocolHandler protocolHandler) {
+    public BluetoothTransport(Context context, IProtocolHandler protocolHandler) {
+        this.context = context.getApplicationContext();
         this.protocolHandler = protocolHandler != null ? protocolHandler : new ProtocolHandler();
     }
 
-    public int getPort() { return port; }
-    public void setPort(int port) { this.port = port; }
-
     @Override
     public boolean isServerMode() {
-        return serverMode;
+        return false; // Android is always the RFCOMM client.
     }
 
     @Override
     public TransportKind getTransportType() {
-        return TransportKind.WIFI;
+        return TransportKind.BLUETOOTH;
     }
 
     @Override
@@ -88,10 +93,22 @@ public class SocketTransport implements ITransport {
         return connect(targetId, null);
     }
 
+    /**
+     * Connects to the paired Windows server identified by its Bluetooth MAC address.
+     *
+     * @param targetId       peer Bluetooth MAC address (e.g. "AA:BB:CC:DD:EE:FF")
+     * @param timeoutSeconds max seconds to wait for the RFCOMM connect; null uses
+     *                       {@link CoreConfig#BT_CONNECT_TIMEOUT_MS}
+     */
     @Override
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     public CompletableFuture<Void> connect(String targetId, Integer timeoutSeconds) {
         if (disposed) {
             return CompletableFuture.failedFuture(new IllegalStateException("Transport disposed"));
+        }
+        if (targetId == null || targetId.trim().isEmpty()) {
+            return CompletableFuture.failedFuture(new UnsupportedOperationException(
+                    "BluetoothTransport is client-only; targetId must be a peer MAC address."));
         }
         if (connected) {
             disconnect();
@@ -102,136 +119,81 @@ public class SocketTransport implements ITransport {
         intentionalClose = false;
         sendGate = new CompletableFuture<>();
 
-        boolean wantServer = targetId == null || targetId.trim().isEmpty();
-        serverMode = wantServer;
-
-        if (wantServer) {
-            return startListening(timeoutSeconds);
-        }
-        lastTargetId = targetId.trim();
-        return connectToServerWithRetry(lastTargetId, timeoutSeconds);
+        long timeoutMs = timeoutSeconds != null
+                ? timeoutSeconds * 1000L
+                : CoreConfig.BT_CONNECT_TIMEOUT_MS;
+        lastDeviceAddress = targetId.trim();
+        return connectAsync(lastDeviceAddress, timeoutMs);
     }
 
-    // ── Server Mode ───────────────────────────────────────────────────
-
-    private CompletableFuture<Void> startListening(Integer timeoutSeconds) {
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private CompletableFuture<Void> connectAsync(String deviceAddress, long timeoutMs) {
         CompletableFuture<Void> connectionFuture = new CompletableFuture<>();
 
-        acceptThread = new Thread(() -> {
+        Thread connectThread = new Thread(() -> {
             try {
-                serverSocket = new ServerSocket(port);
-                if (timeoutSeconds != null) {
-                    // accept() throws SocketTimeoutException when no client arrives in time,
-                    // mirroring the C# server-mode _timeoutCts behaviour.
-                    serverSocket.setSoTimeout(timeoutSeconds * 1000);
-                }
-                socket = serverSocket.accept();
-                inputStream = socket.getInputStream();
-                outputStream = socket.getOutputStream();
+                openRfcommSocket(deviceAddress);
+                inputStream = btSocket.getInputStream();
+                outputStream = btSocket.getOutputStream();
                 connected = true;
                 startReceiveLoop();
                 markInitialConnection();
                 connectionFuture.complete(null);
-            } catch (java.net.SocketTimeoutException e) {
+            } catch (Exception e) {
+                closeQuietly(btSocket);
+                connectionFuture.completeExceptionally(e);
+            }
+        }, "TauSync-BT-Connect");
+        connectThread.setDaemon(true);
+        connectThread.start();
+
+        // btSocket.connect() blocks with no built-in timeout. Closing the socket from this
+        // watchdog unblocks it, so a black-holed peer cannot hang the caller forever.
+        startConnectWatchdog(connectionFuture, timeoutMs);
+        return connectionFuture;
+    }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private void openRfcommSocket(String deviceAddress) throws IOException {
+        BluetoothManager manager =
+                (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
+        BluetoothAdapter adapter = manager != null ? manager.getAdapter() : null;
+        if (adapter == null) {
+            throw new IOException("Bluetooth not available on this device.");
+        }
+
+        BluetoothDevice device = adapter.getRemoteDevice(deviceAddress);
+        if (device.getBondState() != BluetoothDevice.BOND_BONDED) {
+            // TODO(Phase 5): trigger BleDiscovery to re-pair, then retry. Until then the
+            // caller must pair the device (system settings / CompanionDeviceManager) first.
+            throw new IOException("Device " + deviceAddress + " is not bonded; pair it before connecting.");
+        }
+
+        btSocket = device.createRfcommSocketToServiceRecord(
+                UUID.fromString(CoreConfig.RFCOMM_SERVICE_UUID));
+        // Active discovery dramatically slows down an RFCOMM connect — always cancel it first.
+        adapter.cancelDiscovery();
+        btSocket.connect(); // blocks until connected or throws
+    }
+
+    private void startConnectWatchdog(CompletableFuture<Void> connectionFuture, long timeoutMs) {
+        Thread watchdog = new Thread(() -> {
+            try {
+                Thread.sleep(timeoutMs);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            if (!connectionFuture.isDone()) {
+                closeQuietly(btSocket); // unblocks btSocket.connect()
                 connectionFuture.completeExceptionally(
                         new java.util.concurrent.TimeoutException(
-                                "No client connected within the timeout period."));
-            } catch (Exception e) {
-                if (!disposed) {
-                    connectionFuture.completeExceptionally(e);
-                }
-            } finally {
-                closeServerSocket();
+                                "Bluetooth connect timed out after " + timeoutMs + " ms."));
             }
-        }, "TauSync-Accept");
-        acceptThread.setDaemon(true);
-        acceptThread.start();
-
-        return connectionFuture;
+        }, "TauSync-BT-ConnectWatchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
     }
-
-    // ── Client Mode ───────────────────────────────────────────────────
-
-    private CompletableFuture<Void> connectToServerWithRetry(String host, Integer timeoutSeconds) {
-        CompletableFuture<Void> connectionFuture = new CompletableFuture<>();
-        int delayMs = CoreConfig.CLIENT_CONNECT_RETRY_DELAY_SECONDS * 1000;
-        // Overall deadline for the whole retry loop; null = retry forever (legacy behaviour).
-        final Long deadlineNanos = timeoutSeconds != null
-                ? System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(timeoutSeconds)
-                : null;
-
-        Thread retryThread = new Thread(() -> {
-            while (!connectionFuture.isDone() && !disposed) {
-                if (deadlineNanos != null && System.nanoTime() >= deadlineNanos) {
-                    connectionFuture.completeExceptionally(
-                            new java.util.concurrent.TimeoutException(
-                                    "Failed to connect within the timeout period."));
-                    return;
-                }
-                try {
-                    Socket attempt = new Socket();
-                    // Bound each TCP connect attempt by the remaining budget so a single
-                    // attempt to a black-holed IP cannot overrun the caller's timeout.
-                    int attemptTimeoutMs = remainingMillis(deadlineNanos);
-                    attempt.connect(new java.net.InetSocketAddress(host, port), attemptTimeoutMs);
-                    if (connectionFuture.isDone() || disposed) {
-                        attempt.close();
-                        return;
-                    }
-
-                    socket = attempt;
-                    inputStream = socket.getInputStream();
-                    outputStream = socket.getOutputStream();
-                    connected = true;
-                    startReceiveLoop();
-                    markInitialConnection();
-                    connectionFuture.complete(null);
-                    return;
-                } catch (IOException e) {
-                    if (disposed) {
-                        connectionFuture.completeExceptionally(
-                                new IllegalStateException("Transport disposed during connect"));
-                        return;
-                    }
-                    if (deadlineNanos != null && System.nanoTime() >= deadlineNanos) {
-                        connectionFuture.completeExceptionally(
-                                new java.util.concurrent.TimeoutException(
-                                        "Failed to connect within the timeout period."));
-                        return;
-                    }
-                    try {
-                        Thread.sleep(delayMs);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        connectionFuture.completeExceptionally(ie);
-                        return;
-                    }
-                } catch (Exception e) {
-                    connectionFuture.completeExceptionally(e);
-                    return;
-                }
-            }
-        }, "TauSync-ConnectRetry");
-        retryThread.setDaemon(true);
-        retryThread.start();
-
-        return connectionFuture;
-    }
-
-    /**
-     * Milliseconds remaining until the deadline, clamped to int.
-     *
-     * @param deadlineNanos absolute deadline from {@link System#nanoTime()}, or null for no limit
-     * @return remaining millis (>= 1), or 0 meaning "no timeout" when deadline is null
-     */
-    private static int remainingMillis(Long deadlineNanos) {
-        if (deadlineNanos == null) return 0; // Socket.connect(addr, 0) = infinite timeout
-        long ms = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime());
-        if (ms <= 0) return 1; // already past deadline; fail fast on the next attempt
-        return ms > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) ms;
-    }
-
-    // ── Send ──────────────────────────────────────────────────────────
 
     @Override
     public CompletableFuture<Void> sendRaw(byte[] data) {
@@ -287,7 +249,7 @@ public class SocketTransport implements ITransport {
 
     @Override
     public boolean isConnected() {
-        return connected && !disposed && socket != null && !socket.isClosed();
+        return connected && !disposed && btSocket != null && btSocket.isConnected();
     }
 
     @Override
@@ -298,7 +260,7 @@ public class SocketTransport implements ITransport {
     // ── Receive Loop ──────────────────────────────────────────────────
 
     private void startReceiveLoop() {
-        receiveThread = new Thread(() -> receiveLoop(), "TauSync-Receive");
+        receiveThread = new Thread(this::receiveLoop, "TauSync-BT-Receive");
         receiveThread.setDaemon(true);
         receiveThread.start();
     }
@@ -394,8 +356,7 @@ public class SocketTransport implements ITransport {
 
         closeQuietly(inputStream);
         closeQuietly(outputStream);
-        closeQuietly(socket);
-        closeServerSocket(); // unblocks a reconnect accept(), if one is in progress
+        closeQuietly(btSocket);
 
         // Decrement the transport count exactly once. Channels are aborted (synthetic FIN so
         // blocked read() calls return EOF) and state reset only when the count hits zero.
@@ -414,14 +375,14 @@ public class SocketTransport implements ITransport {
 
         inputStream = null;
         outputStream = null;
-        socket = null;
+        btSocket = null;
     }
 
     /**
-     * Handles the receive loop exiting on a broken link. An explicit disconnect ends the
-     * session; an unexpected drop instead tears down only the dead socket — keeping the
-     * channels, handlers, and transport count intact — and starts reconnecting so the session
-     * resumes transparently.
+     * Handles the receive loop exiting on a broken RFCOMM link. An explicit disconnect ends
+     * the session; an unexpected drop instead tears down only the dead socket — keeping the
+     * channels, handlers, and transport count intact — and re-opens the RFCOMM connection so
+     * the session resumes transparently.
      */
     private void handleConnectionDropped() {
         if (intentionalClose || disposed) return;
@@ -433,38 +394,40 @@ public class SocketTransport implements ITransport {
 
         closeQuietly(inputStream);
         closeQuietly(outputStream);
-        closeQuietly(socket);
+        closeQuietly(btSocket);
         inputStream = null;
         outputStream = null;
-        socket = null;
+        btSocket = null;
 
         startReconnectLoop();
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private void startReconnectLoop() {
-        reconnectThread = new Thread(this::reconnectLoop, "TauSync-Reconnect");
+        reconnectThread = new Thread(this::reconnectLoop, "TauSync-BT-Reconnect");
         reconnectThread.setDaemon(true);
         reconnectThread.start();
     }
 
     /**
-     * Retries the connection with exponential back-off until it succeeds or an explicit
-     * disconnect stops it. On success it restarts the receive loop and opens the send gate,
-     * all on the same channel handlers — the layers above never see the gap.
+     * Re-opens the RFCOMM connection with exponential back-off until it succeeds or an
+     * explicit disconnect stops it. On success it restarts the receive loop and opens the send
+     * gate, all on the same channel handlers — the layers above never see the gap.
      */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private void reconnectLoop() {
         int delayMs = CoreConfig.RECONNECT_INITIAL_DELAY_MS;
         while (!disposed && !intentionalClose) {
             try {
-                boolean reconnected = serverMode ? tryReListen() : tryReconnectClient();
-                if (reconnected) {
-                    connected = true;
-                    startReceiveLoop();
-                    sendGate.complete(null);
-                    return;
-                }
-            } catch (Exception ignored) {
-                // transient failure — fall through to back-off and retry
+                openRfcommSocket(lastDeviceAddress);
+                inputStream = btSocket.getInputStream();
+                outputStream = btSocket.getOutputStream();
+                connected = true;
+                startReceiveLoop();
+                sendGate.complete(null);
+                return;
+            } catch (Exception e) {
+                closeQuietly(btSocket);
             }
             try {
                 Thread.sleep(delayMs);
@@ -476,65 +439,15 @@ public class SocketTransport implements ITransport {
         }
     }
 
-    private boolean tryReconnectClient() {
-        try {
-            Socket attempt = new Socket();
-            attempt.connect(new java.net.InetSocketAddress(lastTargetId, port),
-                    CoreConfig.RECONNECT_MAX_DELAY_MS);
-            socket = attempt;
-            inputStream = socket.getInputStream();
-            outputStream = socket.getOutputStream();
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
-    }
-
-    private boolean tryReListen() {
-        try {
-            serverSocket = new ServerSocket(port);
-            socket = serverSocket.accept();
-            inputStream = socket.getInputStream();
-            outputStream = socket.getOutputStream();
-            return true;
-        } catch (IOException e) {
-            return false;
-        } finally {
-            closeServerSocket();
-        }
-    }
-
     @Override
     public void close() {
         if (disposed) return;
         disposed = true;
         disconnect();
-        closeServerSocket();
-
-        Thread at = acceptThread;
-        if (at != null && at != Thread.currentThread()) {
-            at.interrupt();
-            try { at.join(2000); } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
-        }
-    }
-
-    private void closeServerSocket() {
-        if (serverSocket != null) {
-            try { serverSocket.close(); } catch (IOException ignored) {}
-            serverSocket = null;
-        }
     }
 
     private static void closeQuietly(AutoCloseable closeable) {
         if (closeable == null) return;
         try { closeable.close(); } catch (Exception ignored) {}
-    }
-
-    @SuppressWarnings("unused")
-    private static void closeQuietly(Socket socket) {
-        if (socket == null) return;
-        try { socket.close(); } catch (Exception ignored) {}
     }
 }

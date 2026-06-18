@@ -44,10 +44,47 @@ namespace TauSync.Core
         public const int ClientConnectRetryDelaySeconds = 2;
 
         /// <summary>
+        /// First delay before retrying after an unexpected transport drop. Each subsequent
+        /// retry doubles the wait up to <see cref="ReconnectMaxDelayMs"/>. Reconnect keeps
+        /// retrying until it succeeds or the app explicitly disconnects — an unexpected drop
+        /// never ends the session.
+        /// </summary>
+        public const int ReconnectInitialDelayMs = 1_000;
+
+        /// <summary>Cap on the exponential reconnect back-off between retry attempts.</summary>
+        public const int ReconnectMaxDelayMs = 30_000;
+
+        /// <summary>
+        /// Max time a queued send waits for the transport to come back after an unexpected
+        /// drop before failing. Lets a write issued mid-reconnect resume transparently.
+        /// </summary>
+        public const int SendReconnectWaitMs = 30_000;
+
+        /// <summary>
         /// Maximum accepted payload size per frame (16 MB). A peer can advertise any 32-bit
         /// payload length in the header; without this cap a crafted header could trigger a
         /// multi-gigabyte allocation and OOM the receiver.
         /// </summary>
         public const int MaxPayloadSize = 16 * 1024 * 1024;
+
+        // ── Bluetooth transport (must match Android CoreConfig) ──────────────
+
+        /// <summary>BLE service UUID advertised by Windows for first-time discovery/pairing.</summary>
+        public static readonly Guid BleServiceUuid = new Guid("12345678-1234-5678-1234-56789abcde01");
+
+        /// <summary>RFCOMM service UUID both platforms use for SDP lookup of the data channel.</summary>
+        public static readonly Guid RfcommServiceUuid = new Guid("12345678-1234-5678-1234-56789abcde02");
+
+        /// <summary>Max time to wait for an RFCOMM connection to establish.</summary>
+        public const int BtConnectTimeoutMs = 15_000;
+
+        /// <summary>Max time the Wi-Fi client waits for SESSION_JOIN_ACK after joining.</summary>
+        public const int SessionJoinAckTimeoutMs = 10_000;
+
+        /// <summary>
+        /// Guide threshold (64 KB) the app uses to pick the Eco (BT) vs Performance (Wi-Fi)
+        /// manager per channel in Hybrid mode. HybridConnectionManager never routes on this.
+        /// </summary>
+        public const int HybridSmallThresholdBytes = 65_536;
     }
 }

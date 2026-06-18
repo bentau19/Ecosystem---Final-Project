@@ -4,12 +4,21 @@ using System.Threading.Tasks;
 namespace TauSync.Interfaces
 {
     /// <summary>
+    /// Identifies which physical medium an <see cref="ITransport"/> carries bytes over.
+    /// Lets higher layers (e.g. HybridConnectionManager) tell the two transports apart.
+    /// </summary>
+    public enum TransportKind { WiFi, Bluetooth }
+
+    /// <summary>
     /// Transport layer interface — manages the physical connection.
     /// Implement as a singleton per medium (Bluetooth, WiFi).
     /// Per TauSync Protocol Spec: raw bytes only; framing and reassembly are defined here.
     /// </summary>
     public interface ITransport : IDisposable
     {
+        /// <summary>The physical medium this transport carries bytes over.</summary>
+        TransportKind TransportType { get; }
+
         /// <summary>
         /// Connects to the target. When <paramref name="targetId"/> is null or empty, acts as server: listens and waits for the first incoming connection.
         /// </summary>

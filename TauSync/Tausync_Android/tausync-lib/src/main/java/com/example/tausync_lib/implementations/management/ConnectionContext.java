@@ -65,6 +65,14 @@ public final class ConnectionContext {
     private final SocketTransport wifiTransport;
     private final Gson gson = new Gson();
 
+    /**
+     * Number of transports currently brought up by the app (intentional connects minus
+     * intentional disconnects). Unexpected drops do NOT change this count — they reconnect
+     * under the hood — so the session only ends when the last transport is explicitly
+     * disconnected. See {@link #notifyTransportDisconnected()}.
+     */
+    private final AtomicInteger activeTransportCount = new AtomicInteger(0);
+
     private ConnectionContext() {
         wifiTransport = new SocketTransport();
     }
@@ -242,6 +250,29 @@ public final class ConnectionContext {
         }
         routingMap.clear();
         targetMap.clear();
+    }
+
+    /**
+     * Records that a transport has been intentionally brought up. Paired with
+     * {@link #notifyTransportDisconnected()} on the matching explicit disconnect.
+     * Reconnects after an unexpected drop do NOT call this — the transport never
+     * logically left the session.
+     */
+    public void notifyTransportConnected() {
+        activeTransportCount.incrementAndGet();
+    }
+
+    /**
+     * Records that a transport has been intentionally torn down. Only when the LAST live
+     * transport disconnects (count reaches zero) are the open channels aborted and the
+     * session state reset. Disconnecting one transport while another stays up (e.g. dropping
+     * Wi-Fi but keeping Bluetooth) leaves that transport's channels untouched.
+     */
+    public void notifyTransportDisconnected() {
+        if (activeTransportCount.decrementAndGet() <= 0) {
+            abortAllChannels();
+            reset();
+        }
     }
 
     /**

@@ -60,3 +60,7 @@ graphify-out
 .graphify_detect.json
 .graphify_python
 .graphify_uncached.txt
+
+
+tausync_bugfix_plan.txt
+tausync_structural_review.txt
