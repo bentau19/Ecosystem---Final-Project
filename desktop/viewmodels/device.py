@@ -79,13 +79,13 @@ class DeviceViewModel(QObject):
         self._device_info_service: DeviceInfoService = device_info_service
 
         self._connectivity_service.device_connected.connect(self._on_device_connected)
-        self._connectivity_service.device_disconnecting.connect(self.device_disconnecting.emit)
+        self._connectivity_service.device_disconnecting.connect(self.device_disconnecting)
         self._connectivity_service.device_disconnected.connect(self._on_device_disconnected)
-        self._connectivity_service.connection_error.connect(self.connection_error.emit)
+        self._connectivity_service.connection_error.connect(self.connection_error)
         self._device_info_service.device_info_ready.connect(self._on_device_info_ready)
         self._device_info_service.device_fetched.connect(self._on_device_fetched)
         self._device_info_service.all_devices_fetched.connect(self._on_all_devices_fetched)
-        self._device_info_service.read_error.connect(self.device_info_error.emit)
+        self._device_info_service.read_error.connect(self.device_info_error)
 
         # Start connectivity immediately so it listens before any device connects.
         # DeviceInfoService also starts at launch — its DB read methods

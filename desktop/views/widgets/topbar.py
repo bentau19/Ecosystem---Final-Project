@@ -113,7 +113,6 @@ class Topbar(QWidget):
     def setup_signals(self) -> None:
         """Wire the disconnect button, ViewModel signals, and theme changes to their slots."""
         self._disconnect_button.clicked.connect(self._disconnect_from_current_device)
-        self._device_viewmodel.device_disconnected.connect(self._move_to_login)
         self._device_viewmodel.device_infos_updated.connect(self._update_device_info)
         theme_manager.theme_changed.connect(self._setup_style)
 
@@ -121,11 +120,6 @@ class Topbar(QWidget):
     def _disconnect_from_current_device(self) -> None:
         # Delegate disconnect to the ViewModel; it will emit device_disconnected when done.
         self._device_viewmodel.disconnect_device()
-
-    @Slot()
-    def _move_to_login(self) -> None:
-        # Navigate back to the login screen after the device disconnects.
-        navigation_manager.go_to_screen(Screen.LOGIN)
 
     @Slot(object)
     def _update_device_info(self, infos: list[DeviceInfoDTO]) -> None:

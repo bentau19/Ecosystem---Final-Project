@@ -69,6 +69,12 @@ class VirtualDriveService(QObject):
     # accepted and handled on its own thread. The +1 worker runs the accept loop.
     _MAX_CONNECTIONS: int = 8
 
+    # How long a pooled connection's worker blocks waiting for the next request
+    # frame before looping to re-check _is_running. Bounds how long _stop() can
+    # wait on an idle (but still-connected) worker; ops still arrive instantly
+    # because read_exact returns as soon as a full frame is buffered.
+    _READ_POLL: timedelta = timedelta(seconds=2)
+
     def __init__(
             self,
             connectivity: ConnectivityService,
@@ -115,6 +121,12 @@ class VirtualDriveService(QObject):
         self._cache_lock: threading.Lock = threading.Lock()
         self._stat_cache: dict[str, tuple[dict, float]] = {}
         self._list_cache: dict[str, tuple[dict, float]] = {}
+        # Currently-accepted pipe instances, one per in-flight VirtualDrive.exe
+        # connection. Tracked so _stop() can force-close them, which unblocks any
+        # worker parked in a blocking read_exact() so shutdown(wait=True) cannot
+        # hang forever when the peer vanishes mid-session.
+        self._open_pipes_lock: threading.Lock = threading.Lock()
+        self._open_pipes: set[Any] = set()
 
     # ── Public lifecycle ───────────────────────────────────────────────────────
 
@@ -161,7 +173,24 @@ class VirtualDriveService(QObject):
             # shut down by this stop.  Shutdown runs outside the lock so a
             # racing _start() is never blocked behind it.
             executor = self._executor
-        executor.shutdown(wait=True, cancel_futures=True)
+
+        # Disconnect every in-flight pipe so any worker parked in a blocking
+        # read_exact() wakes immediately (its pending ReadFile fails). We only
+        # DisconnectNamedPipe here — never close() — because close() frees the
+        # shared I/O event the worker may still be waiting on; the owning worker
+        # closes its own handle in _serve_connection's finally. Terminating the
+        # exe alone does not reliably unblock a server-side read, so without this
+        # shutdown(wait=True) below could hang forever when the peer vanished.
+        with self._open_pipes_lock:
+            pipes = list(self._open_pipes)
+        for pipe in pipes:
+            try:
+                pipe.disconnect()
+            except Exception:
+                pass
+
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
 
         # All worker threads have exited — safe to purge shared state so the
         # next session never sees stale cache entries or dead write streams.
@@ -277,8 +306,11 @@ class VirtualDriveService(QObject):
                 self.drive_error.emit(str(exc))
                 pipe.close()
                 continue
-            # Connection established — serve it on its own worker thread so the
-            # accept loop is free to take the next pooled connection immediately.
+            # Connection established — track it so _stop() can force it closed,
+            # then serve it on its own worker thread so the accept loop is free
+            # to take the next pooled connection immediately.
+            with self._open_pipes_lock:
+                self._open_pipes.add(pipe)
             self._executor.submit(self._serve_connection, pipe)
 
     def _serve_connection(self, pipe: Any) -> None:
@@ -289,8 +321,14 @@ class VirtualDriveService(QObject):
         except Exception as exc:
             self.drive_error.emit(str(exc))
         finally:
-            pipe.disconnect()
-            pipe.close()
+            with self._open_pipes_lock:
+                self._open_pipes.discard(pipe)
+            try:
+                pipe.disconnect()
+                pipe.close()
+            except Exception:
+                # _stop() may already have closed this pipe to unblock us.
+                pass
 
     def _handle_connection(self, pipe: Any) -> None:
         # Serve one connected VirtualDrive.exe session. Requests on a single
@@ -298,7 +336,12 @@ class VirtualDriveService(QObject):
         # concurrency comes from multiple connections served in parallel.
         while self._is_running.is_set():
             try:
-                req, payload, = self._read_frame(pipe)
+                req, payload, = self._read_frame(pipe, self._READ_POLL)
+            except TimeoutError:
+                # No new request this interval — re-check _is_running and keep
+                # the pooled connection alive. This is what lets _stop() drain
+                # idle workers promptly instead of blocking forever.
+                continue
             except Exception:
                 # Pipe broken or client disconnected — exit the session loop.
                 break
@@ -314,7 +357,7 @@ class VirtualDriveService(QObject):
     # ── Frame helpers (mirror of Protocol.cpp) ─────────────────────────────────
 
     @staticmethod
-    def _read_frame(pipe: Any) -> tuple[dict, bytes]:
+    def _read_frame(pipe: Any, header_timeout: timedelta | None = None) -> tuple[dict, bytes]:
         """Read one framed message from the pipe.
 
         Frame layout (matches ``Protocol.h``):
@@ -323,8 +366,15 @@ class VirtualDriveService(QObject):
         Both length prefixes are read in a single ``read_exact(8)`` call; the
         write side always sends the whole frame atomically so all bytes are
         already in the kernel buffer by the time the first byte is readable.
+
+        Args:
+            pipe: The connected pipe ``Server`` instance.
+            header_timeout: Max time to wait for the *next* frame's 8-byte header
+                before raising ``TimeoutError``. ``None`` blocks indefinitely.
+                The body is read untimed because the sender frames atomically, so
+                once the header is readable the whole body is already buffered.
         """
-        header = pipe.read_exact(8)
+        header = pipe.read_exact(8, header_timeout)
         json_len, pay_len = struct.unpack_from('<II', header)
         body = pipe.read_exact(json_len + pay_len) if (json_len + pay_len) else b''
         return json.loads(body[:json_len]), body[json_len:]

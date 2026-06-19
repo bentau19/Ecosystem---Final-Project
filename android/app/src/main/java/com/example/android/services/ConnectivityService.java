@@ -101,6 +101,19 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     // writeToChannel() call is still blocking inside tauSync.connect().
     private final Set<String> inProgressChannels = ConcurrentHashMap.newKeySet();
 
+    // Set to true at the very start of cleanup() so that any onStatusChanged(CONNECTED)
+    // callbacks still sitting in the main-handler queue are silently discarded rather
+    // than overwriting the DISCONNECTED postValue that cleanup() emits last.
+    //
+    // Scenario this guards against: a reconnect attempt queued by handlePollingFailure
+    // (before the user tapped Disconnect) completes while cleanup() is blocking the
+    // main thread inside transportManager.shutdown() → awaitTermination(). The
+    // resulting onStatusChanged(CONNECTED) arrives in the queue AFTER
+    // deviceRepository.disconnect() posts DISCONNECTED — but MutableLiveData.postValue
+    // coalesces and delivers only the last value (CONNECTED), causing a spurious
+    // auto-reconnect to ActionsFragment.
+    private volatile boolean isCleaningUp = false;
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -231,6 +244,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // Check if this is a disconnect request action
         if (intent != null && "com.example.android.ACTION_SEND_DISCONNECT".equals(intent.getAction())) {
             Log.d(TAG, "Received disconnect action, sending disconnect notification to PC");
+            // Arm the cleanup guard on the main thread BEFORE spawning the background
+            // disconnect thread. Any onStatusChanged(CONNECTED) posted by a racing
+            // reconnect attempt (handlePollingFailure → connectTo()) lands in the
+            // main-thread queue AFTER this frame returns — so isCleaningUp is already
+            // true when that callback is processed and it is silently discarded.
+            // Setting it here (vs. inside cleanup()) closes the window between
+            // stopSelf() and onDestroy() where the flag would otherwise still be false.
+            isCleaningUp = true;
             // Post DISCONNECTING immediately so the UI disables the button before the
             // background thread fires. The final DISCONNECTED post comes from cleanup().
             deviceRepository.updateConnectionStatus(ConnectionStatus.DISCONNECTING);
@@ -313,6 +334,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         Log.d(TAG, "App removed from recents — sending disconnect before cleanup");
+        // Same race as the ACTION_SEND_DISCONNECT path: arm isCleaningUp on the main
+        // thread before any background work starts so reconnect callbacks are discarded.
+        isCleaningUp = true;
         if (transportManager != null && transportManager.isConnected()) {
             // sendDisconnectToPC() opens the DISCONNECT_FROM_PHONE channel so
             // the desktop transitions cleanly instead of detecting a socket drop.
@@ -350,6 +374,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
      * Gracefully releases open sockets, unregisters subcomponents, and resets the local connection state.
      */
     private void cleanup() {
+        isCleaningUp = true;
         Log.d(TAG, "Cleanup started - stopping threads and shutting down network");
         if (handlerRegistry != null) {
             handlerRegistry.shutdownAll();
@@ -386,6 +411,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     @Override
     public void onStatusChanged(TransportStatus status) {
         Log.d(TAG, "Transport status changed: " + status);
+
+        // Discard any status update that arrives after cleanup() has started.
+        // Both cleanup() and these onStatusChanged() callbacks run on the main thread,
+        // so once isCleaningUp is set, no further callbacks can slip through.
+        if (isCleaningUp) {
+            Log.d(TAG, "Ignoring status update during cleanup: " + status);
+            return;
+        }
 
         // Map transport status to domain status
         ConnectionStatus connectionStatus = mapTransportStatusToConnectionStatus(status);
@@ -548,15 +581,20 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         new Thread(() -> {
             try {
                 if (transportManager != null && transportManager.isConnected()) {
-                    // Stop the polling executor BEFORE opening the disconnect channel.
-                    // This eliminates the race where a concurrent 20 ms poll failure
-                    // causes handlePollingFailure → socket disposed → desktop can't join
-                    // 'disconnect_phone' → stall on Android.
+                    // Stop the 20 ms polling loop BEFORE opening the channel.
+                    // Without this, a concurrent polling tick calls getPeerWaitingWords()
+                    // on the same TauSync object that writeToChannel is about to block inside.
+                    // If that poll fails it triggers handlePollingFailure → tauSync.disconnect(),
+                    // closing the socket underneath writeToChannel — writeToChannel throws and
+                    // the PC never receives the disconnect channel (waits full 10 s timeout).
+                    // prepareForDisconnect() sets status=DISCONNECTING (writeToChannel allows
+                    // DISCONNECTING) and awaits any in-flight poll tick before returning.
                     transportManager.prepareForDisconnect();
-                    // 3-second timeout: desktop detects the channel in ≤200 ms normally.
-                    // Caps worst-case disconnect latency at ~4 s instead of 30 s.
+
+                    // 10-second timeout: desktop detects the channel in ≤5 s (phone_request_service
+                    // polls every 5 s). Caps worst-case disconnect latency instead of 30 s default.
                     transportManager.writeToChannel(
-                            SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect", 3);
+                            SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect", 10);
                     Log.d(TAG, "Disconnect signal sent to PC");
                 }
             } catch (Exception e) {

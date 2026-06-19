@@ -29,6 +29,10 @@ namespace TauSync.Implementations.Transport
         private Task? _acceptTask;
         private TaskCompletionSource? _connectionTcs;
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
+        // Guards the listener/connection-signal fields (_tcpListener, _connectionTcs,
+        // _isConnected) so teardown and a concurrent server-mode Connect() cannot
+        // interleave and leave a stale completed TCS reachable (the "phantom connect").
+        private readonly object _stateLock = new object();
         private readonly IProtocolHandler _protocolHandler;
 
         public static readonly int DefaultPort = CoreConfig.DefaultPort;
@@ -189,27 +193,36 @@ namespace TauSync.Implementations.Transport
         /// </summary>
         private void StartListeningInternal(int? timeoutSeconds = null)
         {
-            if (_tcpListener != null)
-                return;
-
-            _connectionTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            _tcpListener = new TcpListener(System.Net.IPAddress.Any, Port);
-            _tcpListener.Start();
-
-            _receiveCts = new CancellationTokenSource();
-
-            _timeoutCts?.Dispose();
-            _timeoutCts = new CancellationTokenSource(GetTimeout(timeoutSeconds));
-
-            var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_receiveCts.Token, _timeoutCts.Token);
-            _acceptTask = Task.Run(async () =>
+            lock (_stateLock)
             {
-                // Own the linked CTS for the lifetime of the accept loop so it is always disposed.
-                using (linkedCts)
+                // Reuse the listener only when a listen is genuinely still in progress
+                // (TCS not yet completed). A non-null listener with an *already-completed*
+                // TCS is stale state from a prior accept; awaiting it would return
+                // instantly with no live socket (the "phantom connect"). Re-arm instead.
+                if (_tcpListener != null && _connectionTcs != null && !_connectionTcs.Task.IsCompleted)
+                    return;
+
+                _tcpListener?.Stop();
+
+                _connectionTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _tcpListener = new TcpListener(System.Net.IPAddress.Any, Port);
+                _tcpListener.Start();
+
+                _receiveCts = new CancellationTokenSource();
+
+                _timeoutCts?.Dispose();
+                _timeoutCts = new CancellationTokenSource(GetTimeout(timeoutSeconds));
+
+                var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_receiveCts.Token, _timeoutCts.Token);
+                _acceptTask = Task.Run(async () =>
                 {
-                    await AcceptLoopAsync(linkedCts.Token).ConfigureAwait(false);
-                }
-            });
+                    // Own the linked CTS for the lifetime of the accept loop so it is always disposed.
+                    using (linkedCts)
+                    {
+                        await AcceptLoopAsync(linkedCts.Token).ConfigureAwait(false);
+                    }
+                });
+            }
         }
 
         /// <summary>
@@ -252,30 +265,63 @@ namespace TauSync.Implementations.Transport
 
         public void Disconnect()
         {
-            if (!_isConnected) return;
-            _isConnected = false;
-           _receiveCts?.Cancel();
-            try { _receiveTask?.Wait(TimeSpan.FromSeconds(2)); } catch { }
-                try { _acceptTask?.Wait(TimeSpan.FromSeconds(1)); } catch { }
-              _tcpListener?.Stop();
-             _stream?.Close();
-            _tcpClient?.Close();
+            // Capture every disposable into locals and null the fields up front —
+            // atomically with clearing _isConnected — so a concurrent server-mode
+            // Connect() can never observe _isConnected==false while _tcpListener /
+            // _connectionTcs are still the stale (completed) ones from the previous
+            // accept. That stale pair is what let ConnectTransport("") return instantly
+            // with no live socket (the "phantom connect"). The slow Stop/close/wait then
+            // runs on the locals, outside the lock.
+            TcpClient? client;
+            TcpListener? listener;
+            Stream? stream;
+            CancellationTokenSource? receiveCts;
+            CancellationTokenSource? timeoutCts;
+            Task? receiveTask;
+            Task? acceptTask;
+            lock (_stateLock)
+            {
+                if (!_isConnected) return;
+                _isConnected = false;
+                client = _tcpClient;
+                listener = _tcpListener;
+                stream = _stream;
+                receiveCts = _receiveCts;
+                timeoutCts = _timeoutCts;
+                receiveTask = _receiveTask;
+                acceptTask = _acceptTask;
+                _tcpClient = null;
+                _tcpListener = null;
+                _stream = null;
+                _receiveCts = null;
+                _timeoutCts = null;
+                _receiveTask = null;
+                _acceptTask = null;
+                _connectionTcs = null;
+
+                // Free the port and unblock the accept loop INSIDE the lock (non-blocking
+                // ops only) so a re-arm (StartListeningInternal, which takes the same lock)
+                // can never bind port 8888 while this listener still holds it
+                // (WSAEADDRINUSE / 10048).  Deferring Stop() to after the drains below left
+                // a window where _tcpListener was null but the socket was still bound.
+                receiveCts?.Cancel();
+                listener?.Stop();
+            }
+
+            // Slow drains run on the captured locals, OUTSIDE the lock — never block while
+            // holding it, or a listen() parked waiting for a peer would deadlock disconnect().
+            try { receiveTask?.Wait(TimeSpan.FromSeconds(2)); } catch { }
+            try { acceptTask?.Wait(TimeSpan.FromSeconds(1)); } catch { }
+            stream?.Close();
+            client?.Close();
 
             // Unblock every reader stuck on an open channel stream. The peer is gone, so no
             // FIN will ever arrive — deliver a synthetic FIN to each handler so blocked
             // Read() calls return EOF instead of hanging forever.
             ConnectionContext.Instance.AbortAllChannels();
 
-             _tcpListener = null;
-            _stream = null;
-             _tcpClient = null;
-            _receiveCts?.Dispose();
-            _receiveCts = null;
-            _timeoutCts?.Dispose();
-             _timeoutCts = null;
-            _receiveTask = null;
-            _acceptTask = null;
-            _connectionTcs = null;
+            receiveCts?.Dispose();
+            timeoutCts?.Dispose();
         }
 
         private async Task AcceptLoopAsync(CancellationToken ct)

@@ -36,12 +36,15 @@ public class TauSyncTransportManager implements TransportManager {
     private static final int MAX_RETRY_DELAY_MS = 30000;         // 30 seconds
     private static final int MAX_RETRY_ATTEMPTS = 2;
     private static final int POLLING_INTERVAL_MS = 20;           // 20 ms — avg discovery latency
-                                                                 // 10 ms instead of 50 ms; 5×
-                                                                 // faster virtual-drive op pickup
+    // 10 ms instead of 50 ms; 5×
+    // faster virtual-drive op pickup
 
     // State management
     private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
-    private TransportStatus status = TransportStatus.IDLE;
+    // volatile: written on sendDisconnectToPC / PeerRequestHandler threads, read on the
+    // polling executor thread. Without volatile the polling thread can see a stale CONNECTED
+    // value after prepareForDisconnect() sets DISCONNECTING, causing a spurious reconnect.
+    private volatile TransportStatus status = TransportStatus.IDLE;
     private TransportListener listener;
     private TauSync tauSync;
     private RemoteDeviceInfo currentRemoteDevice;
@@ -55,6 +58,15 @@ public class TauSyncTransportManager implements TransportManager {
 
     private ScheduledExecutorService pollingExecutor;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    // Stable Runnable identity for mainHandler.postDelayed / removeCallbacks.
+    // In Java, `this::attemptConnection` creates a NEW object on every evaluation,
+    // so two separate `this::attemptConnection` expressions are never == to each
+    // other.  Handler.removeCallbacks(r) matches by reference (==), meaning
+    // removeCallbacks(this::attemptConnection) would silently fail to remove a
+    // previously posted this::attemptConnection callback.  Storing the reference
+    // once guarantees postDelayed and removeCallbacks see the same object.
+    private final Runnable retryConnectionRunnable = this::attemptConnection;
 
     // Reconnection tracking
     private int currentRetryAttempt = 0;
@@ -93,14 +105,28 @@ public class TauSyncTransportManager implements TransportManager {
                     mainHandler.post(() -> listener.onReconnectAttempt(currentRetryAttempt, MAX_RETRY_ATTEMPTS));
                 }
 
+                // Disconnect any TauSync instance left over from a prior timed-out
+                // attempt.  connectTo() below spawns an inner thread that can outlive
+                // the outer Future.get() timeout; without this cleanup that orphaned
+                // thread can connect to the PC's freshly restarted listener after a
+                // phone-initiated disconnect, producing a spurious second "d" on the PC.
+                TauSync previousTauSync = tauSync;
+                tauSync = null;
+                if (previousTauSync != null) {
+                    try { previousTauSync.disconnect(); } catch (Exception ignored) {}
+                }
+
                 tauSync = new TauSync();
                 Log.d(TAG, "🔵 TauSync created, calling connectTo...");
 
-                // connect to PC with tauSync
-                // 5 sec timeout
+                // connect to PC with tauSync.
+                // Inner TauSync timeout (4 s) is intentionally shorter than the outer
+                // Java Future timeout (5 s) so the inner thread always exits before
+                // Future.get() times out.  This prevents an orphaned native thread from
+                // lingering and later connecting to the PC's next listener session.
                 java.util.concurrent.Future<?> connectFuture = java.util.concurrent.Executors
                         .newSingleThreadExecutor()
-                        .submit(() -> tauSync.connectTo(currentRemoteDevice.getPcIp()));
+                        .submit(() -> tauSync.connectTo(currentRemoteDevice.getPcIp(), 4));
 
                 try {
                     connectFuture.get(5, java.util.concurrent.TimeUnit.SECONDS);
@@ -120,8 +146,6 @@ public class TauSyncTransportManager implements TransportManager {
 
             } catch (Exception e) {
                 Log.e(TAG, "🔴 CAUGHT exception: " + e.getClass().getName() + " - " + e.getMessage());
-
-//              TODO: error even after failure still connect regulatory.
                 handleConnectionFailure(e);
             } catch (Throwable t) {
                 Log.e(TAG, "🔴 CAUGHT throwable: " + t.getClass().getName() + " - " + t.getMessage());
@@ -154,7 +178,7 @@ public class TauSyncTransportManager implements TransportManager {
             Log.i(TAG, "Scheduling retry #" + currentRetryAttempt + " in " + delayWithJitter + "ms");
 
             mainHandler.postDelayed(
-                    this::attemptConnection,
+                    retryConnectionRunnable,
                     delayWithJitter
             );
 
@@ -236,10 +260,14 @@ public class TauSyncTransportManager implements TransportManager {
             pollingExecutor.shutdownNow();
         }
 
-        // Reconnect if we were actively connected
-        if (status == TransportStatus.CONNECTED) {
-            attemptConnection();
-        }
+        // Reconnect only if we were actively connected AND a deliberate shutdown is not
+        // already in progress. isShuttingDown is set at the top of shutdown() (called by
+        // cleanup() from DisconnectChannelHandler / sendDisconnectToPC). Without this guard
+        // a polling failure that races with cleanup causes an unwanted reconnect attempt —
+        // the "auto send connect_to_pc" bug.
+//        if (status == TransportStatus.CONNECTED && !isShuttingDown.get()) {
+//            attemptConnection();
+//        }
     }
 
     /**
@@ -288,7 +316,7 @@ public class TauSyncTransportManager implements TransportManager {
             Log.d(TAG, "prepareForDisconnect: already shutting down, skipping");
             return;
         }
-        mainHandler.removeCallbacks(this::attemptConnection);
+        mainHandler.removeCallbacks(retryConnectionRunnable);
         updateStatus(TransportStatus.DISCONNECTING);
         stopPolling();  // blocks until any in-flight getPeerWaitingWords() completes
         Log.d(TAG, "prepareForDisconnect: polling stopped, ready to send disconnect signal");
@@ -606,7 +634,7 @@ public class TauSyncTransportManager implements TransportManager {
     @Override
     public void disconnect() {
         Log.d(TAG, "Disconnect requested");
-        mainHandler.removeCallbacks(this::attemptConnection);
+        mainHandler.removeCallbacks(retryConnectionRunnable);
 
         updateStatus(TransportStatus.DISCONNECTING);
 
