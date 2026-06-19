@@ -31,8 +31,10 @@ import com.example.android.domain.usecases.BackupTransferUseCase;
 import com.example.android.domain.usecases.ReceiveFileUseCase;
 import com.example.android.domain.usecases.RespondToFileTransferUseCase;
 import com.example.android.domain.usecases.SendFileUseCase;
+import com.example.android.domain.usecases.WebcamStreamUseCase;
 import com.example.android.repositories.BackupRepository;
 import com.example.android.repositories.SendFileRepository;
+import com.example.android.repositories.WebcamRepository;
 import com.example.android.network.handlers.FileDataChannelHandler;
 import com.example.android.network.handlers.FileMetadataChannelHandler;
 import com.example.android.network.handlers.PCNameChannelHandler;
@@ -68,6 +70,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     private ReceiveFileUseCase receiveFileUseCase;
     private SendFileUseCase sendFileUseCase;
     private BackupTransferUseCase backupTransferUseCase;
+    private WebcamStreamUseCase webcamStreamUseCase;
 
     // Observer for outgoing file transfer notifications — kept so we can remove it in onDestroy
     private Observer<SendFileStatus> sendFileStatusObserver;
@@ -121,6 +124,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         sendFileUseCase = new SendFileUseCase(transportManager, SendFileRepository.getInstance(), this);
         backupTransferUseCase = new BackupTransferUseCase(
                 transportManager, BackupRepository.getInstance(), this, new BackupDataSource());
+        webcamStreamUseCase = new WebcamStreamUseCase(transportManager, WebcamRepository.getInstance());
 
         registerChannelHandlers();
         registerFileTransferActionListener();
@@ -131,6 +135,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         registerBackupTransferProgressObserver();
         registerBackupScanStatusObserver();
         registerBackupControlActionListener();
+        registerWebcamActionListener();
 
         Log.d(TAG, "Service initialization complete");
     }
@@ -328,6 +333,12 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             // Hard disconnect resets state models so the application re-opens directly on the connect screen
             deviceRepository.disconnect();
         }
+
+        // Stop webcam stream if one is active
+        if (webcamStreamUseCase != null) {
+            webcamStreamUseCase.stop();
+        }
+        WebcamRepository.getInstance().reset();
 
         // Reset file transfer repositories so stale status isn't shown after reconnect
         ReceiveFileRepository.getInstance().reset();
@@ -787,6 +798,32 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                     }
                 }
         );
+    }
+
+    /**
+     * Registers ConnectivityService as the {@link WebcamRepository.StreamActionListener}.
+     * Mirrors registerBackupTransferActionListener — spawns a background thread on Start,
+     * and calls stop() on the use case on Stop.
+     */
+    private void registerWebcamActionListener() {
+        WebcamRepository.getInstance().setActionListener(new WebcamRepository.StreamActionListener() {
+            @Override
+            public void onStartRequested() {
+                new Thread(() -> {
+                    try {
+                        webcamStreamUseCase.execute();
+                    } catch (Exception e) {
+                        Log.e(TAG, "Unexpected error in WebcamStreamThread: " + e.getMessage());
+                        WebcamRepository.getInstance().onStreamFailed();
+                    }
+                }, "WebcamStreamThread").start();
+            }
+
+            @Override
+            public void onStopRequested() {
+                webcamStreamUseCase.stop();
+            }
+        });
     }
 
     /**

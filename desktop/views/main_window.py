@@ -27,6 +27,7 @@ from views.widgets.dialogs.file_handler import TransferErrorDialog
 from views.widgets.toasts.file_received import FileReceivedToast
 from viewmodels.backup import BackupViewModel
 from viewmodels.file_transfer import FileTransferViewModel
+from viewmodels.webcam import WebcamViewModel
 
 
 class MainWindow(QMainWindow):
@@ -62,6 +63,7 @@ class MainWindow(QMainWindow):
 
         self._file_transfer_vm: FileTransferViewModel = app_state.file_transfer_viewmodel
         self._backup_vm: BackupViewModel = app_state.backup_viewmodel
+        self._webcam_vm: WebcamViewModel = app_state.webcam_viewmodel
         # Holds the BackupProgressWindow alive for the duration of a session.
         self._backup_progress_win: BackupProgressWindow | None = None
         # Holds the FileReceivedToast alive while it's on screen.
@@ -116,6 +118,8 @@ class MainWindow(QMainWindow):
         self._backup_vm.backup_session_result.connect(self._on_backup_session_result)
         self._backup_vm.device_ready_changed.connect(self._on_backup_device_ready_changed)
         app_state.device_viewmodel.connection_error.connect(self._on_connection_error)
+        self._webcam_vm.webcam_active_changed.connect(self._on_webcam_active_changed)
+        self._webcam_vm.webcam_error_occurred.connect(self._on_webcam_error)
         theme_manager.theme_changed.connect(self._restyle_tray)
 
     def changeEvent(self, event: QEvent) -> None:
@@ -294,6 +298,32 @@ class MainWindow(QMainWindow):
     def _on_file_send_error(self, error: str) -> None:
         # Mirror of _on_file_receive_error for the outbound direction.
         TransferErrorDialog()
+
+    @Slot(bool)
+    def _on_webcam_active_changed(self, active: bool) -> None:
+        if active:
+            self._tray_icon.showMessage(
+                "Webcam Connected",
+                "Phone camera is now streaming to OBS Virtual Camera.",
+                QSystemTrayIcon.MessageIcon.Information,
+                4000,
+            )
+        else:
+            self._tray_icon.showMessage(
+                "Webcam Disconnected",
+                "Phone camera stream has ended.",
+                QSystemTrayIcon.MessageIcon.Information,
+                3000,
+            )
+
+    @Slot(str)
+    def _on_webcam_error(self, error: str) -> None:
+        self._tray_icon.showMessage(
+            "Webcam Error",
+            error,
+            QSystemTrayIcon.MessageIcon.Warning,
+            4000,
+        )
 
     @Slot(str)
     def _on_connection_error(self, error: str) -> None:

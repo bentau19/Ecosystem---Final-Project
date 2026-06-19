@@ -15,4 +15,6 @@ public class ToolItem {
     public String getTitle() { return title; }
     public int getIconRes() { return iconRes; }
     public String getId() { return id; }
+
+    public void setTitle(String title) { this.title = title; }
 }

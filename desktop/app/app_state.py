@@ -1,5 +1,6 @@
 from typing import Final
 
+from domain.enums.webcam_channels import WebcamChannels
 from repositories.device import DeviceRepository
 from repositories.tool import ToolRepository
 from services.backup import BackupService
@@ -8,10 +9,12 @@ from services.device_info import DeviceInfoService
 from services.file_transfer import FileTransferService
 from services.phone_request import PhoneRequestService
 from services.tool import ToolService
+from services.webcam import WebcamService
 from viewmodels.backup import BackupViewModel
 from viewmodels.device import DeviceViewModel
 from viewmodels.file_transfer import FileTransferViewModel
 from viewmodels.tool import ToolViewModel
+from viewmodels.webcam import WebcamViewModel
 
 
 class AppState:
@@ -43,6 +46,9 @@ class AppState:
         self.backup_service: Final[BackupService] = BackupService(
             connectivity=self.connectivity_service,
         )
+        self.webcam_service: Final[WebcamService] = WebcamService(
+            connectivity=self.connectivity_service,
+        )
 
         # ViewModels
         self.device_viewmodel: Final[DeviceViewModel] = DeviceViewModel(
@@ -60,11 +66,18 @@ class AppState:
             backup_service=self.backup_service,
             connectivity_service=self.connectivity_service,
         )
+        self.webcam_viewmodel: Final[WebcamViewModel] = WebcamViewModel(
+            webcam_service=self.webcam_service,
+        )
         self.phone_request_service: Final[PhoneRequestService] = PhoneRequestService(
             connectivity_service=self.connectivity_service,
             file_transfer_service=self.file_transfer_service,
             backup_service=self.backup_service,
         )
+
+        self.phone_request_service.operations[
+            WebcamChannels.WEBCAM_START.value
+        ] = self.webcam_service.receive_start
 
         # Wire service lifecycles to device connection events.
         # BackupService is wired first so its executor is initialised before
