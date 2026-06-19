@@ -17,8 +17,8 @@ class DeviceSerializer(ISerializer[DeviceEntity | None, _DeviceRow | None]):
     absent devices can be handled without special-case logic in the repository.
     """
 
-    def serialize(self, entity: DeviceEntity | None) -> tuple[
-                                                            str, str, str, str, str, int, bool, int, int, str] | None:
+    @staticmethod
+    def serialize(entity: DeviceEntity | None) -> _DeviceRow | None:
         """Convert a ``DeviceEntity`` to a SQLite row tuple.
 
         Args:
@@ -36,7 +36,8 @@ class DeviceSerializer(ISerializer[DeviceEntity | None, _DeviceRow | None]):
                 entity.battery_level, entity.battery_charging, entity.storage_used,
                 entity.storage_total, entity.ip)
 
-    def deserialize(self, db_row: tuple) -> DeviceEntity | None:
+    @staticmethod
+    def deserialize(db_row: _DeviceRow | tuple | None) -> DeviceEntity | None:
         """Reconstruct a ``DeviceEntity`` from a SQLite row tuple.
 
         Args:

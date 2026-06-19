@@ -116,18 +116,30 @@ class NavigationItem(QFrame):
         self.update()
 
     def enterEvent(self, event: QEnterEvent) -> None:
-        """Handle mouse enter events."""
+        """Handle mouse enter events.
+
+        Args:
+            event: The enter event delivered by Qt.
+        """
         super().enterEvent(event)
         self._change_hover_status(True)
 
     def leaveEvent(self, event: QEvent) -> None:
-        """Handle mouse leave events."""
+        """Handle mouse leave events.
+
+        Args:
+            event: The leave event delivered by Qt.
+        """
         super().leaveEvent(event)
         self._change_hover_status(False)
 
     @property
     def is_active(self) -> bool:
-        """Return whether this navigation item is active."""
+        """Return whether this navigation item is active.
+
+        Returns:
+            True if the item is currently marked as active.
+        """
         return self._is_active
 
     @is_active.setter
@@ -147,7 +159,14 @@ class NavigationItem(QFrame):
         self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        """Emit clicked signal on left mouse release."""
+        """Emit clicked signal on left mouse release.
+
+        Args:
+            event: The mouse release event delivered by Qt.
+
+        Emits:
+            clicked: When the released button is the left mouse button.
+        """
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
         super().mouseReleaseEvent(event)

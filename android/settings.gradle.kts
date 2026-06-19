@@ -16,6 +16,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven { url = uri("https://packagecloud.io/arthenica/maven/maven2") }
     }
 }
 

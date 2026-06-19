@@ -1,11 +1,11 @@
 import os
-import sqlite3
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from domain.entities.device_info import DeviceEntity
 from repositories.repository import IRepository
 from serializers.device import DeviceSerializer
+from utils.db import sqlite_connection
 from utils.meta import ABCQObjectMeta
 
 
@@ -41,21 +41,21 @@ class DeviceRepository(
 
         self._serializer = DeviceSerializer()
         self._db_path = Path(os.environ["APPDATA"]) / "SyncDose" / "app.db"
-        
+
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db_path.touch(exist_ok=True)
         self._configure_db()
 
     def _configure_db(self) -> None:
         # Create the devices table if it does not already exist.
-        with sqlite3.connect(self._db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("CREATE TABLE IF NOT EXISTS devices "
-                           "(id TEXT PRIMARY KEY, name TEXT,"
-                           " os TEXT, tag TEXT, last_connected DATETIME, battery_level INTEGER,"
-                           " battery_charging BOOLEAN, storage_used REAL,"
-                           " storage_total REAL, ip TEXT)")
-            conn.commit()
+        with sqlite_connection(self._db_path) as conn:
+            with conn:
+                cursor = conn.cursor()
+                cursor.execute("CREATE TABLE IF NOT EXISTS devices "
+                               "(id TEXT PRIMARY KEY, name TEXT,"
+                               " os TEXT, tag TEXT, last_connected DATETIME, battery_level INTEGER,"
+                               " battery_charging BOOLEAN, storage_used REAL,"
+                               " storage_total REAL, ip TEXT)")
 
     def id_exists(self, id: str) -> bool:
         """Check whether a device with the given ID exists in the database.
@@ -66,10 +66,11 @@ class DeviceRepository(
         Returns:
             ``True`` if a matching row exists, ``False`` otherwise.
         """
-        with sqlite3.connect(self._db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1 FROM devices WHERE id = ?", (id,))
-            return cursor.fetchone() is not None
+        with sqlite_connection(self._db_path) as conn:
+            with conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1 FROM devices WHERE id = ?", (id,))
+                return cursor.fetchone() is not None
 
     def get_by_id(self, id: str) -> DeviceEntity | None:
         """Return the current device if its ID matches, otherwise ``None``.
@@ -81,11 +82,12 @@ class DeviceRepository(
             The current ``PreviousDeviceEntity`` if its ``id`` equals the
             argument, otherwise ``None``.
         """
-        with sqlite3.connect(self._db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM devices WHERE id = ?", (id,))
-            row = cursor.fetchone()
-            return self._serializer.deserialize(row)
+        with sqlite_connection(self._db_path) as conn:
+            with conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM devices WHERE id = ?", (id,))
+                row = cursor.fetchone()
+                return self._serializer.deserialize(row)
 
     def get_all(self) -> list[DeviceEntity]:
         """Return the current device as a single-element list, or empty.
@@ -93,15 +95,16 @@ class DeviceRepository(
         Returns:
             A list containing the current device, or ``[]`` if none is set.
         """
-        with sqlite3.connect(self._db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM devices")
-            rows = cursor.fetchall()
-            return [
-                entity
-                for row in rows
-                if (entity := self._serializer.deserialize(row)) is not None
-            ]
+        with sqlite_connection(self._db_path) as conn:
+            with conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM devices")
+                rows = cursor.fetchall()
+                return [
+                    entity
+                    for row in rows
+                    if (entity := self._serializer.deserialize(row)) is not None
+                ]
 
     def save(self, entity: DeviceEntity) -> None:
         """Set the current device and flush to disk.
@@ -113,16 +116,16 @@ class DeviceRepository(
             entity_saved: With the saved entity after the store write.
         """
 
-        with sqlite3.connect(self._db_path) as conn:
-            cursor = conn.cursor()
-            row: tuple[str, str, str, str, str, int, bool, int, int, str] | None = self._serializer.serialize(entity)
+        with sqlite_connection(self._db_path) as conn:
+            row: tuple[str, str, str, str, str, int, bool, float, float, str] | None = self._serializer.serialize(entity)
             if row is None:
                 return
-            cursor.execute("REPLACE INTO devices (id, name, os, tag, last_connected, battery_level,"
-                           " battery_charging, storage_used, storage_total, ip) "
-                           "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                           row)
-            conn.commit()
+            with conn:
+                cursor = conn.cursor()
+                cursor.execute("REPLACE INTO devices (id, name, os, tag, last_connected, battery_level,"
+                               " battery_charging, storage_used, storage_total, ip) "
+                               "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                               row)
             self.entity_saved.emit(entity)
 
     def delete(self, id: str) -> None:
@@ -135,8 +138,8 @@ class DeviceRepository(
             entity_deleted: With ``id`` after the store write (or immediately
                 if no matching device was set).
         """
-        with sqlite3.connect(self._db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM devices WHERE id = ?", (id,))
-            conn.commit()
+        with sqlite_connection(self._db_path) as conn:
+            with conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM devices WHERE id = ?", (id,))
             self.entity_deleted.emit(id)

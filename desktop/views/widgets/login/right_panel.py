@@ -1,7 +1,3 @@
-"""
-Right panel of the login screen — 'Previously connected' device list.
-"""
-
 from PySide6.QtCore import Qt, QRectF, Slot
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtSvg import QSvgRenderer
@@ -39,7 +35,8 @@ class RightPanel(QWidget):
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """
+        """Initialize the right panel and build its content layout.
+
         Args:
             parent: Optional parent widget.
         """

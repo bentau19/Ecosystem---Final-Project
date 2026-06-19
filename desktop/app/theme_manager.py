@@ -1,6 +1,5 @@
-"""SyncDose theme manager — detects and broadcasts Windows system color-scheme changes."""
-
 import sys
+from typing import Final
 
 from PySide6.QtCore import QObject, Signal, Slot, Qt
 from PySide6.QtGui import QGuiApplication
@@ -51,7 +50,7 @@ class ThemeManager(QObject):
     """
 
     #: Emitted (with no arguments) whenever the system flips dark ↔ light.
-    theme_changed = Signal()
+    theme_changed: Signal = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -79,4 +78,4 @@ class ThemeManager(QObject):
 
 
 #: Module-level singleton — import this everywhere, never instantiate directly.
-theme_manager = ThemeManager()
+theme_manager: Final[ThemeManager] = ThemeManager()

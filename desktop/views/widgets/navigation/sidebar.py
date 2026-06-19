@@ -12,8 +12,7 @@ from views.widgets.navigation.container import NavigationContainer
 
 
 class Sidebar(QFrame):
-    """
-    Sidebar widget containing the main application navigation.
+    """Sidebar widget containing the main application navigation.
 
     Includes:
         - Application logo
@@ -25,13 +24,12 @@ class Sidebar(QFrame):
     def __init__(
             self, sidebar_width: int = 230, logo_widget_height: int = 120, parent: QWidget | None = None
     ) -> None:
-        """
-        Initialize the Sidebar widget.
+        """Initialize the Sidebar widget.
 
         Args:
-            sidebar_width (int, optional): The width of the sidebar. Defaults to 230.
-            logo_widget_height (int, optional): The height of the logo widget. Defaults to 120.
-            parent (Optional[QWidget], optional): Parent widget. Defaults to None.
+            sidebar_width: The width of the sidebar, in pixels. Defaults to ``230``.
+            logo_widget_height: The height of the logo widget, in pixels. Defaults to ``120``.
+            parent: Optional parent widget. Defaults to ``None``.
         """
         super().__init__(parent)
 

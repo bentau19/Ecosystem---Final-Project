@@ -1,7 +1,11 @@
 import datetime
+import logging
+import math
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from time import sleep
 
 from PySide6.QtCore import QObject, Signal
 
@@ -14,6 +18,16 @@ from native import Server
 from serializers.file_metadata import FileMetadataSerializer
 from services.connectivity import ConnectivityService
 
+logger = logging.getLogger(__name__)
+
+
+# ── Data-channel timeout calibration ─────────────────────────────────────────
+# Formula: timeout_s = ceil(_DATA_TIMEOUT_MULT * file_size_bytes) + _DATA_TIMEOUT_OFFSET_S
+# Assumes a pessimistic 5 MB/s floor (slow mobile hotspot / congested Wi-Fi).
+# Examples: 10 MB → 32 s  |  100 MB → 50 s  |  1 GB → 230 s (~4 min)
+_DATA_TIMEOUT_MULT: float = 1 / 5_000_000   # 0.2 µs per byte ≈ 0.2 s per MB
+_DATA_TIMEOUT_OFFSET_S: int = 30             # baseline before any bytes arrive
+
 
 class FileTransferService(QObject):
     """Sends and receives files over TauSync channels on background threads.
@@ -21,7 +35,7 @@ class FileTransferService(QObject):
     Reads ``connectivity.tau`` at the start of every call so reconnects that
     replace the underlying transport are handled transparently.
 
-    All I/O runs on daemon threads via ``@threaded``; Qt's queued-connection
+    All I/O is submitted to :attr:`_executor`; Qt's queued-connection
     mechanism keeps signal emissions safe on the main-thread side.
 
     Signals:
@@ -62,11 +76,10 @@ class FileTransferService(QObject):
         super().__init__(parent)
         self._connectivity: ConnectivityService = connectivity
         self._metadata_serializer: FileMetadataSerializer = FileMetadataSerializer()
-        self._threads: list[threading.Thread] = []
+        self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
         self._is_running: threading.Event = threading.Event()
 
         self._lifecycle_lock: threading.Lock = threading.Lock()
-        self._threads_lock: threading.Lock = threading.Lock()
 
     # ── Public API ─────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -82,20 +95,21 @@ class FileTransferService(QObject):
         with self._lifecycle_lock:
             if self._is_running.is_set():
                 return
+            self._executor = ThreadPoolExecutor()
             self._is_running.set()
-            self._spawn(self._listen_for_file_to_send)
+            self._executor.submit(self._listen_for_file_to_send)
 
     def _stop(self) -> None:
-        # Join every worker except the calling thread to avoid a deadlock.
+        # Clear the running flag then wait for all submitted work to finish.
+        # The executor reference is captured inside the lock so a concurrent
+        # _start() (which swaps self._executor) can never have its fresh pool
+        # shut down by this stop.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            pending_threads: list[threading.Thread] = self._get_pending_threads()
-            for t in pending_threads:
-                if t == threading.current_thread():
-                    continue
-                t.join()
+            executor = self._executor
+        executor.shutdown(wait=True, cancel_futures=True)
 
     def send_file(self, path: str) -> None:
         """Send a local file to the connected peer on a background thread.
@@ -112,7 +126,7 @@ class FileTransferService(QObject):
         if not self._is_running.is_set():
             return
 
-        self._spawn(self._send_file, path)
+        self._executor.submit(self._send_file, path)
 
     def receive_metadata(self) -> None:
         """Listen for the peer's file-transfer metadata on a background thread.
@@ -129,7 +143,7 @@ class FileTransferService(QObject):
         if not self._is_running.is_set():
             return
 
-        self._spawn(self._receive_metadata)
+        self._executor.submit(self._receive_metadata)
 
     def receive_file(self, dest_path: str, file_size: int, modified_at_ms: int = 0) -> None:
         """Accept the transfer and stream the incoming bytes to *dest_path*.
@@ -155,7 +169,7 @@ class FileTransferService(QObject):
         """
         if not self._is_running.is_set():
             return
-        self._spawn(self._receive_file, dest_path, file_size, modified_at_ms)
+        self._executor.submit(self._receive_file, dest_path, file_size, modified_at_ms)
 
     def reject_receive(self) -> None:
         """Decline the transfer by writing ``"reject"`` to the response channel.
@@ -170,22 +184,22 @@ class FileTransferService(QObject):
 
         if not self._is_running.is_set():
             return
-        self._spawn(self._reject_receive)
+        self._executor.submit(self._reject_receive)
 
     # ── Private Functions ─────────────────────────────────────────────────────────────
 
-    def _spawn(self, target, *args):
-        if not self._is_running.is_set():
-            return  # reject new spawns during teardown
-        t = threading.Thread(target=target, args=args, daemon=True)
-        with self._threads_lock:
-            self._threads.append(t)
-        t.start()
+    def _data_timeout(self, file_size: int) -> int:
+        """Compute a file-size-proportional connect timeout for the data channel.
 
-    def _get_pending_threads(self) -> list[threading.Thread]:
-        # Snapshot alive threads under the lock so callers can join without holding it.
-        with self._threads_lock:
-            return [t for t in self._threads if t.is_alive()]
+        Formula: ``ceil(_DATA_TIMEOUT_MULT * file_size) + _DATA_TIMEOUT_OFFSET_S``
+
+        Args:
+            file_size: Transfer size in bytes.
+
+        Returns:
+            Timeout in whole seconds.
+        """
+        return math.ceil(_DATA_TIMEOUT_MULT * file_size) + _DATA_TIMEOUT_OFFSET_S
 
     def _send_file(self, path: str) -> None:
         # Steps: send metadata → wait for accept/reject → stream bytes.
@@ -214,7 +228,10 @@ class FileTransferService(QObject):
                 return
 
             # 3. Stream raw bytes — write_file handles chunking internally.
-            with tau.connect(FileTransferChannels.REGULAR_FILE_DATA_PC_TO_ANDROID.value) as data_stream:
+            with tau.connect(
+                FileTransferChannels.REGULAR_FILE_DATA_PC_TO_ANDROID.value,
+                timeout_seconds=self._data_timeout(file_size),
+            ) as data_stream:
                 total_bytes: int = data_stream.write_file(str(file_path))
 
             self.file_send_complete.emit(FileSendCompleteDTO(filename=filename, total_bytes=total_bytes))
@@ -245,7 +262,10 @@ class FileTransferService(QObject):
                 resp_stream.flush()
 
             # 2. Stream bytes straight to disk — no full-file buffering in RAM.
-            with tau.connect(FileTransferChannels.REGULAR_FILE_DATA_ANDROID_TO_PC.value) as data_stream:
+            with tau.connect(
+                FileTransferChannels.REGULAR_FILE_DATA_ANDROID_TO_PC.value,
+                timeout_seconds=self._data_timeout(file_size),
+            ) as data_stream:
                 data_stream.read_to_file(dest_path, file_size)
 
             # 3. Restore the sender's original mtime so the file sorts correctly
@@ -282,7 +302,9 @@ class FileTransferService(QObject):
                     server.wait_for_client(timeout)
                     file_path: str = server.read(timeout)
                     self.send_file(file_path)
-                except TimeoutError as exc:
-                    pass
+                except TimeoutError:
+                    # No client connected within the poll window — wait and retry.
+                    sleep(3)
+                    continue
                 except Exception as exc:
-                    print(f"[FileTransferService] Pipe listener error: {exc}")
+                    logger.error("Pipe listener error: %s", exc)

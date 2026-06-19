@@ -16,7 +16,8 @@ TauSync/windows/tausync_py.egg-info/PKG-INFO
 *.suo
 *.jpg
 *.png
-
+*.dll
+*.pdb
 
 ### --- Python Specific --- ###
 __pycache__/

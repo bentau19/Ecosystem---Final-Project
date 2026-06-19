@@ -15,12 +15,12 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentManager;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.R;
 import com.example.android.domain.entities.ReceiveFileRequest;
 import com.example.android.domain.enums.ConnectionStatus;
-import com.example.android.domain.enums.ReceiveFileStatus;
 import com.example.android.services.AppNotificationManager;
 import com.example.android.ui.fragments.ActionsFragment;
 import com.example.android.ui.fragments.BackupFragment;
@@ -86,6 +86,20 @@ public class MainActivity extends AppCompatActivity {
                     break;
                 case DISCONNECTING:
                     Toast.makeText(this, "Disconnecting...", Toast.LENGTH_SHORT).show();
+                    break;
+                case DISCONNECTED:
+                    // Clear the entire back stack synchronously so any intermediate
+                    // screen (e.g. BackupFragment) is dismissed before we replace the
+                    // container.  popBackStackImmediate is used instead of the async
+                    // variant so the container is in a clean state when navigateToConnect()
+                    // runs immediately after.
+                    //
+                    // Safe at cold-start: LiveData defers delivery until onStart(), by
+                    // which time ConnectFragment is already in the container and the back
+                    // stack is empty — both calls below are no-ops in that case.
+                    getSupportFragmentManager()
+                            .popBackStackImmediate(null, FragmentManager.POP_BACK_STACK_INCLUSIVE);
+                    navigateToConnect();
                     break;
                 case FAILED:
                     navigateToConnect();
@@ -261,7 +275,7 @@ public class MainActivity extends AppCompatActivity {
                 showFileTransferDialog(request);
             } else {
                 appNotificationManager.showFileTransferApprovalNotification(
-                        request.getFileName(),
+                        request.fileName(),
                         request.getFormattedSize()
                 );
             }
@@ -299,7 +313,7 @@ public class MainActivity extends AppCompatActivity {
     private void showFileTransferDialog(ReceiveFileRequest request) {
         new AlertDialog.Builder(this)
                 .setTitle("Incoming File from PC")
-                .setMessage(request.getFileName() + "\n" + request.getFormattedSize())
+                .setMessage(request.fileName() + "\n" + request.getFormattedSize())
                 .setPositiveButton("Accept", (dialog, which) -> {
                     fileTransferViewModel.acceptTransfer();
                 })

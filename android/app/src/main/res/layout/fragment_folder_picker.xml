@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Layout for FolderPickerFragment (BottomSheetDialogFragment).
+
+    Structure:
+      ┌─────────────────────────────┐
+      │         drag handle         │
+      │     "Select a Folder"       │
+      │  /storage/emulated/0/DCIM   │  ← path breadcrumb (ellipsize start)
+      │─────────────────────────────│
+      │  ↑  ..                      │
+      │  📁 Camera                  │  ← RecyclerView (scrollable)
+      │  📁 Screenshots             │
+      │  …                          │
+      │─────────────────────────────│
+      │  [ Select This Folder ]     │  ← always visible, selects currentDir
+      └─────────────────────────────┘
+
+    Fixed 480dp height: RecyclerView fills the space between the header divider
+    and the button using layout_weight=1 inside the LinearLayout.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="480dp"
+    android:background="@color/surface_card"
+    android:orientation="vertical">
+
+    <!-- ── Drag handle ───────────────────────────────────────────────────── -->
+    <View
+        android:layout_width="40dp"
+        android:layout_height="4dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="12dp"
+        android:background="@color/stroke_card" />
+
+    <!-- ── Title ─────────────────────────────────────────────────────────── -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="16dp"
+        android:text="@string/folder_picker_title"
+        android:textColor="@color/text_primary"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <!-- ── Path breadcrumb ───────────────────────────────────────────────── -->
+    <!--
+        ellipsize="start" keeps the deepest folder name visible when the path
+        is long (e.g. "…/WhatsApp/Media/WhatsApp Images").
+    -->
+    <TextView
+        android:id="@+id/tvCurrentPath"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="20dp"
+        android:layout_marginTop="6dp"
+        android:ellipsize="start"
+        android:maxLines="1"
+        android:textColor="@color/text_muted"
+        android:textSize="12sp" />
+
+    <!-- ── Divider ────────────────────────────────────────────────────────── -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="12dp"
+        android:background="@color/stroke_card" />
+
+    <!-- ── Directory list (fills remaining space) ────────────────────────── -->
+    <!--
+        FrameLayout hosts both the RecyclerView and the empty-state text; only
+        one is visible at a time.  layout_weight=1 makes this section expand to
+        fill all space between the divider and the button.
+    -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvFolders"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingVertical="4dp" />
+
+        <!-- Shown when the current directory has no readable sub-folders -->
+        <TextView
+            android:id="@+id/tvEmpty"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:text="@string/folder_picker_empty"
+            android:textColor="@color/text_muted"
+            android:textSize="14sp"
+            android:visibility="gone" />
+
+    </FrameLayout>
+
+    <!-- ── "Select This Folder" CTA ──────────────────────────────────────── -->
+    <!--
+        Always selects the directory currently being displayed (currentDir),
+        not a highlighted row.  Matches the style of BackupFragment's btnStart.
+    -->
+    <androidx.appcompat.widget.AppCompatButton
+        android:id="@+id/btnSelectFolder"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_marginHorizontal="20dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginBottom="8dp"
+        android:background="@drawable/button_shape"
+        android:backgroundTint="@color/accent_cyan"
+        android:contentDescription="@string/folder_picker_select_btn"
+        android:text="@string/folder_picker_select_btn"
+        android:textAllCaps="false"
+        android:textColor="@color/background_main"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+</LinearLayout>

@@ -7,6 +7,7 @@ import com.example.android.domain.entities.DeviceConnectionState;
 import com.example.android.domain.entities.DeviceStorageStats;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionStatus;
+import com.example.android.repositories.BackupRepository;
 import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
 import com.example.android.domain.usecases.DisconnectDeviceUseCase;
@@ -87,5 +88,16 @@ public class MainViewModel extends ViewModel {
      */
     public DeviceStorageStats getStorageStats() {
         return repository.getLocalDeviceStorage();
+    }
+
+    /**
+     * Returns {@code true} when a backup scan or transfer is currently running or paused.
+     *
+     * <p>Delegates to {@link BackupRepository#isBackupActive()} so that
+     * {@code ActionsFragment} can check backup state without holding a direct
+     * reference to the repository layer.
+     */
+    public boolean isBackupActive() {
+        return BackupRepository.getInstance().isBackupActive();
     }
 }

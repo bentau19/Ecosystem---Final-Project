@@ -1,8 +1,10 @@
 from domain.entities.tool import ToolEntity
 from serializers.serializer import ISerializer
 
+_ToolRow = tuple[str, str, str, bool]
 
-class ToolSerializer(ISerializer[ToolEntity | None, tuple]):
+
+class ToolSerializer(ISerializer[ToolEntity | None, _ToolRow | None]):
     """Serializes and deserializes ToolEntity objects to and from SQLite row tuples.
 
     Maps between a ``ToolEntity`` (or ``None`` when absent) and its SQLite
@@ -12,7 +14,8 @@ class ToolSerializer(ISerializer[ToolEntity | None, tuple]):
     absent tools can be handled without special-case logic in the repository.
     """
 
-    def serialize(self, entity: ToolEntity | None) -> tuple[str, str, str, bool] | None:
+    @staticmethod
+    def serialize(entity: ToolEntity | None) -> _ToolRow | None:
         """Convert a ToolEntity to a SQLite row tuple.
 
         Args:
@@ -32,7 +35,8 @@ class ToolSerializer(ISerializer[ToolEntity | None, tuple]):
             entity.is_enabled,
         )
 
-    def deserialize(self, db_row: tuple) -> ToolEntity | None:
+    @staticmethod
+    def deserialize(db_row: _ToolRow | tuple | None) -> ToolEntity | None:
         """Reconstruct a ToolEntity from a SQLite row tuple.
 
         Args:

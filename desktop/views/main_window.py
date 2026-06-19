@@ -1,13 +1,17 @@
+from pathlib import Path
+
 from PySide6.QtCore import Slot, QEvent
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QMenu, QStackedWidget,
+    QApplication, QDialog, QMainWindow, QMenu, QStackedWidget,
     QSystemTrayIcon, QWidget,
 )
 
 import utils.styles
 from app.app_state import app_state
 from app.theme_manager import theme_manager
+from domain.dto.backup_file import BackupFileDTO
+from domain.dto.backup_review_prompt import BackupReviewPromptDTO  # used in type hint for _on_backup_session_result
 from domain.dto.file_receive_prompt import FileReceivePromptDTO
 from domain.enums.screen import Screen
 from resources.colors import Colors, LightColors
@@ -16,8 +20,13 @@ from app.navigation_manager import navigation_manager, NavigationManager
 from utils.styles import themed
 from views.screens.dashboard import DashboardScreen
 from views.screens.login import LoginScreen
+from views.widgets.backup.backup_dest_picker_dialog import BackupDestPickerDialog
+from views.widgets.backup.backup_progress_window import BackupProgressWindow
+from views.widgets.backup.backup_review_dialog import BackupReviewDialog
 from views.widgets.dialogs.file_handler import TransferErrorDialog
 from views.widgets.toasts.file_received import FileReceivedToast
+from viewmodels.backup import BackupViewModel
+from viewmodels.file_transfer import FileTransferViewModel
 
 
 class MainWindow(QMainWindow):
@@ -51,7 +60,12 @@ class MainWindow(QMainWindow):
         self._navigation_manager: NavigationManager = navigation_manager
         self._screens: dict[Screen, QWidget]
 
-        self._file_transfer_vm = app_state.file_transfer_viewmodel
+        self._file_transfer_vm: FileTransferViewModel = app_state.file_transfer_viewmodel
+        self._backup_vm: BackupViewModel = app_state.backup_viewmodel
+        # Holds the BackupProgressWindow alive for the duration of a session.
+        self._backup_progress_win: BackupProgressWindow | None = None
+        # Holds the FileReceivedToast alive while it's on screen.
+        self._toast: FileReceivedToast | None = None
         self._clipboard_service = app_state.clipboard_service
 
         self._setup_ui()
@@ -90,13 +104,19 @@ class MainWindow(QMainWindow):
 
         self._tray_icon.setContextMenu(self._tray_menu)
         self._tray_icon.activated.connect(self._on_tray_activated)
-        self._tray_icon.show()
+        # Tray icon visibility is managed reactively by showEvent/hideEvent.
 
     def _connect_signals(self) -> None:
-        # Wire navigation, file-transfer, theme, and clipboard signals to their slots.
+        # Wire navigation, file-transfer, backup, theme, and clipboard signals to their slots.
         self._navigation_manager.navigate.connect(self._change_page)
         self._file_transfer_vm.receive_error.connect(self._on_file_receive_error)
+        self._file_transfer_vm.send_error.connect(self._on_file_send_error)
         self._file_transfer_vm.metadata_received.connect(self._on_file_received_metadata)
+        self._backup_vm.dest_dir_requested.connect(self._on_dest_dir_requested)
+        self._backup_vm.backup_ready.connect(self._on_backup_ready)
+        self._backup_vm.backup_session_result.connect(self._on_backup_session_result)
+        self._backup_vm.device_ready_changed.connect(self._on_backup_device_ready_changed)
+        app_state.device_viewmodel.connection_error.connect(self._on_connection_error)
         self._clipboard_service.clipboard_text_received.connect(self._on_clipboard_text_received)
         theme_manager.theme_changed.connect(self._restyle_tray)
         # PC → Android: delegate clipboard changes entirely to the service.
@@ -110,9 +130,28 @@ class MainWindow(QMainWindow):
         """
         if event.type() == QEvent.Type.WindowStateChange:
             if self.isMinimized():
-                # Hide to tray instead of showing a minimised taskbar entry
+                # Hide to tray instead of showing a minimised taskbar entry.
+                # hideEvent will fire automatically and show the tray icon.
                 self.hide()
         super().changeEvent(event)
+
+    def showEvent(self, event: QEvent) -> None:
+        """Hide the tray icon while the window is visible.
+
+        Args:
+            event: The show event delivered by Qt.
+        """
+        super().showEvent(event)
+        self._tray_icon.hide()
+
+    def hideEvent(self, event: QEvent) -> None:
+        """Show the tray icon whenever the window is hidden so the user can restore it.
+
+        Args:
+            event: The hide event delivered by Qt.
+        """
+        super().hideEvent(event)
+        self._tray_icon.show()
 
     # ── Slots ──────────────────────────────────────────────────────────────────
 
@@ -150,10 +189,126 @@ class MainWindow(QMainWindow):
             )
         )
 
-    @Slot()
+    @Slot(int, 'qint64', bool)
+    def _on_dest_dir_requested(self, file_count: int, files_size: int,
+                                storage_saver: bool) -> None:
+        # Android sent a manifest — show the folder-picker dialog. Opens
+        # BackupDestPickerDialog modally. On accept, unblocks the service with
+        # the chosen path; on cancel, aborts the session.
+        #
+        # Restore the window first: a QDialog with a hidden parent will not
+        # render on screen, leaving the backup service stuck waiting forever.
+        if not self.isVisible():
+            self._restore_window()
+        dlg = BackupDestPickerDialog(file_count, files_size,
+                                     storage_saver=storage_saver, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._backup_vm.confirm_dest_dir(dlg.selected_path)
+        else:
+            self._backup_vm.cancel_dest_selection()
+
+    @Slot(int, 'qint64')
+    def _on_backup_ready(self, file_count: int, total_bytes: int) -> None:
+        # User confirmed a destination — open the backup progress window.
+        # Creates a fresh BackupProgressWindow, wires it to the ViewModel, and
+        # shows it as a separate top-level window. The reference is stored on
+        # self so Qt does not garbage-collect it immediately.
+        self._backup_progress_win = BackupProgressWindow(
+            file_count=file_count,
+            total_bytes=total_bytes,
+        )
+        self._backup_progress_win.connect_viewmodel(self._backup_vm)
+        self._backup_progress_win.show()
+
+    @Slot(list, str)
+    def _on_backup_session_result(self, flagged: list[BackupReviewPromptDTO], dest_dir: str) -> None:
+        # Fired after backup_complete. Close the progress window (safe — _backup_done
+        # is already True) then show a review dialog for any ML-flagged files.
+        #
+        # Non-blocking design: the main window is NOT force-restored to the front.
+        # Completion is communicated via a tray balloon so the user is informed
+        # without interrupting whatever they are currently doing.
+        if self._backup_progress_win is not None:
+            self._backup_progress_win.close()
+            self._backup_progress_win = None
+
+        if flagged:
+            # Stat only the handful of ML-flagged files — no directory scan needed.
+            # prompt.cache_path is the final dest_dir path set by the service.
+            files: list[BackupFileDTO] = []
+            for prompt in flagged:
+                try:
+                    st = Path(prompt.cache_path).stat()
+                    files.append(BackupFileDTO(
+                        path=prompt.cache_path,
+                        name=prompt.file_name,
+                        size_bytes=st.st_size,
+                        mtime=int(st.st_mtime * 1000),
+                    ))
+                except OSError:
+                    pass  # file was already deleted (e.g. disk error) — skip it
+
+            if files:
+                dlg = BackupReviewDialog(files, parent=self)
+                if dlg.exec() == QDialog.DialogCode.Accepted:
+                    decisions = dlg.get_decisions()
+                    deleted_count = 0
+                    for path, decision in decisions.items():
+                        if decision == "delete":
+                            Path(path).unlink(missing_ok=True)
+                            deleted_count += 1
+
+                    kept = len(files) - deleted_count
+                    self._tray_icon.showMessage(
+                        "Backup Review Complete",
+                        f"{kept} file{'s' if kept != 1 else ''} kept"
+                        f", {deleted_count} deleted"
+                        f"\nFiles saved to: {dest_dir}",
+                        QSystemTrayIcon.MessageIcon.Information,
+                        6000,
+                    )
+                return
+
+        # No flagged files — classify=False or every ML file passed automatically.
+        self._tray_icon.showMessage(
+            "Backup Complete",
+            "All files have been saved successfully.",
+            QSystemTrayIcon.MessageIcon.Information,
+            5000,
+        )
+
+    @Slot(bool)
+    def _on_backup_device_ready_changed(self, ready: bool) -> None:
+        """Force-close the backup progress window when the device disconnects mid-backup.
+
+        The ViewModel has already cancelled the session (reset ``_is_active``)
+        before emitting this signal, so the window can be torn down without a
+        confirmation dialog via :meth:`~BackupProgressWindow.force_close`.
+        """
+        if not ready and self._backup_progress_win is not None:
+            self._backup_progress_win.force_close()
+            self._backup_progress_win = None
+
+    @Slot(str)
     def _on_file_receive_error(self, error: str) -> None:
         # Show the generic transfer-error dialog; error string is displayed inside it.
         TransferErrorDialog()
+
+    @Slot(str)
+    def _on_file_send_error(self, error: str) -> None:
+        # Mirror of _on_file_receive_error for the outbound direction.
+        TransferErrorDialog()
+
+    @Slot(str)
+    def _on_connection_error(self, error: str) -> None:
+        # Non-blocking tray notification — the listener retries automatically
+        # so no dialog is needed; the user just needs to know something went wrong.
+        self._tray_icon.showMessage(
+            "Connection Error",
+            f"Could not listen for connections: {error}\nRetrying…",
+            QSystemTrayIcon.MessageIcon.Warning,
+            4000,
+        )
 
     @Slot(str)
     def _on_clipboard_text_received(self, text: str) -> None:

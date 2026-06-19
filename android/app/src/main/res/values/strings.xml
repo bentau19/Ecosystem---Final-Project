@@ -20,5 +20,66 @@
 
     <!-- Backup transfer progress notification -->
     <string name="backup_notif_progress_title">Backup in progress</string>
-    <string name="backup_notif_complete_title">Backup complete</string>
+    <string name="backup_notif_complete_title">Backup completed</string>
+    <string name="backup_notif_complete_text_format">Backup successful: %1$d items</string>
+    <string name="backup_notif_complete_with_errors_format">Backup successful: %1$d items. Had an error with: %2$d files</string>
+    <string name="backup_notif_failed_title">Backup failed</string>
+    <string name="backup_notif_failed_text">An error occurred during backup — check your connection</string>
+    <string name="backup_notif_scan_failed_text">Could not scan files to back up — check permissions</string>
+    <string name="backup_notif_stopped_title">Backup stopped</string>
+    <string name="backup_notif_stopped_text">Stopped backing up files</string>
+
+    <!-- Backup started toast (shown briefly before BackupFragment returns to the dashboard) -->
+    <string name="backup_started_toast">Backup started — see notification for progress</string>
+    <!-- Shown when the user taps the backup card while a scan or transfer is already running -->
+    <string name="backup_already_in_progress">A backup is already in progress</string>
+
+    <!-- Button label while scan is running -->
+    <string name="backup_scanning">Scanning…</string>
+
+    <!-- Error dialogs shown when scan returns 0 files -->
+    <string name="backup_error_no_files_title">No Files Found</string>
+    <string name="backup_error_no_media">No photos or videos were found on your device.</string>
+    <string name="backup_error_no_folder_files">No files were found in the selected folder.</string>
+    <string name="backup_error_scan_failed_title">Scan Failed</string>
+    <string name="backup_error_scan_failed_msg">Could not scan files. Please check your permissions and try again.</string>
+
+    <!-- Storage Saver option -->
+    <string name="backup_section_storage_saver">STORAGE SAVER</string>
+    <string name="backup_opt_storage_saver">Storage Saver</string>
+    <string name="backup_opt_storage_saver_sub">Compress photos &amp; videos before backup to reduce size</string>
+    <string name="backup_opt_storage_saver_desc">Toggle storage saver compression</string>
+    <string name="backup_opt_storage_saver_on">ON</string>
+    <string name="backup_opt_storage_saver_off">OFF</string>
+
+    <!-- FolderPickerFragment UI -->
+    <string name="folder_picker_title">Select a Folder</string>
+    <string name="folder_picker_select_btn">Select This Folder</string>
+    <string name="folder_picker_empty">No sub-folders in this directory</string>
+    <string name="folder_picker_go_up_desc">Navigate to parent folder</string>
+
+    <!-- Dialog shown on API 30+ when MANAGE_EXTERNAL_STORAGE is not yet granted -->
+    <string name="folder_picker_grant_title">Full Storage Access Needed</string>
+    <string name="folder_picker_grant_msg">To browse and select any folder — including Downloads — grant Full Storage Access.\n\nTap \"Skip\" to use the system folder picker instead (Downloads and a few top-level folders will be unavailable).</string>
+    <string name="folder_picker_grant_positive">Grant Access</string>
+    <string name="folder_picker_grant_negative">Skip</string>
+    <!-- Updated subtitle hint for the Folder card -->
+    <string name="backup_btn_folder_sub_updated">Tap to browse and pick any folder</string>
+
+    <!-- Backup transfer in-progress button label (format: "Backing up 3 / 20…") -->
+    <string name="backup_backing_up_progress">Backing up %1$d / %2$d…</string>
+
+    <!-- Backup summary dialog (shown in-app when transfer completes) -->
+    <string name="backup_complete_dialog_title">Backup Complete</string>
+    <!-- Shown when every file succeeded -->
+    <string name="backup_complete_dialog_msg_all_ok">All %1$d files backed up successfully ✓</string>
+    <!-- Shown when at least one file failed -->
+    <string name="backup_complete_dialog_msg_with_errors">%1$d succeeded,  %2$d failed</string>
+
+    <!-- Error dialog when the whole transfer collapses (transport failure, not per-file) -->
+    <string name="backup_transfer_failed_title">Backup Failed</string>
+    <string name="backup_transfer_failed_msg">A connection error occurred during backup. Check your Wi‑Fi and try again.</string>
+
+    <!-- Toast shown when the PC dismisses the folder-picker before any file is sent -->
+    <string name="backup_canceled_by_pc">Backup canceled</string>
 </resources>

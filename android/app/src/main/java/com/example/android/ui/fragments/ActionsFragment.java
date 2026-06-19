@@ -142,7 +142,13 @@ public class ActionsFragment extends Fragment {
     private void handleToolClick(String toolId) {
         switch (toolId) {
             case "backup":
-                if (getActivity() instanceof MainActivity) {
+                if (viewModel.isBackupActive()) {
+                    // A scan or transfer is already running in the background —
+                    // block a second one to prevent system overload.
+                    Toast.makeText(getContext(),
+                            R.string.backup_already_in_progress,
+                            Toast.LENGTH_SHORT).show();
+                } else if (getActivity() instanceof MainActivity) {
                     ((MainActivity) getActivity()).navigateToBackup();
                 }
                 break;

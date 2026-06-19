@@ -10,8 +10,12 @@ from utils.styles import load_stylesheet, themed
 
 
 class ToolCard(QFrame):
-    """
-    A widget that displays a dashboard card with an icon, title, and content.
+    """A widget that displays a dashboard card with an icon, title, and content.
+
+    Hovering raises the card by 2px (animated); leaving lowers it back.
+
+    Signals:
+        clicked: Emitted when the card is left-clicked.
     """
 
     clicked: Signal = Signal()
@@ -26,19 +30,17 @@ class ToolCard(QFrame):
             icon_height: int = 30,
             parent: QWidget | None = None
     ) -> None:
-        """
-        Initialize the dashboard card widget.
+        """Initialize the dashboard card widget.
 
         Args:
-            icon (QIcon): The icon to display.
-            icon_background (QColor): The background color of the icon.
-            title (str): The title of the dashboard card.
-            content_widget (QWidget): The widget to display as the content.
-            icon_width (int, optional): The width of the icon. Defaults to 30.
-            icon_height (int, optional): The height of the icon. Defaults to 30.
-            parent (QWidget, optional): The parent widget. Defaults to None.
+            icon: The icon to display.
+            icon_background: The background color of the icon.
+            title: The title of the dashboard card.
+            content_widget: The widget to display as the content.
+            icon_width: The width of the icon. Defaults to ``30``.
+            icon_height: The height of the icon. Defaults to ``30``.
+            parent: Optional parent widget. Defaults to ``None``.
         """
-
         super().__init__(parent)
 
         self._icon: QIcon = icon
@@ -105,13 +107,13 @@ class ToolCard(QFrame):
         theme_manager.theme_changed.connect(self._setup_style)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        """
-        Handle mouse release events.
-
-        Emits a clicked signal when the left mouse button is released.
+        """Handle mouse release events.
 
         Args:
-            event (QMouseEvent): The mouse event.
+            event: The mouse release event delivered by Qt.
+
+        Emits:
+            clicked: When the released button is the left mouse button.
         """
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
@@ -136,14 +138,12 @@ class ToolCard(QFrame):
         return icon_label
 
     def enterEvent(self, event: QEnterEvent) -> None:
-        """
-        Handle the enter event for the widget.
+        """Handle the enter event for the widget.
 
-        This method is called when the mouse enters the widget. It animates the
-        widget to move up by 2 pixels.
+        Animates the widget to move up by 2 pixels.
 
         Args:
-            event (QEnterEvent): The enter event.
+            event: The enter event delivered by Qt.
         """
         super().enterEvent(event)
 
@@ -151,14 +151,12 @@ class ToolCard(QFrame):
         self.anim.start()
 
     def leaveEvent(self, event: QEvent) -> None:
-        """
-        Handle the leave event for the widget.
+        """Handle the leave event for the widget.
 
-        This method is called when the mouse leaves the widget. It animates the
-        widget to move down by 2 pixels.
+        Animates the widget to move back down by 2 pixels.
 
         Args:
-            event (QEvent): The leave event.
+            event: The leave event delivered by Qt.
         """
         super().leaveEvent(event)
         self.anim.setEndValue(self.pos() + QPoint(0, 2))

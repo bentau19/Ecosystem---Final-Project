@@ -1,16 +1,3 @@
-"""
-Serializer for the file-transfer metadata DTO.
-
-Converts :class:`~domain.dto.file_metadata.FileMetadataDTO` to and from the
-JSON wire format used on the ``file_meta`` TauSync channel.
-
-Wire format::
-
-    {"file_name": <str>, "file_size": <int>, "modified_at": <int>}
-
-``modified_at`` is optional on inbound payloads (legacy senders may omit it);
-it defaults to ``0`` when absent, meaning "timestamp not provided".
-"""
 import json
 from pathlib import Path
 from typing import Any
@@ -29,13 +16,24 @@ _SCHEMA: dict[str, Any] = json.loads(
 class FileMetadataSerializer(ISerializer[FileMetadataDTO, str]):
     """Serializes :class:`~domain.dto.file_metadata.FileMetadataDTO` to/from JSON.
 
+    Converts the DTO to and from the JSON wire format used on the
+    ``file_meta`` TauSync channel.
+
+    Wire format::
+
+        {"file_name": <str>, "file_size": <int>, "modified_at": <int>}
+
+    ``modified_at`` is optional on inbound payloads (legacy senders may omit
+    it); it defaults to ``0`` when absent, meaning "timestamp not provided".
+
     Both :meth:`serialize` and :meth:`deserialize` validate the wire object
-    against the JSON Schema at ``serializers/jsons/file_metadata.json`` before
-    returning, so malformed payloads are caught at the boundary rather than
-    propagating into domain code.
+    against the JSON Schema at ``serializers/schemas/file_metadata.json``
+    before returning, so malformed payloads are caught at the boundary rather
+    than propagating into domain code.
     """
 
-    def serialize(self, data: FileMetadataDTO) -> str:
+    @staticmethod
+    def serialize(data: FileMetadataDTO) -> str:
         """Convert a :class:`~domain.dto.file_metadata.FileMetadataDTO` to a JSON string.
 
         Args:
@@ -56,7 +54,8 @@ class FileMetadataSerializer(ISerializer[FileMetadataDTO, str]):
         validate(instance=wire, schema=_SCHEMA)
         return json.dumps(wire)
 
-    def deserialize(self, data: str) -> FileMetadataDTO:
+    @staticmethod
+    def deserialize(data: str) -> FileMetadataDTO:
         """Parse a JSON string into a :class:`~domain.dto.file_metadata.FileMetadataDTO`.
 
         ``modified_at`` is optional — legacy senders that omit it produce a DTO

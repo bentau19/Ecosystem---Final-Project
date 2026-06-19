@@ -6,6 +6,7 @@ package com.example.android.domain.enums;
  * <p>State machine:
  * <pre>
  *   IDLE → SCANNING → READY
+ *                   ↘ EMPTY   (scan completed, zero files found)
  *                   ↘ FAILED
  *   (any terminal state) → IDLE  (via BackupRepository.reset())
  * </pre>
@@ -23,6 +24,9 @@ public enum BackupScanStatus {
 
     /** Scan completed successfully — file list is available. */
     READY,
+
+    /** Scan completed but found zero files to back up (empty device or empty folder). */
+    EMPTY,
 
     /** Scan failed due to an I/O error or missing permissions. */
     FAILED
