@@ -7,6 +7,8 @@ import androidx.lifecycle.MutableLiveData;
 
 import com.example.android.domain.enums.WebcamStatus;
 
+import java.util.concurrent.LinkedBlockingQueue;
+
 /**
  * Repository responsible for webcam streaming state (Android → PC).
  *
@@ -25,6 +27,13 @@ public class WebcamRepository {
 
     private final MutableLiveData<WebcamStatus> status =
             new MutableLiveData<>(WebcamStatus.IDLE);
+
+    /**
+     * Bridge between WebcamFragment (CameraX producer) and WebcamStreamUseCase (consumer).
+     * Capacity=2: if the network is slower than the camera, old frames are dropped rather
+     * than buffering indefinitely and causing an OOM crash.
+     */
+    public final LinkedBlockingQueue<byte[]> frameQueue = new LinkedBlockingQueue<>(2);
 
     /** Implemented by ConnectivityService — runs actual network I/O on a background thread. */
     public interface StreamActionListener {
@@ -86,6 +95,7 @@ public class WebcamRepository {
     }
 
     public void reset() {
+        frameQueue.clear();
         status.postValue(WebcamStatus.IDLE);
     }
 }

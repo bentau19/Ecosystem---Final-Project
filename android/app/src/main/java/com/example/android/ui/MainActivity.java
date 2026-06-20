@@ -24,6 +24,7 @@ import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.services.AppNotificationManager;
 import com.example.android.ui.fragments.ActionsFragment;
 import com.example.android.ui.fragments.BackupFragment;
+import com.example.android.ui.fragments.WebcamFragment;
 import com.example.android.ui.fragments.ConnectFragment;
 import com.example.android.viewmodel.FileTransferViewModel;
 import com.example.android.viewmodel.MainViewModel;
@@ -207,6 +208,19 @@ public class MainActivity extends AppCompatActivity {
         getSupportFragmentManager().beginTransaction()
                 .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out)
                 .replace(R.id.fragment_container, new BackupFragment())
+                .addToBackStack(null)
+                .commitAllowingStateLoss();
+    }
+
+    /**
+     * Navigates to the Webcam viewfinder screen.
+     *
+     * <p>Uses addToBackStack so the back button returns to ActionsFragment.
+     */
+    public void navigateToWebcam() {
+        getSupportFragmentManager().beginTransaction()
+                .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out)
+                .replace(R.id.fragment_container, new WebcamFragment())
                 .addToBackStack(null)
                 .commitAllowingStateLoss();
     }

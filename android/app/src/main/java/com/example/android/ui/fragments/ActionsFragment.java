@@ -16,12 +16,10 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.example.android.R;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionStatus;
-import com.example.android.domain.enums.WebcamStatus;
 import com.example.android.ui.MainActivity;
 import com.example.android.ui.adapters.ToolsAdapter;
 import com.example.android.ui.models.ToolItem;
 import com.example.android.viewmodel.MainViewModel;
-import com.example.android.viewmodel.WebcamViewModel;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,7 +31,6 @@ import java.util.List;
 public class ActionsFragment extends Fragment {
 
     private MainViewModel viewModel;
-    private WebcamViewModel webcamViewModel;
     private ToolsAdapter toolsAdapter;
     private RecyclerView toolsRecyclerView;
 
@@ -45,9 +42,8 @@ public class ActionsFragment extends Fragment {
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_actions, container, false);
 
-        // 1. Initialize ViewModels with activity scope to share data across fragments
+        // 1. Initialize ViewModel with activity scope to share data across fragments
         viewModel = new ViewModelProvider(requireActivity()).get(MainViewModel.class);
-        webcamViewModel = new ViewModelProvider(requireActivity()).get(WebcamViewModel.class);
 
         // 2. Initialize UI components and binding
         initViews(view);
@@ -83,14 +79,7 @@ public class ActionsFragment extends Fragment {
             }
         });
 
-        // 5. Observe WebcamStatus to update the camera card label in real-time.
-        webcamViewModel.getStatus().observe(getViewLifecycleOwner(), status -> {
-            if (status == null) return;
-            String label = (status == WebcamStatus.STREAMING) ? "Stop Camera" : "Camera Mirror";
-            toolsAdapter.updateLabel("camera", label);
-        });
-
-        // 6. Observe ConnectionStatus to disable the disconnect button while a
+        // 5. Observe ConnectionStatus to disable the disconnect button while a
         //    disconnect is already in flight (prevents double-tap / re-entry).
         viewModel.getConnectionStatus().observe(getViewLifecycleOwner(), status -> {
             if (status == null) return;
@@ -99,7 +88,7 @@ public class ActionsFragment extends Fragment {
             btnDisconnect.setAlpha(disconnecting ? 0.4f : 1.0f);
         });
 
-        // 7. Disconnect Button: Requests termination of the active session
+        // 6. Disconnect Button: Requests termination of the active session
         btnDisconnect.setOnClickListener(v -> {
             if (getActivity() instanceof MainActivity) {
                 ((MainActivity) getActivity()).disconnect();
@@ -160,11 +149,8 @@ public class ActionsFragment extends Fragment {
                 }
                 break;
             case "camera":
-                WebcamStatus webcamStatus = webcamViewModel.getStatus().getValue();
-                if (webcamStatus == WebcamStatus.STREAMING) {
-                    webcamViewModel.stopStream();
-                } else {
-                    webcamViewModel.startStream();
+                if (getActivity() instanceof MainActivity) {
+                    ((MainActivity) getActivity()).navigateToWebcam();
                 }
                 break;
             default:
