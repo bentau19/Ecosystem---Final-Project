@@ -62,6 +62,7 @@ namespace TauSync.Implementations.Management
         private const int MaxPendingDiscoveryPerWord = 64;
 
         private readonly ITransport _wifiTransport;
+        private readonly ITransport _bluetoothTransport;
 
         /// <summary>
         /// Number of transports currently brought up by the app (intentional connects minus
@@ -71,10 +72,39 @@ namespace TauSync.Implementations.Management
         /// </summary>
         private int _activeTransportCount;
 
+        /// <summary>
+        /// Hybrid session token. Generated server-side after the BT_MAGIC exchange and shared with
+        /// the client inside WIFI_CONNECT_READY; the client echoes it in SESSION_JOIN so the server
+        /// can prove the incoming Wi-Fi socket belongs to the same session as the Bluetooth link.
+        /// Null until a hybrid session is established; cleared by <see cref="Reset"/>.
+        /// </summary>
+        private volatile string? _sessionToken;
+
+        /// <summary>
+        /// The peer's Wi-Fi IPv4 address, learned from the WifiHost field of the peer's BT_MAGIC frame
+        /// during the hybrid handshake. Lets the app connect Wi-Fi (or display/pre-fill the address)
+        /// without the user typing an IP — the Bluetooth link discovers it. Null until a hybrid
+        /// BT_MAGIC carrying a host arrives; cleared by <see cref="Reset"/>.
+        /// </summary>
+        private volatile string? _peerWifiHost;
+
         private ConnectionContext()
         {
             _wifiTransport = new SocketTransport();
+            _bluetoothTransport = new BluetoothTransport();
         }
+
+        /// <summary>Stores the hybrid session token (see <see cref="_sessionToken"/>).</summary>
+        public void SetSessionToken(string token) => _sessionToken = token;
+
+        /// <summary>Returns the hybrid session token, or null if no hybrid session is established.</summary>
+        public string? GetSessionToken() => _sessionToken;
+
+        /// <summary>Stores the peer's Wi-Fi IPv4 address learned over Bluetooth (see <see cref="_peerWifiHost"/>).</summary>
+        public void SetPeerWifiHost(string? host) => _peerWifiHost = host;
+
+        /// <summary>Returns the peer's Wi-Fi IPv4 address learned over Bluetooth, or null if not yet known.</summary>
+        public string? GetPeerWifiHost() => _peerWifiHost;
 
         public async Task InitializeTransports(string?targetId, int? timeoutSeconds = null)
         {
@@ -150,11 +180,14 @@ namespace TauSync.Implementations.Management
             _targetMap.Clear();
             _serviceRegistry.Clear();
             _pendingDiscoveryByWord.Clear();
+            _sessionToken = null;
+            _peerWifiHost = null;
             Interlocked.Exchange(ref _nextCorrelationId, MinId);
         }
 
-        public ITransport? GetWifiTransport() => _wifiTransport as ITransport;
-        public SocketTransport? GetWifiTransportAsSocket() => _wifiTransport as SocketTransport;
+        public ITransport GetWifiTransport() => _wifiTransport;
+        public SocketTransport GetWifiTransportAsSocket() => (SocketTransport)_wifiTransport;
+        public ITransport GetBluetoothTransport() => _bluetoothTransport;
 
         /// <summary>
         /// Returns true when the underlying transport accepted a connection (server mode).
@@ -291,6 +324,11 @@ namespace TauSync.Implementations.Management
         {
             if ((flags & CoreConfig.FlagControl) == 0)
                 return false;
+            // Hybrid session signaling (BT_MAGIC, WIFI_CONNECT_*, SESSION_JOIN*) is checked before
+            // meeting-word discovery: it shares TargetID=0 + CONTROL but is keyed by a reserved
+            // Type, so it never collides with a user meeting word.
+            if (TryHandleSessionControl(payload))
+                return true;
             if (TryParseDiscoveryCancel(payload, out TransferRequest cancel))
                 return HandleDiscoveryCancel(cancel);
             if (!TryParseDiscoveryRequest(payload, out TransferRequest request))
@@ -385,6 +423,64 @@ namespace TauSync.Implementations.Management
             _targetMap.TryRemove(localId, out _);
             ReleaseId(localId);
         }
+
+        /// <summary>
+        /// Hybrid session-control callback. Registered by the hybrid <see cref="ConnectionManager"/>;
+        /// invoked for every recognised session-control frame (BT_MAGIC, WIFI_CONNECT_*, SESSION_JOIN*)
+        /// arriving on TargetID=0. The coordinator infers the source transport from the message type,
+        /// so the source need not be passed here.
+        /// </summary>
+        private Action<SessionControlMessage>? _sessionControlListener;
+
+        /// <summary>Registers the hybrid session-control callback (see <see cref="_sessionControlListener"/>).</summary>
+        public void RegisterSessionControlListener(Action<SessionControlMessage> listener)
+        {
+            _sessionControlListener = listener ?? throw new ArgumentNullException(nameof(listener));
+        }
+
+        /// <summary>Clears the hybrid session-control callback (e.g. on manager dispose).</summary>
+        public void UnregisterSessionControlListener() => _sessionControlListener = null;
+
+        /// <summary>
+        /// Routes a recognised session-control frame to the registered listener. Returns false (so
+        /// the frame falls through to meeting-word discovery) when no listener is registered or the
+        /// payload is not a valid session-control message.
+        /// </summary>
+        private bool TryHandleSessionControl(byte[] payload)
+        {
+            Action<SessionControlMessage>? listener = _sessionControlListener;
+            if (listener == null)
+                return false;
+            SessionControlMessage? message = ParseSessionControl(payload);
+            if (message == null)
+                return false;
+            listener(message);
+            return true;
+        }
+
+        private static SessionControlMessage? ParseSessionControl(byte[] payload)
+        {
+            if (payload == null || payload.Length == 0)
+                return null;
+            try
+            {
+                var message = JsonSerializer.Deserialize<SessionControlMessage>(Encoding.UTF8.GetString(payload));
+                if (message == null || message.MagicBytes != CoreConfig.MagicBytes)
+                    return null;
+                return IsKnownSessionType(message.Type) ? message : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool IsKnownSessionType(string? type) =>
+            type is SessionControlMessage.TypeBtMagic
+                 or SessionControlMessage.TypeWifiConnectReq
+                 or SessionControlMessage.TypeWifiConnectReady
+                 or SessionControlMessage.TypeSessionJoin
+                 or SessionControlMessage.TypeSessionJoinAck;
 
         private bool TryParseDiscoveryRequest(byte[] payload, out TransferRequest request)
         {

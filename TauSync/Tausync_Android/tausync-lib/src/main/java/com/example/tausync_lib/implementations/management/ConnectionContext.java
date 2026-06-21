@@ -3,6 +3,7 @@ package com.example.tausync_lib.implementations.management;
 import com.example.tausync_lib.core.CoreConfig;
 import com.example.tausync_lib.implementations.transport.SocketTransport;
 import com.example.tausync_lib.interfaces.ITransport;
+import com.example.tausync_lib.models.SessionControlMessage;
 import com.example.tausync_lib.models.TransferRequest;
 import com.google.gson.Gson;
 
@@ -12,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 /**
  * Central hub (singleton) for ID management and packet routing per TauSync v3.
@@ -73,8 +75,44 @@ public final class ConnectionContext {
      */
     private final AtomicInteger activeTransportCount = new AtomicInteger(0);
 
+    /**
+     * Hybrid session token. Generated server-side after the BT_MAGIC exchange and shared with
+     * the client inside WIFI_CONNECT_READY; the client echoes it in SESSION_JOIN so the server
+     * can prove the incoming Wi-Fi socket belongs to the same session as the Bluetooth link.
+     * Null until a hybrid session is established; cleared by {@link #reset()}.
+     */
+    private volatile String sessionToken = null;
+
+    /**
+     * The peer's Wi-Fi IPv4 address, learned from the WifiHost field of the peer's BT_MAGIC frame
+     * during the hybrid handshake. Lets the app connect Wi-Fi (or display/pre-fill the address)
+     * without the user typing an IP — the Bluetooth link discovers it. Null until a hybrid BT_MAGIC
+     * carrying a host arrives; cleared by {@link #reset()}.
+     */
+    private volatile String peerWifiHost = null;
+
     private ConnectionContext() {
         wifiTransport = new SocketTransport();
+    }
+
+    /** Stores the hybrid session token (see {@link #sessionToken}). */
+    public void setSessionToken(String token) {
+        this.sessionToken = token;
+    }
+
+    /** Returns the hybrid session token, or null if no hybrid session is established. */
+    public String getSessionToken() {
+        return sessionToken;
+    }
+
+    /** Stores the peer's Wi-Fi IPv4 address learned over Bluetooth (see {@link #peerWifiHost}). */
+    public void setPeerWifiHost(String host) {
+        this.peerWifiHost = host;
+    }
+
+    /** Returns the peer's Wi-Fi IPv4 address learned over Bluetooth, or null if not yet known. */
+    public String getPeerWifiHost() {
+        return peerWifiHost;
     }
 
     /**
@@ -287,6 +325,8 @@ public final class ConnectionContext {
         targetMap.clear();
         serviceRegistry.clear();
         pendingDiscoveryByWord.clear();
+        sessionToken = null;
+        peerWifiHost = null;
         nextCorrelationId.set(CoreConfig.MIN_ID);
     }
 
@@ -324,6 +364,11 @@ public final class ConnectionContext {
 
     private boolean dispatchDiscoveryRequest(byte[] payload, byte flags) {
         if ((flags & CoreConfig.FLAG_CONTROL) == 0) return false;
+
+        // Hybrid session signaling (BT_MAGIC, WIFI_CONNECT_*, SESSION_JOIN*) is checked before
+        // meeting-word discovery: it shares TargetID=0 + CONTROL but is keyed by a reserved Type,
+        // so it never collides with a user meeting word.
+        if (tryHandleSessionControl(payload)) return true;
 
         TransferRequest request = parseTransferRequest(payload);
         if (request == null) return false;
@@ -502,6 +547,61 @@ public final class ConnectionContext {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    // ── Hybrid session control ────────────────────────────────────────
+
+    /**
+     * Hybrid session-control callback. Registered by the hybrid {@link ConnectionManager};
+     * invoked for every recognised session-control frame (BT_MAGIC, WIFI_CONNECT_*, SESSION_JOIN*)
+     * arriving on TargetID=0. The coordinator infers the source transport from the message type,
+     * so the source need not be passed here.
+     */
+    private volatile Consumer<SessionControlMessage> sessionControlListener;
+
+    /** Registers the hybrid session-control callback (see {@link #sessionControlListener}). */
+    public void registerSessionControlListener(Consumer<SessionControlMessage> listener) {
+        if (listener == null) throw new IllegalArgumentException("listener must not be null");
+        this.sessionControlListener = listener;
+    }
+
+    /** Clears the hybrid session-control callback (e.g. on manager close). */
+    public void unregisterSessionControlListener() {
+        this.sessionControlListener = null;
+    }
+
+    /**
+     * Routes a recognised session-control frame to the registered listener. Returns false (so the
+     * frame falls through to meeting-word discovery) when no listener is registered or the payload
+     * is not a valid session-control message.
+     */
+    private boolean tryHandleSessionControl(byte[] payload) {
+        Consumer<SessionControlMessage> listener = sessionControlListener;
+        if (listener == null) return false;
+        SessionControlMessage message = parseSessionControl(payload);
+        if (message == null) return false;
+        listener.accept(message);
+        return true;
+    }
+
+    private SessionControlMessage parseSessionControl(byte[] payload) {
+        if (payload == null || payload.length == 0) return null;
+        try {
+            SessionControlMessage message =
+                    gson.fromJson(new String(payload, StandardCharsets.UTF_8), SessionControlMessage.class);
+            if (message == null || message.getMagicBytes() != CoreConfig.MAGIC_BYTES) return null;
+            return isKnownSessionType(message.getType()) ? message : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static boolean isKnownSessionType(String type) {
+        return SessionControlMessage.TYPE_BT_MAGIC.equals(type)
+                || SessionControlMessage.TYPE_WIFI_CONNECT_REQ.equals(type)
+                || SessionControlMessage.TYPE_WIFI_CONNECT_READY.equals(type)
+                || SessionControlMessage.TYPE_SESSION_JOIN.equals(type)
+                || SessionControlMessage.TYPE_SESSION_JOIN_ACK.equals(type);
     }
 
     // ── Functional interface for service callbacks ─────────────────────

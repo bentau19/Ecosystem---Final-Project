@@ -164,16 +164,26 @@ public class BluetoothTransport implements ITransport {
 
         BluetoothDevice device = adapter.getRemoteDevice(deviceAddress);
         if (device.getBondState() != BluetoothDevice.BOND_BONDED) {
-            // TODO(Phase 5): trigger BleDiscovery to re-pair, then retry. Until then the
-            // caller must pair the device (system settings / CompanionDeviceManager) first.
-            throw new IOException("Device " + deviceAddress + " is not bonded; pair it before connecting.");
+            throw new BondLostException(deviceAddress);
         }
 
-        btSocket = device.createRfcommSocketToServiceRecord(
-                UUID.fromString(CoreConfig.RFCOMM_SERVICE_UUID));
-        // Active discovery dramatically slows down an RFCOMM connect — always cancel it first.
+        // Cancel any active inquiry scan before creating the socket — discovery contends with
+        // RFCOMM and dramatically increases connect latency and failure rate.
         adapter.cancelDiscovery();
-        btSocket.connect(); // blocks until connected or throws
+
+        UUID serviceUuid = UUID.fromString(CoreConfig.RFCOMM_SERVICE_UUID);
+        try {
+            btSocket = device.createRfcommSocketToServiceRecord(serviceUuid);
+            btSocket.connect();
+        } catch (IOException secureException) {
+            // Secure RFCOMM failed. Many Android versions and device combinations reject it
+            // even on a bonded pair ("read failed, socket might closed or timeout, read ret: -1").
+            // Fall back to an insecure channel, which skips the link-key authentication step
+            // while still going through SDP to resolve the correct channel number.
+            closeQuietly(btSocket);
+            btSocket = device.createInsecureRfcommSocketToServiceRecord(serviceUuid);
+            btSocket.connect();
+        }
     }
 
     private void startConnectWatchdog(CompletableFuture<Void> connectionFuture, long timeoutMs) {
@@ -449,5 +459,20 @@ public class BluetoothTransport implements ITransport {
     private static void closeQuietly(AutoCloseable closeable) {
         if (closeable == null) return;
         try { closeable.close(); } catch (Exception ignored) {}
+    }
+
+    /**
+     * Thrown when {@link #connect} is called for a device that is no longer bonded.
+     * The caller (or the Activity layer) should invoke {@code BleDiscovery.startDiscovery()}
+     * to re-pair, save the address, and retry the connect.
+     */
+    public static final class BondLostException extends java.io.IOException {
+        /** The MAC address of the device whose bond was lost. */
+        public final String deviceAddress;
+
+        public BondLostException(String deviceAddress) {
+            super("Device " + deviceAddress + " is not bonded. Re-pair via BleDiscovery first.");
+            this.deviceAddress = deviceAddress;
+        }
     }
 }

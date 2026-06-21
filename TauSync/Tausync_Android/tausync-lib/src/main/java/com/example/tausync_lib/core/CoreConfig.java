@@ -86,8 +86,37 @@ public final class CoreConfig {
     public static final int SESSION_JOIN_ACK_TIMEOUT_MS = 10_000;
 
     /**
-     * Guide threshold (64 KB) the app uses to pick the Eco (BT) vs Performance (Wi-Fi)
-     * manager per channel in Hybrid mode. HybridConnectionManager never routes on this.
+     * Hybrid routing threshold (64 KB): payloads at or below this size are sent over the
+     * Bluetooth (primary) transport; larger payloads trigger the lazy Wi-Fi connect and are
+     * sent over Wi-Fi. The constant exists so the cutoff can be tuned without touching logic.
      */
     public static final int HYBRID_SMALL_THRESHOLD_BYTES = 65_536;
+
+    /**
+     * Default chunk size for bulk file transfers (256 KB). Deliberately larger than
+     * {@link #HYBRID_SMALL_THRESHOLD_BYTES} so that, in hybrid mode, each file chunk crosses the
+     * threshold and the stream is routed over the high-throughput Wi-Fi link — whereas small writes
+     * (strings, control) stay below it and ride Bluetooth. Keep this strictly greater than the
+     * threshold or file transfers will fall back to Bluetooth.
+     */
+    public static final int LARGE_TRANSFER_CHUNK_SIZE = 4 * STREAM_CHUNK_SIZE;
+
+    /**
+     * How long the Wi-Fi link may sit with no received frame before the hybrid manager
+     * disconnects it (60 s). Bluetooth stays up; the next large payload re-runs the
+     * WIFI_CONNECT_REQ handshake from scratch.
+     */
+    public static final int WIFI_IDLE_TIMEOUT_MS = 60_000;
+
+    /**
+     * How many times {@code ConnectionManager.connect} retries automatically after a handshake
+     * timeout before giving up. Total maximum wait = (CONNECT_RETRY_COUNT + 1) × HANDSHAKE_TIMEOUT_SECONDS.
+     */
+    public static final int CONNECT_RETRY_COUNT = 3;
+
+    /**
+     * How many times the hybrid coordinator retries bringing Wi-Fi up before falling back to
+     * Bluetooth for the current send. Each attempt waits up to BT_CONNECT_TIMEOUT_MS.
+     */
+    public static final int WIFI_RECONNECT_MAX_ATTEMPTS = 3;
 }

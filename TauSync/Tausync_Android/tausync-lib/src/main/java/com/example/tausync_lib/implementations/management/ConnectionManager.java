@@ -2,6 +2,7 @@ package com.example.tausync_lib.implementations.management;
 
 import com.example.tausync_lib.core.CoreConfig;
 import com.example.tausync_lib.implementations.protocol.ProtocolHandler;
+import com.example.tausync_lib.implementations.transport.SocketTransport;
 import com.example.tausync_lib.interfaces.IConnectionManager;
 import com.example.tausync_lib.interfaces.IProtocolHandler;
 import com.example.tausync_lib.interfaces.ITransport;
@@ -31,7 +32,18 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public class ConnectionManager implements IConnectionManager {
 
-    private ITransport wifiTransport;
+    /**
+     * Primary transport: control traffic and small payloads. In Wi-Fi-only mode this is the
+     * {@link SocketTransport}; in hybrid mode it is the always-on Bluetooth transport.
+     */
+    private ITransport primaryTransport;
+
+    /** Secondary (lazy Wi-Fi) transport in hybrid mode; null in single-transport mode. */
+    private final ITransport secondaryTransport;
+
+    /** Hybrid session orchestrator; null in single-transport mode (no routing/handshake). */
+    private final HybridSessionCoordinator hybrid;
+
     private final IProtocolHandler protocolHandler;
     private final Gson gson = new Gson();
 
@@ -51,6 +63,15 @@ public class ConnectionManager implements IConnectionManager {
     private final Set<String> inFlightWords = ConcurrentHashMap.newKeySet();
 
     /**
+     * The single transport each stream is pinned to. A stream chooses its transport on its first
+     * data send and keeps it for life — data and FIN all travel one link. This is what makes a hybrid
+     * transfer safe: the two transports have no mutual ordering at the receiver, so splitting one
+     * logical stream across both would let frames overtake each other and corrupt or truncate the
+     * data. One stream, one link, fully ordered. Mirrors C# {@code _pinnedTransportByStream}.
+     */
+    private final ConcurrentHashMap<Integer, ITransport> pinnedTransportByStream = new ConcurrentHashMap<>();
+
+    /**
      * Dedicated pool for blocking handshake operations. Avoids starving the
      * default ForkJoinPool.commonPool() on Android devices with few cores.
      */
@@ -66,6 +87,8 @@ public class ConnectionManager implements IConnectionManager {
 
     public ConnectionManager() {
         protocolHandler = new ProtocolHandler();
+        secondaryTransport = null;
+        hybrid = null;
         ITransport transport = ConnectionContext.getInstance().getWifiTransport();
         if (transport == null) {
             throw new IllegalStateException("ConnectionContext has no transport.");
@@ -73,11 +96,30 @@ public class ConnectionManager implements IConnectionManager {
         initialize(transport);
     }
 
+    /**
+     * Hybrid constructor: {@code primary} is the always-on Bluetooth link (control + small payloads)
+     * and {@code secondary} is the lazy Wi-Fi link (large payloads). The manager routes each logical
+     * send by size and runs the BT_MAGIC / SESSION_JOIN handshakes itself; the caller just uses it
+     * like any other manager.
+     */
+    public ConnectionManager(ITransport primary, ITransport secondary) {
+        protocolHandler = new ProtocolHandler();
+        if (primary == null) throw new IllegalArgumentException("primary transport must not be null");
+        if (secondary == null) throw new IllegalArgumentException("secondary transport must not be null");
+        if (!(secondary instanceof SocketTransport)) {
+            throw new IllegalArgumentException("The secondary (Wi-Fi) transport must be a SocketTransport.");
+        }
+        primaryTransport = primary;
+        secondaryTransport = secondary;
+        hybrid = new HybridSessionCoordinator(primary, (SocketTransport) secondary, protocolHandler);
+        ConnectionContext.getInstance().registerSessionControlListener(hybrid::onSessionControl);
+    }
+
     @Override
     public void initialize(ITransport transport) {
         if (transport == null) throw new IllegalArgumentException("transport must not be null");
-        if (wifiTransport != null) throw new IllegalStateException("Already initialized.");
-        wifiTransport = transport;
+        if (primaryTransport != null) throw new IllegalStateException("Already initialized.");
+        primaryTransport = transport;
     }
 
     @Override
@@ -89,7 +131,16 @@ public class ConnectionManager implements IConnectionManager {
     public CompletableFuture<Void> connectTransport(String targetId, Integer timeoutSeconds) {
         return CompletableFuture.runAsync(() -> {
             try {
-                ConnectionContext.getInstance().initializeTransports(targetId, timeoutSeconds);
+                if (hybrid != null) {
+                    // Hybrid: connect the Bluetooth primary directly (the manager owns its
+                    // transports, so the singleton's internal transport is bypassed), then run the
+                    // BT_MAGIC handshake. Wi-Fi is connected lazily on the first large payload.
+                    ConnectionContext.getInstance().reset();
+                    primaryTransport.connect(targetId, timeoutSeconds).get();
+                    hybrid.startBtSession();
+                } else {
+                    ConnectionContext.getInstance().initializeTransports(targetId, timeoutSeconds);
+                }
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
@@ -98,7 +149,7 @@ public class ConnectionManager implements IConnectionManager {
 
     @Override
     public boolean isConnected() {
-        return wifiTransport != null && wifiTransport.isConnected();
+        return primaryTransport != null && primaryTransport.isConnected();
     }
 
     @Override
@@ -112,21 +163,42 @@ public class ConnectionManager implements IConnectionManager {
         String wordTrimmed = word.trim();
 
         // Reject a second connect() while one is still in flight for the same word.
-        // Two concurrent same-word handshakes clobber the single service-registry slot
-        // and leave the peer with an orphaned stream that hangs forever — fail loud instead.
         if (!inFlightWords.add(wordTrimmed)) {
             throw new IllegalStateException(
                     "Connect already in progress for word '" + wordTrimmed
                             + "'. Wait for it to resolve or use a distinct word.");
         }
         try {
-            return connectCore(wordTrimmed, timeoutSec);
+            return connectWithRetry(wordTrimmed, timeoutSec, CoreConfig.CONNECT_RETRY_COUNT);
         } catch (RuntimeException | Error e) {
-            // A synchronous failure means whenComplete below never runs — release the
-            // guard here so the word is not permanently blocked.
             inFlightWords.remove(wordTrimmed);
             throw e;
         }
+    }
+
+    /**
+     * Calls {@link #connectCore} and retries automatically on timeout, up to {@code retriesLeft}
+     * additional times. The in-flight guard for the word stays held across retries; {@code connectCore}'s
+     * {@code whenComplete} cleans up all per-word state on each attempt so each retry starts fresh.
+     */
+    private CompletableFuture<TauSyncStream> connectWithRetry(String wordTrimmed, int timeoutSec, int retriesLeft) {
+        return connectCore(wordTrimmed, timeoutSec)
+                .handle((stream, ex) -> {
+                    if (ex == null) {
+                        return CompletableFuture.completedFuture(stream);
+                    }
+                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    if (cause instanceof java.util.concurrent.TimeoutException
+                            && retriesLeft > 0 && !disposed) {
+                        // connectCore's whenComplete already cleaned up service registry and word
+                        // channel — safe to start a fresh attempt.
+                        return connectWithRetry(wordTrimmed, timeoutSec, retriesLeft - 1);
+                    }
+                    CompletableFuture<TauSyncStream> failed = new CompletableFuture<>();
+                    failed.completeExceptionally(ex);
+                    return failed;
+                })
+                .thenCompose(f -> f);
     }
 
     /** Runs the actual handshake for an already guard-acquired word. */
@@ -170,7 +242,7 @@ public class ConnectionManager implements IConnectionManager {
         if (word == null || word.trim().isEmpty()) {
             throw new IllegalArgumentException("Word cannot be null or empty.");
         }
-        if (wifiTransport == null || !wifiTransport.isConnected()) {
+        if (primaryTransport == null || !primaryTransport.isConnected()) {
             throw new IllegalStateException("Transport not connected. connectTransport first.");
         }
         if (disposed) {
@@ -253,7 +325,10 @@ public class ConnectionManager implements IConnectionManager {
             }
         }, HANDSHAKE_POOL);
 
-        boolean preferOwnPath = !ctx.isTransportServerMode();
+        // The meeting-word handshake runs over the primary transport (Wi-Fi in single mode,
+        // Bluetooth in hybrid), so the race tiebreaker reads the primary's role, not the singleton
+        // context's internal transport.
+        boolean preferOwnPath = !primaryTransport.isServerMode();
 
         if (preferOwnPath) {
             return ownPath
@@ -320,7 +395,7 @@ public class ConnectionManager implements IConnectionManager {
             String json = gson.toJson(cancel);
             byte[] body = json.getBytes(StandardCharsets.UTF_8);
             byte[] frame = protocolHandler.buildFrame(CoreConfig.CONTROL_CHANNEL_ID, body, CoreConfig.FLAG_CONTROL);
-            wifiTransport.sendRaw(frame);
+            primaryTransport.sendRaw(frame);
         } catch (Exception ignored) {
             // Best-effort — never let a failed CANCEL break the connect cleanup path.
         }
@@ -330,7 +405,7 @@ public class ConnectionManager implements IConnectionManager {
                                    int localId, int peerSenderId, InputStream stream) {
         try {
             byte[] frame = buildOkFrame(wordKey, localId, peerSenderId);
-            wifiTransport.sendRaw(frame).get();
+            primaryTransport.sendRaw(frame).get();
 
             TauSyncStream duplex = new TauSyncStream(stream, localId, this);
             channel.offer(duplex);
@@ -364,7 +439,7 @@ public class ConnectionManager implements IConnectionManager {
         String json = gson.toJson(request);
         byte[] reqBody = json.getBytes(StandardCharsets.UTF_8);
         byte[] reqFrame = protocolHandler.buildFrame(CoreConfig.CONTROL_CHANNEL_ID, reqBody, CoreConfig.FLAG_CONTROL);
-        return wifiTransport.sendRaw(reqFrame);
+        return primaryTransport.sendRaw(reqFrame);
     }
 
     private CompletableFuture<TauSyncStream> waitForOkAndBuildStreamAsync(
@@ -392,10 +467,40 @@ public class ConnectionManager implements IConnectionManager {
 
     // ── Stream Data ───────────────────────────────────────────────────
 
+    /**
+     * Returns the transport a stream must use, pinning it on the first send. A stream whose first
+     * write exceeds the size threshold is pinned to Wi-Fi; everything else stays on Bluetooth. File
+     * transfers cross the threshold because the file helpers write chunks larger than it, while small
+     * writes (strings, control) stay below — so the right link is chosen automatically. Once pinned the
+     * choice never changes, except that a Wi-Fi link torn down for idle is revived (or, if it cannot
+     * be, the stream falls back to Bluetooth). Mirrors C# {@code ResolveSendTransport}.
+     */
+    private ITransport resolveSendTransport(int localId, int count) {
+        if (hybrid == null) return primaryTransport;
+
+        ITransport pinned = pinnedTransportByStream.get(localId);
+        if (pinned != null) {
+            // A stream pinned to Wi-Fi whose link was idle-disconnected: revive it so the stream stays
+            // on its link. The idle teardown only happens after the link has drained, so re-establishing
+            // (or, on failure, dropping to Bluetooth) cannot reorder live data.
+            if (pinned == secondaryTransport && !pinned.isConnected()) {
+                ITransport revived = hybrid.acquireWifiOrFallback();
+                pinnedTransportByStream.put(localId, revived);
+                return revived;
+            }
+            return pinned;
+        }
+
+        boolean large = count > CoreConfig.HYBRID_SMALL_THRESHOLD_BYTES;
+        ITransport chosen = large ? hybrid.acquireWifiOrFallback() : primaryTransport;
+        pinnedTransportByStream.put(localId, chosen);
+        return chosen;
+    }
+
     @Override
     public void sendStreamData(int localId, byte[] buffer, int offset, int count) {
         if (disposed) throw new IllegalStateException("ConnectionManager is disposed.");
-        if (wifiTransport == null) throw new IllegalStateException("Transport not initialized.");
+        if (primaryTransport == null) throw new IllegalStateException("Transport not initialized.");
         if (buffer == null) throw new IllegalArgumentException("buffer must not be null");
         if (offset < 0 || count < 0 || offset + count > buffer.length) {
             throw new IndexOutOfBoundsException("Invalid offset/count");
@@ -409,6 +514,10 @@ public class ConnectionManager implements IConnectionManager {
                             + ". Handshake may not have completed; do not write before connect(word) finishes.");
         }
 
+        // Pin the stream to one transport (Wi-Fi if large/flagged, else Bluetooth) and send every
+        // chunk over it. One stream uses one link for life, so frames stay ordered at the receiver.
+        ITransport transport = resolveSendTransport(localId, count);
+
         int sent = 0;
         while (sent < count) {
             int sliceLen = Math.min(CoreConfig.STREAM_CHUNK_SIZE, count - sent);
@@ -416,7 +525,7 @@ public class ConnectionManager implements IConnectionManager {
             System.arraycopy(buffer, offset + sent, chunk, 0, sliceLen);
             byte[] frame = protocolHandler.buildFrame(peerId, chunk, (byte) 0);
             try {
-                wifiTransport.sendRaw(frame).get();
+                transport.sendRaw(frame).get();
             } catch (Exception e) {
                 throw new RuntimeException("Failed to send stream data", e);
             }
@@ -429,7 +538,7 @@ public class ConnectionManager implements IConnectionManager {
         if (disposed) {
             return CompletableFuture.failedFuture(new IllegalStateException("ConnectionManager is disposed."));
         }
-        if (wifiTransport == null) {
+        if (primaryTransport == null) {
             return CompletableFuture.failedFuture(new IllegalStateException("Transport not initialized."));
         }
         if (buffer == null) {
@@ -446,6 +555,10 @@ public class ConnectionManager implements IConnectionManager {
                     "No peer route for localId " + localId));
         }
 
+        // Pin the stream to one transport and send every chunk over it (see sendStreamData). Resolving
+        // only blocks while Wi-Fi is first being brought up; afterwards it returns immediately.
+        final ITransport transport = resolveSendTransport(localId, count);
+
         List<byte[]> frames = new ArrayList<>();
         int sent = 0;
         while (sent < count) {
@@ -457,7 +570,7 @@ public class ConnectionManager implements IConnectionManager {
         }
         CompletableFuture<Void> result = CompletableFuture.completedFuture(null);
         for (byte[] frame : frames) {
-            result = result.thenCompose(ignored -> wifiTransport.sendRaw(frame));
+            result = result.thenCompose(ignored -> transport.sendRaw(frame));
         }
         return result;
     }
@@ -465,16 +578,22 @@ public class ConnectionManager implements IConnectionManager {
     @Override
     public void completeStream(int localId) {
         if (disposed) return;
-        if (wifiTransport == null) return;
+        if (primaryTransport == null) return;
 
         Integer peerId = ConnectionContext.getInstance().getPeerIdFor(localId);
         if (peerId != null) {
+            // Send FIN over the link this stream is pinned to so it cannot overtake in-flight data on a
+            // different transport. Falls back to primary for a stream that was never written (empty
+            // close) or whose pinned link is gone (idle-disconnected and already drained).
+            ITransport pinned = pinnedTransportByStream.get(localId);
+            ITransport finTransport = (pinned != null && pinned.isConnected()) ? pinned : primaryTransport;
             byte[] finFrame = protocolHandler.buildFrame(peerId, new byte[0], CoreConfig.FLAG_FIN);
             try {
-                wifiTransport.sendRaw(finFrame).get();
+                finTransport.sendRaw(finFrame).get();
             } catch (Exception ignored) {
             }
         }
+        pinnedTransportByStream.remove(localId);
         ConnectionContext.getInstance().releaseId(localId);
     }
 
@@ -490,6 +609,14 @@ public class ConnectionManager implements IConnectionManager {
         if (disposed) return;
         disposed = true;
         incomingByWord.clear();
+        if (hybrid != null) {
+            // Hybrid: the manager owns its transports, so end the whole session here. Disconnecting
+            // both decrements the ref-count to zero, which aborts channels and resets shared state.
+            ConnectionContext.getInstance().unregisterSessionControlListener();
+            hybrid.dispose();
+            try { secondaryTransport.close(); } catch (Exception ignored) {}
+            try { primaryTransport.close(); } catch (Exception ignored) {}
+        }
     }
 
     /**

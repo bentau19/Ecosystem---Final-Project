@@ -211,7 +211,9 @@ public final class TauSyncStream implements Closeable {
      * @throws IOException on I/O error or file not found
      */
     public long writeFile(String path) throws IOException {
-        return writeFile(path, DEFAULT_CHUNK_SIZE);
+        // Use the large-transfer chunk size (above the hybrid threshold) so a file streamed in hybrid
+        // mode is routed over Wi-Fi rather than Bluetooth. Small writes keep the default chunk size.
+        return writeFile(path, CoreConfig.LARGE_TRANSFER_CHUNK_SIZE);
     }
 
     /**

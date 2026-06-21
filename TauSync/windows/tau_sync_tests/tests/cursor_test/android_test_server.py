@@ -50,6 +50,22 @@ Every automated test below is paired with a matching handler in
     20. test_cid_00…09          10 channels opened simultaneously — unique IDs, no cross-talk
     21. test_conc_close         Both sides close at the same time; next channel still works
 
+  GROUP HYBRID — Phase 3 Bluetooth + lazy Wi-Fi  (start the console in
+  "Hybrid (Bluetooth) Server" mode; the phone uses its "Run Hybrid Tests" button)
+    H1. hybrid_ip_discovery     Wi-Fi IP exchanged over BT_MAGIC (no manual IP)
+    H2. hybrid_route_small      32 KB stays on Bluetooth (Wi-Fi never comes up)
+    H3. hybrid_route_large      200 KB brings Wi-Fi up, SHA-256 verified
+    H4. hybrid_route_boundary   64 KB on BT, 64 KB+1 on Wi-Fi
+    H5. hybrid_ch_continuity    one stream small→large→small (BT→Wi-Fi→BT)
+    H6. hybrid_wifi_idle_reuse  Wi-Fi tears down after 60 s idle, re-establishes
+    H7. hybrid_bt_reconnect     BT drops mid-session → channel resumes transparently
+                                (semi-manual: disrupt BT during the 30 s DROP_WINDOW)
+
+  The two server modes are mutually exclusive (the transport is a process-wide
+  singleton): pick "Wi-Fi Server" OR "Hybrid (Bluetooth) Server" at launch.
+  Adding another connection-manager type later is just one more mode button plus
+  a serve_all_*_tests() function.
+
   Plus the MANUAL CHANNELS panel in the GUI: open any meeting word to get a
   live two-way chat with the phone (Send, Spam xN, optional Echo-back).  Open
   several words at once — each opens its own tab.
@@ -94,6 +110,12 @@ UNICODE_PAYLOAD = "שלום_世界_\U0001f30d"
 TEST_TIMEOUT_SECONDS = 180
 LARGE_WRITE_SIZE = 5 * 1024 * 1024    # 5 MB in one write() — auto-chunking must split it
 CONCURRENT_ID_COUNT = 10               # simultaneous channels for ID-race regression test
+
+# ── Phase 3 hybrid (Bluetooth + lazy Wi-Fi) test parameters ──────────────
+HYBRID_THRESHOLD = 65_536                    # CoreConfig.HybridSmallThresholdBytes (64 KB)
+HYBRID_SMALL_SIZE = 32 * 1024                # below threshold → stays on Bluetooth
+HYBRID_LARGE_SIZE = 200 * 1024              # above threshold → brings Wi-Fi up
+HYBRID_IDLE_WAIT_SECONDS = 65               # > WIFI_IDLE_TIMEOUT_MS (60 s) so Wi-Fi tears down
 
 
 # ── Small helpers ────────────────────────────────────────────────────
@@ -490,6 +512,156 @@ def serve_concurrent_close(tau):
         stream2.close()
 
 
+# ── Group HYBRID: Phase 3 Bluetooth + lazy Wi-Fi transport ───────────
+#
+# These run only when the console is started in HYBRID mode (Bluetooth server).
+# The phone drives them from its separate "Run Hybrid Tests" button; each handler
+# pairs by meeting word exactly like the Wi-Fi tests, but the data is multiplexed
+# over Bluetooth (small) and a lazily-connected Wi-Fi socket (large) underneath.
+
+def serve_hybrid_ip_discovery(tau):
+    """H1: BT_MAGIC carried each side's Wi-Fi IP — discovered without manual entry.
+
+    The phone verifies it learned OUR Wi-Fi IP (server) via get_peer_wifi_ip(); we
+    verify we learned the phone's. A non-empty IP on both ends proves bidirectional
+    discovery over Bluetooth.
+    """
+    stream = tau.connect("hybrid_ip_discovery")
+    try:
+        peer_ip = tau.peer_wifi_ip
+        client_saw = read_text_line(stream)                 # IP the phone discovered for us
+        stream.write_string(f"{peer_ip or 'NONE'}\n")       # IP we discovered for the phone
+        passed = bool(peer_ip)
+        print(f"  [hybrid_ip_discovery] {'PASS' if passed else 'FAIL'}  "
+              f"server_saw_peer={peer_ip!r}  client_saw_server={client_saw!r}")
+    finally:
+        stream.close()
+
+
+def serve_hybrid_route_small(tau):
+    """H2: a 32 KB payload round-trips entirely over Bluetooth (Wi-Fi never comes up)."""
+    stream = tau.connect("hybrid_route_small")
+    try:
+        size = int(read_text_line(stream))
+        data = stream.read_exactly(size)
+        stream.write(data)                                  # ≤64 KB → Bluetooth
+        stream.write_string(f"{'UP' if tau.wifi_active else 'DOWN'}\n")
+        print(f"  [hybrid_route_small] echoed {size} bytes, server wifi_active={tau.wifi_active}")
+    finally:
+        stream.close()
+
+
+def serve_hybrid_route_large(tau):
+    """H3: a 200 KB payload triggers the lazy Wi-Fi bring-up and round-trips intact."""
+    stream = tau.connect("hybrid_route_large")
+    try:
+        size = int(read_text_line(stream))
+        data = stream.read_exactly(size)
+        stream.write(data)                                  # >64 KB → Wi-Fi
+        stream.write_string(f"{'UP' if tau.wifi_active else 'DOWN'}\n")
+        print(f"  [hybrid_route_large] echoed {size} bytes, server wifi_active={tau.wifi_active}")
+    finally:
+        stream.close()
+
+
+def serve_hybrid_route_boundary(tau):
+    """H4: exactly-threshold (64 KB) stays on Bluetooth; threshold+1 byte goes to Wi-Fi."""
+    stream = tau.connect("hybrid_route_boundary")
+    try:
+        for label in ("at-threshold", "over-threshold"):
+            size = int(read_text_line(stream))
+            data = stream.read_exactly(size)
+            stream.write(data)
+            print(f"  [hybrid_route_boundary] echoed {label}: {size} bytes")
+    finally:
+        stream.close()
+
+
+def serve_hybrid_channel_continuity(tau):
+    """H5: one stream carries small (BT) → large (Wi-Fi) → small (BT) with no reopen.
+
+    The same channel must keep working as the underlying transport switches links,
+    proving channels live in the shared context, not on a single transport.
+    """
+    stream = tau.connect("hybrid_ch_continuity")
+    try:
+        stream.write_string(read_text_line(stream) + "\n")  # phase 1: small over BT
+        size = int(read_text_line(stream))                  # phase 2: large over Wi-Fi
+        stream.write(stream.read_exactly(size))
+        stream.write_string(read_text_line(stream) + "\n")  # phase 3: small over BT again
+        print("  [hybrid_ch_continuity] served small→large→small on one stream")
+    finally:
+        stream.close()
+
+
+def serve_hybrid_wifi_idle_reuse(tau):
+    """H6: large (Wi-Fi up) → phone idles past the 60 s timeout (Wi-Fi torn down) →
+    large again (Wi-Fi re-established from scratch). Slow by design (~65 s).
+    """
+    stream = tau.connect("hybrid_wifi_idle_reuse")
+    try:
+        size1 = int(read_text_line(stream))
+        stream.write(stream.read_exactly(size1))            # round 1 brings Wi-Fi up
+        ready = read_text_line(stream)                      # phone signals after the idle wait
+        size2 = int(read_text_line(stream))
+        stream.write(stream.read_exactly(size2))            # round 2 must re-establish Wi-Fi
+        stream.write_string(f"{'UP' if tau.wifi_active else 'DOWN'}\n")
+        print(f"  [hybrid_wifi_idle_reuse] two large rounds across idle teardown (signal={ready!r})")
+    finally:
+        stream.close()
+
+
+def serve_hybrid_bt_reconnect(tau):
+    """H7: BT drops mid-session → channel blocks then resumes; data arrives intact.
+
+    The server sends pre-drop data, then sleeps for 30 s to give the tester time to
+    briefly disable Bluetooth on either end.  Both transports' reconnect loops re-open
+    RFCOMM automatically; afterwards the server sends post-drop data on the SAME
+    channel object — no reconnect at the application layer.
+
+    Semi-manual: during the 30 s DROP_WINDOW the tester must disrupt and re-enable BT.
+    If BT is never disrupted, the test still passes (no-op verification).
+    """
+    stream = tau.connect("hybrid_bt_reconnect")
+    try:
+        data_before = os.urandom(HYBRID_SMALL_SIZE)
+        sha_before = hashlib.sha256(data_before).hexdigest()
+        stream.write_string(sha_before + "\n")
+        stream.write(data_before)
+
+        # Signal that the drop window is open, then sleep.
+        stream.write_string("DROP_WINDOW\n")
+        time.sleep(30)
+
+        data_after = os.urandom(HYBRID_SMALL_SIZE)
+        sha_after = hashlib.sha256(data_after).hexdigest()
+        stream.write_string(sha_after + "\n")
+        stream.write(data_after)
+        stream.write_string("DONE\n")
+        print("  [hybrid_bt_reconnect] served pre-drop and post-drop data")
+    finally:
+        stream.close()
+
+
+def serve_all_hybrid_tests(tau):
+    """Arm every hybrid-mode test channel. Re-callable from 'Re-arm Tests'."""
+    threads = [
+        run_test_on_thread(serve_hybrid_ip_discovery, (tau,)),
+        run_test_on_thread(serve_hybrid_route_small, (tau,)),
+        run_test_on_thread(serve_hybrid_route_large, (tau,)),
+        run_test_on_thread(serve_hybrid_route_boundary, (tau,)),
+        run_test_on_thread(serve_hybrid_channel_continuity, (tau,)),
+        run_test_on_thread(serve_hybrid_wifi_idle_reuse, (tau,)),
+        run_test_on_thread(serve_hybrid_bt_reconnect, (tau,)),
+    ]
+    for thread in threads:
+        thread.join(timeout=TEST_TIMEOUT_SECONDS)
+
+    timed_out = [t for t in threads if t.is_alive()]
+    if timed_out:
+        print(f"\n  WARNING: {len(timed_out)} hybrid test(s) still running after {TEST_TIMEOUT_SECONDS}s")
+
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _make_temp_file(size_bytes: int) -> str:
@@ -549,6 +721,22 @@ def serve_all_tests(tau):
     timed_out = [t for t in threads if t.is_alive()]
     if timed_out:
         print(f"\n  WARNING: {len(timed_out)} test(s) still running after {TEST_TIMEOUT_SECONDS}s")
+
+
+def serve_all_tests_and_hybrid(tau):
+    """Arm BOTH the standard and hybrid suites over a single hybrid connection.
+
+    The standard test words (test_msg, …) and the hybrid words (hybrid_*) are disjoint, so a
+    hybrid link can serve either 'Run All Tests' or 'Run Hybrid Tests' on the phone without
+    reconnecting. Each suite spawns its own connect threads then joins internally, so we run them
+    on their own threads to arm both concurrently rather than serially.
+    """
+    suites = [
+        run_test_on_thread(serve_all_tests, (tau,)),
+        run_test_on_thread(serve_all_hybrid_tests, (tau,)),
+    ]
+    for suite in suites:
+        suite.join()
 
 
 # ── Manual playground GUI ─────────────────────────────────────────────
@@ -700,13 +888,18 @@ class TauSyncTestConsole(tk.Tk):
         self.manual_channels = {}
         self._closing = False
 
-        self.status_var = tk.StringVar(value="Starting server…")
+        # Set once a mode is chosen, so 'Re-arm Tests' knows which suite to serve again.
+        # Adding a new connection-manager type later is just another mode button + serve_* fn.
+        self.active_mode = None
+        self.serve_suite = None
+
+        self.status_var = tk.StringVar(value="Choose a server mode to start…")
         self.word_var = tk.StringVar(value="main")
 
         self._build_ui()
         self.after(80, self._drain_ui_queue)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        threading.Thread(target=self._listen_and_serve, daemon=True).start()
+        self._log_system("Pick a mode: 'Wi-Fi Server' (TCP) or 'Hybrid (Bluetooth) Server' (Phase 3).")
 
     # — cross-thread UI posting —
     def post(self, func):
@@ -731,6 +924,16 @@ class TauSyncTestConsole(tk.Tk):
         self.system_log = scrolledtext.ScrolledText(self, height=6, state="disabled", wrap="word")
         self.system_log.pack(fill="x", padx=8, pady=4)
 
+        mode_row = ttk.Frame(self)
+        mode_row.pack(fill="x", padx=8, pady=(4, 0))
+        ttk.Label(mode_row, text="Server mode:").pack(side="left")
+        self.wifi_mode_btn = ttk.Button(mode_row, text="Wi-Fi Server (TCP)",
+                                        command=self._on_start_wifi)
+        self.wifi_mode_btn.pack(side="left", padx=4)
+        self.hybrid_mode_btn = ttk.Button(mode_row, text="Hybrid (Bluetooth) Server",
+                                          command=self._on_start_hybrid)
+        self.hybrid_mode_btn.pack(side="left", padx=4)
+
         controls = ttk.Frame(self)
         controls.pack(fill="x", padx=8, pady=4)
         ttk.Label(controls, text="Manual channel word:").pack(side="left")
@@ -744,30 +947,72 @@ class TauSyncTestConsole(tk.Tk):
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=8, pady=(4, 8))
 
-    # — server lifecycle —
-    def _listen_and_serve(self):
-        self.post(lambda: self.status_var.set("Waiting for Android client to connect…"))
-        self.post(lambda: self._log_system("Listening for Android client…"))
+    # — server lifecycle (mode-aware) —
+    def _on_start_wifi(self):
+        self._start_mode(
+            mode="wifi",
+            label="Wi-Fi (TCP)",
+            connect=lambda: self.tau.listen(),
+            suite=serve_all_tests,
+        )
+
+    def _on_start_hybrid(self):
+        def connect_hybrid():
+            self.tau.connect_hybrid()
+            ip = self.tau.peer_wifi_ip
+            self.post(lambda: self._log_system(
+                f"Bluetooth handshake done. Phone's Wi-Fi IP discovered over BT: {ip or '(none)'}"))
+
+        self._start_mode(
+            mode="hybrid",
+            label="Hybrid (Bluetooth)",
+            connect=connect_hybrid,
+            # Arm both suites so a hybrid link serves 'Run All Tests' and 'Run Hybrid Tests'.
+            suite=serve_all_tests_and_hybrid,
+        )
+
+    def _start_mode(self, mode, label, connect, suite):
+        """Establishes one server mode (singleton transport allows exactly one) and arms its suite."""
+        self.active_mode = mode
+        self.serve_suite = suite
+        self.wifi_mode_btn.config(state="disabled")
+        self.hybrid_mode_btn.config(state="disabled")
+        self.status_var.set(f"Starting {label} server — waiting for Android…")
+        self._log_system(f"Starting {label} server; waiting for the phone to connect…")
+        threading.Thread(target=lambda: self._connect_and_serve(label, connect), daemon=True).start()
+
+    def _connect_and_serve(self, label, connect):
         try:
-            self.tau.listen()
+            connect()
         except Exception as exc:
-            self.post(lambda: self.status_var.set(f"listen() failed: {exc}"))
+            # Capture the message immediately: Python 3 deletes the 'exc' variable after
+            # the except block exits, so lambdas posted to the UI queue would see a NameError.
+            msg = f"{label} start failed: {exc}"
+            self.post(lambda m=msg: self.status_var.set(m))
+            self.post(lambda m=msg: self._log_system(m))
+            # Re-enable mode buttons so the user can retry / pick the other mode.
+            self.post(lambda: self.wifi_mode_btn.config(state="normal"))
+            self.post(lambda: self.hybrid_mode_btn.config(state="normal"))
+            self.active_mode = None
+            self.serve_suite = None
             return
-        self.post(lambda: self.status_var.set("Android connected — manual channels enabled, tests armed."))
+        self.post(lambda: self.status_var.set(f"Android connected ({label}) — manual channels enabled, tests armed."))
         self.post(self._enable_controls)
         self._arm_tests()
 
     def _enable_controls(self):
         self.open_btn.config(state="normal")
         self.rearm_btn.config(state="normal")
-        self._log_system("Android connected. Open manual channels or tap 'Run All Tests' on the phone.")
+        self._log_system("Android connected. Open manual channels or tap the matching 'Run Tests' on the phone.")
 
     def _arm_tests(self):
+        if self.serve_suite is None:
+            return
         self.post(lambda: self._log_system("Arming automated test channels…"))
         threading.Thread(target=self._serve_tests_once, daemon=True).start()
 
     def _serve_tests_once(self):
-        serve_all_tests(self.tau)
+        self.serve_suite(self.tau)
         self.post(lambda: self._log_system("Automated test round served. Re-arm to run again."))
 
     def _on_rearm_tests(self):

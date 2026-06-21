@@ -20,6 +20,13 @@ namespace TauSync.Interfaces
         TransportKind TransportType { get; }
 
         /// <summary>
+        /// True when this transport accepted a connection (server mode), false when it initiated one
+        /// (client mode). Used by ConnectionManager for the simultaneous-connect race tiebreaker and
+        /// by the hybrid coordinator to derive the Wi-Fi server/client role from the Bluetooth role.
+        /// </summary>
+        bool IsServerMode { get; }
+
+        /// <summary>
         /// Connects to the target. When <paramref name="targetId"/> is null or empty, acts as server: listens and waits for the first incoming connection.
         /// </summary>
         /// <param name="targetId">IP address of the peer (client mode), or null/empty for server mode.</param>

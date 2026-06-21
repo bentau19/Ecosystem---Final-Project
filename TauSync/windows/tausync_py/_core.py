@@ -28,6 +28,8 @@ _Byte = None
 _GCHandle = None
 _GCHandleType = None
 _ConnectionManagerCls = None
+_SocketTransportCls = None
+_ConnectionContextCls = None
 
 _DEFAULT_DLL_RELATIVE = os.path.join(
     "TauSync", "Tausync_Windows", "TauSync.Lib",
@@ -67,6 +69,7 @@ def _find_dll() -> str:
 def _ensure_clr(dll_path: Optional[str] = None) -> None:
     """Load CoreCLR + TauSync.Lib.dll exactly once (thread-safe)."""
     global _clr_ready, _Array, _Byte, _GCHandle, _GCHandleType, _ConnectionManagerCls
+    global _SocketTransportCls, _ConnectionContextCls
 
     if _clr_ready:
         return
@@ -91,6 +94,8 @@ def _ensure_clr(dll_path: Optional[str] = None) -> None:
         from System import Array, Byte  # pyright: ignore[reportMissingImports]
         from System.Runtime.InteropServices import GCHandle, GCHandleType  # pyright: ignore[reportMissingImports]
         from TauSync.Implementations.Management import ConnectionManager as _CM  # pyright: ignore[reportMissingImports]
+        from TauSync.Implementations.Management import ConnectionContext as _CTX  # pyright: ignore[reportMissingImports]
+        from TauSync.Implementations.Transport import SocketTransport as _ST  # pyright: ignore[reportMissingImports]
         from System import Nullable, Int32, TimeoutException
 
         _Array = Array
@@ -98,6 +103,8 @@ def _ensure_clr(dll_path: Optional[str] = None) -> None:
         _GCHandle = GCHandle
         _GCHandleType = GCHandleType
         _ConnectionManagerCls = _CM
+        _ConnectionContextCls = _CTX
+        _SocketTransportCls = _ST
         _clr_ready = True
 
 
@@ -402,11 +409,18 @@ class TauSyncStream:
 
     # -- file transfer helpers ---------------------------------------------
 
-    def write_file(self, path: str, chunk_size: int = 65536) -> int:
+    def write_file(self, path: str, chunk_size: int = 262144) -> int:
         """Stream a local file into the TauSync channel.
 
         Uses a single pinned .NET buffer for the whole transfer so memory
         stays constant regardless of file size.
+
+        The default ``chunk_size`` (256 KB) is deliberately larger than the
+        hybrid small-payload threshold (64 KB), so in hybrid Bluetooth+Wi-Fi
+        mode each file chunk is routed over the high-throughput Wi-Fi link
+        rather than Bluetooth.  Mirrors ``CoreConfig.LargeTransferChunkSize``.
+        Keep it strictly above the threshold or transfers fall back to
+        Bluetooth.
 
         Args:
             path: Path to the file to send.
@@ -565,7 +579,7 @@ class TauSync:
 
     def __init__(self, dll_path: Optional[str] = None) -> None:
         _ensure_clr(dll_path)
-        self._manager = _ConnectionManagerCls()
+        self._manager = _ConnectionManagerCls(False)
         self._disposed = False
 
     def get_peer_waiting_words(self) -> list[str]:
@@ -702,6 +716,83 @@ class TauSync:
                 TauSync._global_target = None
             raise
 
+    def connect_hybrid(self, timeout_seconds: int | None = None) -> None:
+        """Start a hybrid Bluetooth + Wi-Fi session as the server (Windows side).
+
+        Windows is always the Bluetooth RFCOMM **server** (and the Wi-Fi server). This
+        starts the RFCOMM listener, waits for the Android client to connect, and runs the
+        BT_MAGIC handshake. Bluetooth is the always-on primary link; Wi-Fi is brought up
+        lazily only when a large payload needs it.
+
+        During the handshake the peer's Wi-Fi IP is exchanged over Bluetooth, so neither
+        side needs the address typed in — read it back from :pyattr:`peer_wifi_ip`.
+
+        Args:
+            timeout_seconds: Max seconds to wait for the Bluetooth client to connect.
+                ``None`` (default) waits forever.
+
+        Raises:
+            TimeoutError: If no Bluetooth client connected within *timeout_seconds*.
+            RuntimeError: If the transport was already established in another role/mode.
+        """
+        from System import TimeoutException
+
+        self._check_not_disposed()
+        with TauSync._global_role_lock:
+            if TauSync._global_role == _ROLE_CLIENT:
+                raise RuntimeError(
+                    "Cannot connect_hybrid() - transport is already connected in "
+                    f"client mode (to {TauSync._global_target!r}). "
+                    "The transport is a singleton; you cannot switch roles."
+                )
+            if TauSync._global_role == _ROLE_SERVER:
+                return  # already serving, idempotent
+            TauSync._global_role = _ROLE_SERVER
+            TauSync._global_target = "bt:0.0.0.0 (listening)"
+
+        try:
+            # Bluetooth is the primary (RFCOMM server) link; the singleton's Wi-Fi
+            # SocketTransport is the lazy secondary. The hybrid ConnectionManager starts the
+            # BT listener itself and runs the BT_MAGIC handshake (where the peer's Wi-Fi IP
+            # is discovered).
+            self._manager = _ConnectionManagerCls()
+            self._manager.ConnectTransport("", timeout_seconds).GetAwaiter().GetResult()
+        except TimeoutException as exc:
+            with TauSync._global_role_lock:
+                TauSync._global_role = _ROLE_NONE
+                TauSync._global_target = None
+            raise TimeoutError(str(exc))
+        except Exception:
+            with TauSync._global_role_lock:
+                TauSync._global_role = _ROLE_NONE
+                TauSync._global_target = None
+            raise
+
+    @property
+    def peer_wifi_ip(self) -> Optional[str]:
+        """The peer's Wi-Fi IPv4 address discovered over Bluetooth, or ``None``.
+
+        Populated during the hybrid BT_MAGIC handshake (see :pymeth:`connect_hybrid`), so
+        the address is available without anyone typing it in.
+        """
+        try:
+            return _ConnectionContextCls.Instance.GetPeerWifiHost()
+        except Exception:
+            return None
+
+    @property
+    def wifi_active(self) -> bool:
+        """Whether the lazy Wi-Fi link is currently up (hybrid mode).
+
+        Flips to true after the first large payload brings Wi-Fi online and back to false
+        after the idle teardown, so tests can assert size-based routing.
+        """
+        try:
+            wifi = _ConnectionContextCls.Instance.GetWifiTransportAsSocket()
+            return bool(wifi is not None and wifi.IsConnected())
+        except Exception:
+            return False
+
     @property
     def is_connected(self) -> bool:
         """Whether the underlying TCP transport is up."""
@@ -830,7 +921,7 @@ class TauSync:
                 "Call listen() or connect_to() first."
             )
         ts = TauSync.__new__(TauSync)
-        ts._manager = _ConnectionManagerCls()
+        ts._manager = _ConnectionManagerCls(False)
         ts._disposed = False
         return ts
 

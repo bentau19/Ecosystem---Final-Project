@@ -58,6 +58,18 @@ namespace TauSync.Implementations.Transport
         /// <summary>Whether this transport accepted a connection (server) rather than initiated one (client).</summary>
         public bool IsServerMode => _isServerMode;
 
+        /// <summary>
+        /// UTC ticks of the last frame sent or received. The hybrid coordinator reads this to decide
+        /// when the Wi-Fi link has been idle long enough to disconnect. Initialised to "now" so a
+        /// freshly connected link is not immediately considered idle.
+        /// </summary>
+        private long _lastActivityTicks = DateTime.UtcNow.Ticks;
+
+        /// <summary>UTC ticks of the last send or receive on this transport (see <see cref="_lastActivityTicks"/>).</summary>
+        public long LastActivityTicks => Volatile.Read(ref _lastActivityTicks);
+
+        private void MarkActivity() => Volatile.Write(ref _lastActivityTicks, DateTime.UtcNow.Ticks);
+
         public event EventHandler<byte[]>? OnDataReceived;
 
         /// <inheritdoc />
@@ -267,6 +279,7 @@ namespace TauSync.Implementations.Transport
             {
                 await _stream.WriteAsync(data, 0, data.Length).ConfigureAwait(false);
                 await _stream.FlushAsync().ConfigureAwait(false);
+                MarkActivity();
             }
             finally
             {
@@ -532,6 +545,7 @@ namespace TauSync.Implementations.Transport
                     if (!result.success)
                         break;
 
+                    MarkActivity();
                     DispatchFrame(result.targetId, result.payload, result.flags, result.rawFrame);
                 }
                 catch (OperationCanceledException) { break; }

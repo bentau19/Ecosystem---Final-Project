@@ -82,9 +82,39 @@ namespace TauSync.Core
         public const int SessionJoinAckTimeoutMs = 10_000;
 
         /// <summary>
-        /// Guide threshold (64 KB) the app uses to pick the Eco (BT) vs Performance (Wi-Fi)
-        /// manager per channel in Hybrid mode. HybridConnectionManager never routes on this.
+        /// Hybrid routing threshold (64 KB): payloads at or below this size are sent over the
+        /// Bluetooth (primary) transport; larger payloads trigger the lazy Wi-Fi connect and are
+        /// sent over Wi-Fi. The constant exists so the cutoff can be tuned without touching logic.
         /// </summary>
         public const int HybridSmallThresholdBytes = 65_536;
+
+        /// <summary>
+        /// Default chunk size for bulk file transfers (256 KB). Deliberately larger than
+        /// <see cref="HybridSmallThresholdBytes"/> so that, in hybrid mode, each file chunk crosses the
+        /// threshold and the stream is routed over the high-throughput Wi-Fi link — whereas small
+        /// writes (strings, control) stay below it and ride Bluetooth. Keep this strictly greater than
+        /// the threshold or file transfers will fall back to Bluetooth.
+        /// </summary>
+        public const int LargeTransferChunkSize = 4 * StreamChunkSize;
+
+        /// <summary>
+        /// How long the Wi-Fi link may sit with no received frame before the hybrid manager
+        /// disconnects it (60 s). Bluetooth stays up; the next large payload re-runs the
+        /// WIFI_CONNECT_REQ handshake from scratch.
+        /// </summary>
+        public const int WifiIdleTimeoutMs = 60_000;
+
+        /// <summary>
+        /// How many times <see cref="ConnectionManager.Connect"/> retries automatically after a
+        /// handshake timeout before giving up. Each attempt uses <see cref="HandshakeTimeoutSeconds"/>,
+        /// so the total maximum wait is (ConnectRetryCount + 1) × HandshakeTimeoutSeconds.
+        /// </summary>
+        public const int ConnectRetryCount = 3;
+
+        /// <summary>
+        /// How many times the hybrid coordinator retries bringing Wi-Fi up before falling back to
+        /// Bluetooth for the current send. Each attempt waits up to <see cref="BtConnectTimeoutMs"/>.
+        /// </summary>
+        public const int WifiReconnectMaxAttempts = 3;
     }
 }

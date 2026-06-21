@@ -57,6 +57,13 @@ public class SocketTransport implements ITransport {
      */
     private volatile CompletableFuture<Void> sendGate = new CompletableFuture<>();
 
+    /**
+     * Epoch millis of the last frame sent or received. The hybrid coordinator reads this to decide
+     * when the Wi-Fi link has been idle long enough to disconnect. Initialised to "now" so a freshly
+     * connected link is not immediately considered idle.
+     */
+    private volatile long lastActivityMillis = System.currentTimeMillis();
+
     private int port = CoreConfig.DEFAULT_PORT;
 
     public SocketTransport() {
@@ -76,6 +83,11 @@ public class SocketTransport implements ITransport {
     @Override
     public boolean isServerMode() {
         return serverMode;
+    }
+
+    /** Epoch millis of the last send or receive on this transport (see {@link #lastActivityMillis}). */
+    public long getLastActivityMillis() {
+        return lastActivityMillis;
     }
 
     @Override
@@ -258,6 +270,7 @@ public class SocketTransport implements ITransport {
             try {
                 outputStream.write(data);
                 outputStream.flush();
+                lastActivityMillis = System.currentTimeMillis();
             } finally {
                 sendLock.release();
             }
@@ -324,6 +337,7 @@ public class SocketTransport implements ITransport {
                     if (payloadRead != payloadLength) break;
                 }
 
+                lastActivityMillis = System.currentTimeMillis();
                 IProtocolHandler.ParseResult result = protocolHandler.parseFrame(frame);
                 dispatchFrame(result.getTargetId(), result.getPayload(), result.getFlags(), frame);
 

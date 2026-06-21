@@ -13,7 +13,7 @@ the two files stay in lock-step:
 
 | Side | File |
 |------|------|
-| PC (server) | `desktop/tau_sync_tests/tests/cursor_test/android_test_server.py` |
+| PC (server) | `TauSync\windows\tau_sync_tests\tests\cursor_test\android_test_server.py` |
 | Android (client) | `android/app/src/main/java/com/example/android/testing/TestTauSyncActivity.java` |
 
 ---
@@ -23,7 +23,7 @@ the two files stay in lock-step:
 Run from the project root:
 
 ```
-python desktop/tau_sync_tests/tests/cursor_test/android_test_server.py
+python TauSync\windows\tau_sync_tests\tests\cursor_test\android_test_server.py
 ```
 
 A **GUI window** opens ("TauSync PC Test Console") — no command-line needed. It

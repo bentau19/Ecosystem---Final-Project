@@ -1,8 +1,11 @@
 package com.example.android.testing;
 
+import android.Manifest;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.graphics.Typeface;
 import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -16,6 +19,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
 import com.example.tausync_lib.implementations.management.TauSyncStream;
 import com.example.tausync_lib.sdk.TauSync;
@@ -106,6 +111,14 @@ public class TestTauSyncActivity extends AppCompatActivity {
     private static final long ANDROID_FILE_SIZE = 20L * 1024 * 1024;
     private static final int LARGE_WRITE_SIZE = 5 * 1024 * 1024;  // 5 MB — sent by PC in one write()
     private static final int CONCURRENT_ID_COUNT = 10;             // simultaneous channels for ID-race test
+
+    // ── Phase 3 hybrid (Bluetooth + lazy Wi-Fi) test parameters ──────────
+    private static final int HYBRID_THRESHOLD = 65_536;            // CoreConfig.HYBRID_SMALL_THRESHOLD_BYTES
+    private static final int HYBRID_SMALL_SIZE = 32 * 1024;        // below threshold → stays on Bluetooth
+    private static final int HYBRID_LARGE_SIZE = 200 * 1024;       // above threshold → brings Wi-Fi up
+    private static final long HYBRID_IDLE_WAIT_MS = 65_000L;       // > WIFI_IDLE_TIMEOUT_MS so Wi-Fi tears down
+    private static final int BLUETOOTH_PERMISSION_REQUEST = 4201;
+
     private static final int COLOR_PASS = 0xFF1B7F32;
     private static final int COLOR_FAIL = 0xFFC62828;
     private static final int COLOR_NEUTRAL = 0xFF555555;
@@ -114,14 +127,19 @@ public class TestTauSyncActivity extends AppCompatActivity {
     private final ExecutorService backgroundExecutor = Executors.newCachedThreadPool();
     private final Map<String, ManualChannel> manualChannels = new ConcurrentHashMap<>();
     private final Map<String, Boolean> testResults = new LinkedHashMap<>();
+    private final Map<String, Boolean> hybridTestResults = new LinkedHashMap<>();
 
     private EditText ipAddressInput;
+    private EditText bluetoothMacInput;
     private EditText meetingWordInput;
     private Button connectButton;
+    private Button connectHybridButton;
     private Button openChannelButton;
     private Button runAllTestsButton;
+    private Button runHybridTestsButton;
     private TextView statusLabel;
     private TextView summaryLabel;
+    private TextView hybridSummaryLabel;
     private LinearLayout manualChannelsContainer;
     private TextView logView;
     private ScrollView logScrollView;
@@ -177,9 +195,23 @@ public class TestTauSyncActivity extends AppCompatActivity {
         parent.addView(ipAddressInput);
 
         connectButton = new Button(this);
-        connectButton.setText("Connect");
+        connectButton.setText("Connect (Wi-Fi)");
         connectButton.setOnClickListener(v -> onConnectButtonClicked());
         parent.addView(connectButton);
+
+        TextView hybridHelp = new TextView(this);
+        hybridHelp.setText("Hybrid mode: connect over Bluetooth (Phase 3). The server's Wi-Fi IP is "
+                + "discovered automatically and fills the field above — no manual IP needed.");
+        hybridHelp.setTextSize(12);
+        parent.addView(hybridHelp);
+
+        bluetoothMacInput = newEditText("Server Bluetooth MAC (AA:BB:CC:DD:EE:FF)", "");
+        parent.addView(bluetoothMacInput);
+
+        connectHybridButton = new Button(this);
+        connectHybridButton.setText("Connect (Hybrid BT)");
+        connectHybridButton.setOnClickListener(v -> onConnectHybridButtonClicked());
+        parent.addView(connectHybridButton);
 
         statusLabel = new TextView(this);
         statusLabel.setText("Status: Disconnected");
@@ -223,6 +255,21 @@ public class TestTauSyncActivity extends AppCompatActivity {
         summaryLabel.setTextColor(COLOR_NEUTRAL);
         summaryLabel.setPadding(0, dpToPixels(6), 0, dpToPixels(6));
         parent.addView(summaryLabel);
+
+        // Separate Phase 3 hybrid suite — its own button and banner so other connection-manager
+        // types can be added the same way later without touching the Wi-Fi suite above.
+        runHybridTestsButton = new Button(this);
+        runHybridTestsButton.setText("Run Hybrid Tests (Phase 3)");
+        runHybridTestsButton.setOnClickListener(v -> onRunHybridTestsButtonClicked());
+        parent.addView(runHybridTestsButton);
+
+        hybridSummaryLabel = new TextView(this);
+        hybridSummaryLabel.setTextSize(16);
+        hybridSummaryLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        hybridSummaryLabel.setText("No hybrid run yet");
+        hybridSummaryLabel.setTextColor(COLOR_NEUTRAL);
+        hybridSummaryLabel.setPadding(0, dpToPixels(6), 0, dpToPixels(6));
+        parent.addView(hybridSummaryLabel);
     }
 
     private void addLogSection(LinearLayout parent) {
@@ -273,6 +320,78 @@ public class TestTauSyncActivity extends AppCompatActivity {
                 });
             }
         });
+    }
+
+    private void onConnectHybridButtonClicked() {
+        if (tauSync != null) {
+            disconnect();
+            return;
+        }
+        String mac = bluetoothMacInput.getText().toString().trim();
+        if (mac.isEmpty()) {
+            appendLog("Enter the server's Bluetooth MAC first");
+            return;
+        }
+        if (!ensureBluetoothPermissions()) {
+            appendLog("Requested Bluetooth permission — grant it, then tap 'Connect (Hybrid BT)' again");
+            return;
+        }
+        connectHybrid(mac);
+    }
+
+    private void connectHybrid(String bluetoothMac) {
+        updateStatus("Connecting over Bluetooth...");
+        appendLog("Hybrid connect to BT " + bluetoothMac + "...");
+        setConnectingState();
+
+        backgroundExecutor.execute(() -> {
+            try {
+                TauSync newTauSync = new TauSync();
+                newTauSync.connectHybrid(this, bluetoothMac);
+                String discoveredIp = newTauSync.getPeerWifiIp();
+                runOnUiThread(() -> {
+                    tauSync = newTauSync;
+                    updateStatus("Hybrid connected (BT " + bluetoothMac + ")");
+                    appendLog("Hybrid connected over Bluetooth.");
+                    // Auto-fill the Wi-Fi IP discovered over Bluetooth — no manual entry needed.
+                    if (discoveredIp != null && !discoveredIp.isEmpty()) {
+                        ipAddressInput.setText(discoveredIp);
+                        appendLog("Server Wi-Fi IP discovered over Bluetooth: " + discoveredIp
+                                + " (filled into the IP field automatically)");
+                    } else {
+                        appendLog("No server Wi-Fi IP was advertised over Bluetooth.");
+                    }
+                    setConnectedState(true);
+                });
+            } catch (Exception exception) {
+                String rootCauseMessage = extractRootCauseMessage(exception);
+                runOnUiThread(() -> {
+                    updateStatus("Hybrid failed: " + rootCauseMessage);
+                    appendLog("Hybrid connection failed: " + rootCauseMessage);
+                    setDisconnectedState();
+                });
+            }
+        });
+    }
+
+    /**
+     * Ensures the runtime Bluetooth permission needed for an RFCOMM connect (API 31+).
+     * Returns true if already granted; otherwise requests it and returns false so the
+     * caller defers the connect until the user grants it and taps again.
+     */
+    private boolean ensureBluetoothPermissions() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return true; // legacy BLUETOOTH/BLUETOOTH_ADMIN are install-time below API 31
+        }
+        boolean hasConnect = ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED;
+        if (hasConnect) {
+            return true;
+        }
+        ActivityCompat.requestPermissions(this,
+                new String[]{Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN},
+                BLUETOOTH_PERMISSION_REQUEST);
+        return false;
     }
 
     private void disconnect() {
@@ -564,6 +683,301 @@ public class TestTauSyncActivity extends AppCompatActivity {
 
         runAllTestsButton.setEnabled(true);
         runAllTestsButton.setText("Run All Tests");
+    }
+
+    // ── Phase 3 hybrid tests (Bluetooth + lazy Wi-Fi) ────────────────────
+    //
+    // Separate suite, separate banner. Run only after "Connect (Hybrid BT)". The order is
+    // deliberate: H2 asserts Wi-Fi is DOWN, so it must run before any large payload brings it
+    // up; H6 runs last because it waits out the 60 s idle teardown.
+
+    private void onRunHybridTestsButtonClicked() {
+        if (tauSync == null) return;
+        runHybridTestsButton.setEnabled(false);
+        runHybridTestsButton.setText("Running hybrid...");
+        hybridTestResults.clear();
+        hybridSummaryLabel.setText("Running...");
+        hybridSummaryLabel.setTextColor(COLOR_NEUTRAL);
+
+        backgroundExecutor.execute(() -> {
+            runHybridIpDiscoveryTest();
+            runHybridRouteSmallTest();
+            runHybridRouteLargeTest();
+            runHybridRouteBoundaryTest();
+            runHybridChannelContinuityTest();
+            runHybridWifiIdleReuseTest();
+            runHybridBtReconnectTest();
+            runOnUiThread(this::publishHybridSummary);
+        });
+    }
+
+    private void recordHybridResult(String testId, boolean passed, long elapsedMs, String detail) {
+        hybridTestResults.put(testId, passed);
+        String suffix = (detail == null || detail.isEmpty()) ? "" : "  " + detail;
+        appendLog("[" + testId + "] " + verdict(passed) + " (" + elapsedMs + "ms)" + suffix);
+    }
+
+    private void publishHybridSummary() {
+        int total = hybridTestResults.size();
+        int passedCount = 0;
+        List<String> failed = new ArrayList<>();
+        for (Map.Entry<String, Boolean> entry : hybridTestResults.entrySet()) {
+            if (entry.getValue()) {
+                passedCount++;
+            } else {
+                failed.add(entry.getKey());
+            }
+        }
+
+        boolean allPassed = total > 0 && passedCount == total;
+        String summary = allPassed
+                ? ("✔  ALL " + total + " HYBRID TESTS PASSED")
+                : ("✘  " + passedCount + " / " + total + " HYBRID PASSED   —   FAILED: "
+                        + TextUtils.join(", ", failed));
+
+        hybridSummaryLabel.setText(summary);
+        hybridSummaryLabel.setTextColor(allPassed ? COLOR_PASS : COLOR_FAIL);
+
+        appendLog("========================================");
+        appendLog(summary);
+        appendLog("========================================");
+
+        runHybridTestsButton.setEnabled(true);
+        runHybridTestsButton.setText("Run Hybrid Tests (Phase 3)");
+    }
+
+    // ── H1: Wi-Fi IP discovered over Bluetooth ───────────────────────────
+
+    private void runHybridIpDiscoveryTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[H1] IP Discovery: verifying the server's Wi-Fi IP was learned over Bluetooth...");
+
+        try {
+            TauSyncStream stream = tauSync.connect("hybrid_ip_discovery");
+            String discoveredServerIp = tauSync.getPeerWifiIp();
+            stream.writeString((discoveredServerIp == null ? "NONE" : discoveredServerIp) + "\n");
+            String serverSawOurIp = stream.readLine();
+            stream.close();
+
+            boolean passed = discoveredServerIp != null && !discoveredServerIp.isEmpty();
+            recordHybridResult("H1", passed, elapsed(startTime),
+                    "serverIp(via BT)=" + discoveredServerIp + " serverSawUs=" + serverSawOurIp);
+        } catch (Exception exception) {
+            recordHybridResult("H1", false, elapsed(startTime), "ERROR: " + exception.getMessage());
+        }
+    }
+
+    // ── H2: small payload stays on Bluetooth ─────────────────────────────
+
+    private void runHybridRouteSmallTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[H2] Route Small: 32 KB must round-trip over Bluetooth (Wi-Fi stays down)...");
+
+        try {
+            TauSyncStream stream = tauSync.connect("hybrid_route_small");
+            byte[] data = randomBytes(HYBRID_SMALL_SIZE);
+            String sha = computeSha256Hex(data);
+
+            stream.writeString(data.length + "\n");
+            stream.write(data);
+            byte[] echo = stream.readExactly(data.length);
+            String serverWifi = stream.readLine();
+            boolean clientWifiDown = !tauSync.isWifiActive();
+            stream.close();
+
+            boolean passed = sha.equals(computeSha256Hex(echo))
+                    && clientWifiDown
+                    && serverWifi != null && serverWifi.trim().equals("DOWN");
+            recordHybridResult("H2", passed, elapsed(startTime),
+                    "clientWifiDown=" + clientWifiDown + " serverWifi="
+                            + (serverWifi == null ? "?" : serverWifi.trim()));
+        } catch (Exception exception) {
+            recordHybridResult("H2", false, elapsed(startTime), "ERROR: " + exception.getMessage());
+        }
+    }
+
+    // ── H3: large payload brings Wi-Fi up ────────────────────────────────
+
+    private void runHybridRouteLargeTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[H3] Route Large: 200 KB must bring Wi-Fi up and round-trip intact...");
+
+        try {
+            TauSyncStream stream = tauSync.connect("hybrid_route_large");
+            byte[] data = randomBytes(HYBRID_LARGE_SIZE);
+            String sha = computeSha256Hex(data);
+
+            stream.writeString(data.length + "\n");
+            stream.write(data);
+            byte[] echo = stream.readExactly(data.length);
+            String serverWifi = stream.readLine();
+            boolean clientWifiUp = tauSync.isWifiActive();
+            stream.close();
+
+            boolean passed = sha.equals(computeSha256Hex(echo))
+                    && clientWifiUp
+                    && serverWifi != null && serverWifi.trim().equals("UP");
+            recordHybridResult("H3", passed, elapsed(startTime),
+                    "clientWifiUp=" + clientWifiUp + " serverWifi="
+                            + (serverWifi == null ? "?" : serverWifi.trim()));
+        } catch (Exception exception) {
+            recordHybridResult("H3", false, elapsed(startTime), "ERROR: " + exception.getMessage());
+        }
+    }
+
+    // ── H4: routing boundary, data integrity at exactly the threshold ────
+
+    private void runHybridRouteBoundaryTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[H4] Route Boundary: 64 KB (BT) and 64 KB+1 (Wi-Fi) must both arrive intact...");
+
+        try {
+            TauSyncStream stream = tauSync.connect("hybrid_route_boundary");
+            boolean atThreshold = echoBoundaryPayload(stream, HYBRID_THRESHOLD);
+            boolean overThreshold = echoBoundaryPayload(stream, HYBRID_THRESHOLD + 1);
+            stream.close();
+
+            boolean passed = atThreshold && overThreshold;
+            recordHybridResult("H4", passed, elapsed(startTime),
+                    "atThreshold=" + atThreshold + " overThreshold=" + overThreshold);
+        } catch (Exception exception) {
+            recordHybridResult("H4", false, elapsed(startTime), "ERROR: " + exception.getMessage());
+        }
+    }
+
+    /** Sends a sized payload, reads its echo, and verifies the SHA-256 round-trips. */
+    private boolean echoBoundaryPayload(TauSyncStream stream, int size) throws Exception {
+        byte[] data = randomBytes(size);
+        String sha = computeSha256Hex(data);
+        stream.writeString(size + "\n");
+        stream.write(data);
+        byte[] echo = stream.readExactly(size);
+        return sha.equals(computeSha256Hex(echo));
+    }
+
+    // ── H5: one channel survives the BT→Wi-Fi→BT transport switch ────────
+
+    private void runHybridChannelContinuityTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[H5] Channel Continuity: one stream small→large→small (BT→Wi-Fi→BT)...");
+
+        try {
+            TauSyncStream stream = tauSync.connect("hybrid_ch_continuity");
+
+            String first = "continuity_phase1";
+            stream.writeString(first + "\n");
+            String firstEcho = stream.readLine();
+
+            byte[] blob = randomBytes(HYBRID_LARGE_SIZE);
+            String blobSha = computeSha256Hex(blob);
+            stream.writeString(blob.length + "\n");
+            stream.write(blob);
+            byte[] blobEcho = stream.readExactly(blob.length);
+
+            String third = "continuity_phase3";
+            stream.writeString(third + "\n");
+            String thirdEcho = stream.readLine();
+            stream.close();
+
+            boolean passed = first.equals(firstEcho)
+                    && blobSha.equals(computeSha256Hex(blobEcho))
+                    && third.equals(thirdEcho);
+            recordHybridResult("H5", passed, elapsed(startTime),
+                    "single stream survived the BT↔Wi-Fi switch");
+        } catch (Exception exception) {
+            recordHybridResult("H5", false, elapsed(startTime), "ERROR: " + exception.getMessage());
+        }
+    }
+
+    // ── H6: Wi-Fi idle teardown then re-establishment ────────────────────
+
+    private void runHybridWifiIdleReuseTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[H6] Wi-Fi Idle Reuse: large → idle " + (HYBRID_IDLE_WAIT_MS / 1000)
+                + "s (Wi-Fi tears down) → large again (re-establish)...");
+
+        try {
+            TauSyncStream stream = tauSync.connect("hybrid_wifi_idle_reuse");
+
+            // Round 1 brings Wi-Fi up.
+            byte[] blob1 = randomBytes(HYBRID_LARGE_SIZE);
+            String sha1 = computeSha256Hex(blob1);
+            stream.writeString(blob1.length + "\n");
+            stream.write(blob1);
+            byte[] echo1 = stream.readExactly(blob1.length);
+            boolean wifiUpAfterRound1 = tauSync.isWifiActive();
+
+            // Idle past the 60 s timeout so the coordinator tears Wi-Fi down (Bluetooth stays up).
+            appendLog("[H6] idling " + (HYBRID_IDLE_WAIT_MS / 1000) + "s for the Wi-Fi teardown...");
+            Thread.sleep(HYBRID_IDLE_WAIT_MS);
+            boolean wifiDownAfterIdle = !tauSync.isWifiActive();
+
+            // Round 2 must re-establish Wi-Fi from scratch.
+            stream.writeString("REUSE\n");
+            byte[] blob2 = randomBytes(HYBRID_LARGE_SIZE);
+            String sha2 = computeSha256Hex(blob2);
+            stream.writeString(blob2.length + "\n");
+            stream.write(blob2);
+            byte[] echo2 = stream.readExactly(blob2.length);
+            String serverWifi = stream.readLine();
+            boolean wifiUpAfterRound2 = tauSync.isWifiActive();
+            stream.close();
+
+            boolean passed = sha1.equals(computeSha256Hex(echo1))
+                    && wifiUpAfterRound1
+                    && wifiDownAfterIdle
+                    && sha2.equals(computeSha256Hex(echo2))
+                    && wifiUpAfterRound2
+                    && serverWifi != null && serverWifi.trim().equals("UP");
+            recordHybridResult("H6", passed, elapsed(startTime),
+                    "up1=" + wifiUpAfterRound1 + " downIdle=" + wifiDownAfterIdle
+                            + " up2=" + wifiUpAfterRound2);
+        } catch (Exception exception) {
+            recordHybridResult("H6", false, elapsed(startTime), "ERROR: " + exception.getMessage());
+        }
+    }
+
+    // ── H7: BT drops mid-session → channel resumes transparently ─────────
+    //
+    // Semi-manual: during the 30s DROP_WINDOW reported in the log, briefly disable
+    // and re-enable Bluetooth on either end. The reconnect loop re-opens RFCOMM;
+    // the channel read unblocks and the post-drop data arrives on the same stream.
+    // If BT is never disrupted the test still passes (it just validates the no-drop path).
+
+    private void runHybridBtReconnectTest() {
+        long startTime = System.currentTimeMillis();
+        appendLog("[H7] BT Reconnect: disrupt Bluetooth during the DROP_WINDOW (server sleeps 30s)...");
+
+        try {
+            TauSyncStream stream = tauSync.connect("hybrid_bt_reconnect");
+
+            // Phase 1: data before the drop window
+            String shaBefore = stream.readLine();
+            if (shaBefore == null) throw new Exception("EOF before pre-drop SHA");
+            byte[] dataBefore = stream.readExactly(HYBRID_SMALL_SIZE);
+            boolean phase1Ok = shaBefore.trim().equals(computeSha256Hex(dataBefore));
+
+            // The server signals DROP_WINDOW then sleeps 30s — disrupt BT during this gap.
+            String marker = stream.readLine();
+            appendLog("[H7] '" + (marker == null ? "null" : marker.trim())
+                    + "' — disrupt Bluetooth now (30s window)...");
+
+            // Phase 2: data after the drop; read blocks during reconnect and resumes automatically.
+            String shaAfter = stream.readLine();
+            if (shaAfter == null) throw new Exception("EOF before post-drop SHA");
+            byte[] dataAfter = stream.readExactly(HYBRID_SMALL_SIZE);
+            boolean phase2Ok = shaAfter.trim().equals(computeSha256Hex(dataAfter));
+
+            String done = stream.readLine();
+            stream.close();
+
+            boolean passed = phase1Ok && phase2Ok
+                    && done != null && done.trim().equals("DONE");
+            recordHybridResult("H7", passed, elapsed(startTime),
+                    "phase1=" + phase1Ok + " phase2=" + phase2Ok + " done=" + done);
+        } catch (Exception exception) {
+            recordHybridResult("H7", false, elapsed(startTime), "ERROR: " + exception.getMessage());
+        }
     }
 
     // ── Test 1: Message echo ─────────────────────────────────────────────
@@ -1155,29 +1569,53 @@ public class TestTauSyncActivity extends AppCompatActivity {
     private void setInitialControlState() {
         openChannelButton.setEnabled(false);
         runAllTestsButton.setEnabled(false);
+        runHybridTestsButton.setEnabled(false);
     }
 
     private void setConnectedState() {
-        connectButton.setText("Disconnect");
-        connectButton.setEnabled(true);
+        setConnectedState(false);
+    }
+
+    /**
+     * Reflects an established connection. The active mode's button becomes "Disconnect" and the
+     * other mode's connect button is disabled, since the transport is a process-wide singleton.
+     */
+    private void setConnectedState(boolean hybrid) {
+        if (hybrid) {
+            connectHybridButton.setText("Disconnect");
+            connectHybridButton.setEnabled(true);
+            connectButton.setEnabled(false);
+        } else {
+            connectButton.setText("Disconnect");
+            connectButton.setEnabled(true);
+            connectHybridButton.setEnabled(false);
+        }
         ipAddressInput.setEnabled(false);
+        bluetoothMacInput.setEnabled(false);
         openChannelButton.setEnabled(true);
         meetingWordInput.setEnabled(true);
         runAllTestsButton.setEnabled(true);
+        runHybridTestsButton.setEnabled(true);
     }
 
     private void setDisconnectedState() {
-        connectButton.setText("Connect");
+        connectButton.setText("Connect (Wi-Fi)");
         connectButton.setEnabled(true);
+        connectHybridButton.setText("Connect (Hybrid BT)");
+        connectHybridButton.setEnabled(true);
         ipAddressInput.setEnabled(true);
+        bluetoothMacInput.setEnabled(true);
         openChannelButton.setEnabled(false);
         runAllTestsButton.setEnabled(false);
+        runHybridTestsButton.setEnabled(false);
         closeAllManualChannels();
     }
 
     private void setConnectingState() {
         connectButton.setEnabled(false);
+        connectHybridButton.setEnabled(false);
         ipAddressInput.setEnabled(false);
+        bluetoothMacInput.setEnabled(false);
     }
 
     private void updateStatus(String status) {
@@ -1258,6 +1696,12 @@ public class TestTauSyncActivity extends AppCompatActivity {
         } catch (java.security.NoSuchAlgorithmException exception) {
             throw new IOException(exception);
         }
+    }
+
+    private static byte[] randomBytes(int size) {
+        byte[] data = new byte[size];
+        new Random().nextBytes(data);
+        return data;
     }
 
     private static void createRandomFile(File file, long size) throws IOException {

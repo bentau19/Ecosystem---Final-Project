@@ -59,6 +59,10 @@ namespace TauSync.Implementations.Transport
         /// <inheritdoc />
         public TransportKind TransportType => TransportKind.Bluetooth;
 
+        /// <inheritdoc />
+        /// <remarks>Windows always acts as the RFCOMM server, so this is always true.</remarks>
+        public bool IsServerMode => true;
+
         /// <summary>Uses the given protocol handler for framing; if null, uses default <see cref="ProtocolHandler"/>.</summary>
         public BluetoothTransport(IProtocolHandler? protocolHandler = null)
         {
