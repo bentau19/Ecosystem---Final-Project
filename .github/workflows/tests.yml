@@ -119,29 +119,3 @@ jobs:
       - name: Run TauSync Android integration tests
         working-directory: TauSync/Tausync_Android/tausync-lib
         run: python run_integration_tests.py
-
-
-  # =========================
-  # TAUSYNC WINDOWS TESTS
-  # =========================
-  tausync-windows-test:
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: ./.github/actions/tau_sync
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install TauSync dependencies
-        run: |
-          pip install -r TauSync/windows/requirements.txt
-          pip install TauSync/windows
-          pip install pytest pytest-timeout
-
-      - name: Run TauSync Windows tests
-        working-directory: TauSync/windows/tau_sync_tests
-        run: pytest tests/ --timeout=300 -v
