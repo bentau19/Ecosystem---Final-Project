@@ -7867,3 +7867,4 @@
 2026-06-22 22:02:03 [DEBUG] services.connectivity: _stop: tearing down transport and draining workers
 2026-06-22 22:02:10 [DEBUG] services.connectivity: _listen: listen timed out — retrying
 2026-06-22 22:02:11 [DEBUG] services.connectivity: _stop: teardown complete — device_disconnected emitted
+2026-06-23 00:22:10 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
