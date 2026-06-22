@@ -58,6 +58,8 @@ jobs:
 
       - uses: ilammy/msvc-dev-cmd@v1
 
+      - uses: ./.github/actions/winfsp
+
       - name: Build native
         run: |
           cmake -S desktop/native/windows/pipe -B desktop/native/windows/pipe/build

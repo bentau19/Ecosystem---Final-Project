@@ -19,6 +19,7 @@ from resources.colors import Colors, LightColors
 from resources.paths import Icons, Styles
 from utils.styles import themed
 from viewmodels.backup import BackupViewModel
+from viewmodels.device import DeviceViewModel
 from viewmodels.file_transfer import FileTransferViewModel
 from views.screens.dashboard import DashboardScreen
 from views.screens.login import LoginScreen
@@ -64,6 +65,8 @@ class MainWindow(QMainWindow):
         self._backup_vm: BackupViewModel = app_state.backup_viewmodel
         # Holds the BackupProgressWindow alive for the duration of a session.
         self._backup_progress_win: BackupProgressWindow | None = None
+
+        self._device_vm: DeviceViewModel = app_state.device_viewmodel
         # Holds the FileReceivedToast alive while it's on screen.
         self._toast: FileReceivedToast | None = None
 
@@ -117,6 +120,8 @@ class MainWindow(QMainWindow):
         self._backup_vm.device_ready_changed.connect(self._on_backup_device_ready_changed)
         app_state.device_viewmodel.connection_error.connect(self._on_connection_error)
         theme_manager.theme_changed.connect(self._restyle_tray)
+        # Stop all services on any exit path (X button, tray Quit, sys.exit, …).
+        # aboutToQuit fires as the last act of app.exec() before it returns.
 
     def changeEvent(self, event: QEvent) -> None:
         """Intercept minimize events and hide the window to the system tray.
@@ -148,6 +153,23 @@ class MainWindow(QMainWindow):
         """
         super().hideEvent(event)
         self._tray_icon.show()
+
+    def closeEvent(self, event: QEvent) -> None:
+        """Exit the application when the user clicks the X title-bar button.
+
+        Suppresses the default hide so ``hideEvent`` cannot briefly flash the
+        tray icon during exit.  ``QApplication.quit()`` emits ``aboutToQuit``
+        which triggers ``app_state.shutdown()`` for clean service teardown.
+
+        Minimize-to-tray is handled by :meth:`changeEvent` (unchanged).
+
+        Args:
+            event: The close event delivered by Qt.
+        """
+        event.ignore()  # prevent Qt's default hide (avoids tray flash)
+        self._tray_icon.hide()  # ensure tray stays off before the process ends
+        self._device_vm.disconnect_device()
+        QApplication.quit()  # emits aboutToQuit → app_state.shutdown()
 
     # ── Slots ──────────────────────────────────────────────────────────────────
 

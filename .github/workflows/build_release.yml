@@ -29,6 +29,8 @@ jobs:
 
       - uses: ilammy/msvc-dev-cmd@v1
 
+      - uses: ./.github/actions/winfsp
+
       - name: Build native
         run: |
           cmake -S desktop/native/windows/pipe -B desktop/native/windows/pipe/build
@@ -39,17 +41,6 @@ jobs:
           Copy-Item `
             desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd `
             desktop/native/windows/pipe/
-
-      - name: Install WinFsp
-        # CMakeLists.txt reads the WinFsp install path from the registry at configure
-        # time and calls FATAL_ERROR if winfsp-x64.dll is not found.  It then uses
-        # dumpbin + lib (already on PATH via ilammy/msvc-dev-cmd) to generate the
-        # delay-load import library.  WinFsp must therefore be installed before the
-        # cmake configure step below.
-        run: |
-          $url = "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi"
-          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\winfsp.msi"
-          Start-Process msiexec.exe -ArgumentList "/i $env:TEMP\winfsp.msi /quiet /norestart" -Wait
 
       - name: Build VirtualDrive native
         # Produces desktop/native/windows/virtual_drive/build/Release/VirtualDrive.exe,

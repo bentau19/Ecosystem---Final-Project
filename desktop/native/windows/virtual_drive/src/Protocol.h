@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
 #include <cstdint>
+#include <chrono>
+#include <optional>
 
 // ── IPC protocol between VirtualDrive.exe (client) and SyncDose.exe (server) ──
 //
@@ -39,8 +41,14 @@ class ClientNamedPipe;
 
 namespace protocol {
 
-// Default pipe name shared by both processes.
-inline constexpr const wchar_t* PIPE_NAME = L"\\\\.\\pipe\\SyncDoseVDrive";
+// Pipe name shared by both processes — wide for FspFileSystemSetMountPoint / CreateFile
+// paths in Win32 APIs that accept PWSTR, narrow for ClientNamedPipe's const char* constructor.
+inline constexpr const wchar_t* PIPE_NAME   = L"\\\\.\\pipe\\SyncDoseVDrive";
+inline constexpr const char*    PIPE_NAME_A =  "\\\\.\\pipe\\SyncDoseVDrive";
+
+// Named-pipe read/write buffer size (bytes). Both sides use the same value so the
+// kernel can use the pre-allocated buffer without a copy on a single-chunk write.
+inline constexpr int PIPE_BUFFER_SIZE = 65536;
 
 // One protocol message: a JSON header plus an optional raw-byte payload.
 struct Message {
@@ -48,13 +56,20 @@ struct Message {
     std::string payload;   // raw bytes — use .data()/.size(), never .c_str()
 };
 
-// Write a framed Message to the pipe.
-void writeFrame(ClientNamedPipe& pipe, const Message& msg);
+// Write a framed Message to the pipe. An optional timeout bounds each blocking
+// pipe write; std::nullopt means block indefinitely (the historical behaviour).
+void writeFrame(ClientNamedPipe& pipe, const Message& msg,
+                std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 
-// Block until a complete framed Message is read from the pipe.
-Message readFrame(ClientNamedPipe& pipe);
+// Block until a complete framed Message is read from the pipe. The optional
+// timeout bounds each underlying readExact; on expiry ClientNamedPipe throws a
+// PipeException with code ConnectionTimeout.
+Message readFrame(ClientNamedPipe& pipe,
+                  std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 
 // Convenience: write request, block for response. One synchronous round-trip.
-Message send(ClientNamedPipe& pipe, const Message& request);
+// The timeout (if given) is applied to both the write and the response read.
+Message send(ClientNamedPipe& pipe, const Message& request,
+             std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 
 }  // namespace protocol

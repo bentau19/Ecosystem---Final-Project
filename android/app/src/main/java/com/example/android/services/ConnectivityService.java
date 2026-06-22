@@ -15,7 +15,7 @@ import androidx.lifecycle.ProcessLifecycleOwner;
 
 import com.example.android.data.datasource.BackupDataSource;
 import com.example.android.data.datasource.SystemDataSource;
-import com.example.android.data.datasource.VirtualDriveDataSource;
+import com.example.android.repositories.VirtualDriveRepository;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.BackupTransferStatus;
 import com.example.android.domain.enums.ConnectionStatus;
@@ -49,6 +49,13 @@ import com.example.android.repositories.DeviceRepository;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * ConnectivityService - Thin Orchestrator for managing remote PC connections.
@@ -101,6 +108,31 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     // writeToChannel() call is still blocking inside tauSync.connect().
     private final Set<String> inProgressChannels = ConcurrentHashMap.newKeySet();
 
+    // Upper bound on peer-request handler threads. Must be >= the desktop's pipe
+    // pool (8) so that many concurrent reads (e.g. a video's parallel prefetch
+    // windows) are not throttled, with headroom for device-info / metadata ops.
+    private static final int PEER_REQUEST_MAX_THREADS = 12;
+
+    // Bounded pool that runs peer-request handlers, replacing an unbounded
+    // new-Thread-per-channel spawn. A SynchronousQueue + AbortPolicy means that
+    // when all threads are busy a new dispatch is rejected (not queued); the
+    // caller releases the channel claim and the 2 s poll re-dispatches it once a
+    // worker frees. Threads are daemons so they never block process exit. Never
+    // use CallerRunsPolicy here: the caller is the UI main thread.
+    private final ExecutorService peerRequestExecutor = new ThreadPoolExecutor(
+            2, PEER_REQUEST_MAX_THREADS, 30L, TimeUnit.SECONDS,
+            new SynchronousQueue<>(),
+            new ThreadFactory() {
+                private final AtomicInteger counter = new AtomicInteger();
+
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "VDPeerRequest-" + counter.incrementAndGet());
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
+
     // Set to true at the very start of cleanup() so that any onStatusChanged(CONNECTED)
     // callbacks still sitting in the main-handler queue are silently discarded rather
     // than overwriting the DISCONNECTED postValue that cleanup() emits last.
@@ -148,8 +180,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         backupTransferUseCase = new BackupTransferUseCase(
                 transportManager, BackupRepository.getInstance(), this, new BackupDataSource());
 
-        // Virtual drive — no Context needed; DataSource uses Environment.getExternalStorageDirectory()
-        virtualDriveUseCase = new VirtualDriveUseCase(transportManager, new VirtualDriveDataSource());
+        // Virtual drive — on-demand request→response; the DataSource answers each WinFsp op
+        // directly from the filesystem (no background scan, no persistent index).
+        virtualDriveUseCase = new VirtualDriveUseCase(transportManager, VirtualDriveRepository.getInstance());
 
         registerChannelHandlers();
         registerFileTransferActionListener();
@@ -379,6 +412,10 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         if (handlerRegistry != null) {
             handlerRegistry.shutdownAll();
         }
+        // Stop accepting peer-request handlers and interrupt in-flight ones; the
+        // transportManager.shutdown() below closes the socket that unblocks any
+        // handler parked in tauSync.connect().
+        peerRequestExecutor.shutdownNow();
         if (transportManager != null) {
             transportManager.shutdown();
         }
@@ -495,13 +532,22 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                 continue;
             }
 
-            new Thread(() -> {
-                try {
-                    handlerRegistry.handlePeerRequest(channel);
-                } finally {
-                    inProgressChannels.remove(channel);
-                }
-            }, "PeerRequestHandler-" + channel).start();
+            final String ch = channel;
+            try {
+                peerRequestExecutor.execute(() -> {
+                    try {
+                        handlerRegistry.handlePeerRequest(ch);
+                    } finally {
+                        inProgressChannels.remove(ch);
+                    }
+                });
+            } catch (RejectedExecutionException rejected) {
+                // Pool saturated: release the claim so the next poll tick re-dispatches
+                // this channel once a worker frees. Never run inline — the caller is the
+                // UI main thread and handlePeerRequest() blocks for the whole op.
+                inProgressChannels.remove(ch);
+                Log.d(TAG, "Peer-request pool saturated, deferring channel: " + ch);
+            }
         }
     }
 

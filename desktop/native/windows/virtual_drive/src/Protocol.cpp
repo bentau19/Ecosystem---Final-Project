@@ -21,7 +21,8 @@ static void writeU32LE(std::string& dest, uint32_t value)
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-void writeFrame(ClientNamedPipe& pipe, const Message& msg)
+void writeFrame(ClientNamedPipe& pipe, const Message& msg,
+                std::optional<std::chrono::milliseconds> timeout)
 {
     // Frame layout: [4B json_len][4B payload_len][json bytes][payload bytes]
     // Both lengths are packed first so the reader can coalesce them into a
@@ -34,15 +35,16 @@ void writeFrame(ClientNamedPipe& pipe, const Message& msg)
     frame.append(msg.json);
     frame.append(msg.payload);
 
-    pipe.write(frame);
+    pipe.write(frame, timeout);
 }
 
-Message readFrame(ClientNamedPipe& pipe)
+Message readFrame(ClientNamedPipe& pipe,
+                  std::optional<std::chrono::milliseconds> timeout)
 {
     // Read both length prefixes in one call — writeFrame always sends the whole
     // frame atomically, so all bytes are in the kernel buffer by the time the
     // first byte is readable.  Two readExact calls instead of three or four.
-    std::string hdr = pipe.readExact(8);
+    std::string hdr = pipe.readExact(8, timeout);
     uint32_t json_len    = 0;
     uint32_t payload_len = 0;
     std::memcpy(&json_len,    hdr.data(),     4);
@@ -50,17 +52,18 @@ Message readFrame(ClientNamedPipe& pipe)
 
     Message msg;
     if (json_len + payload_len > 0) {
-        std::string body = pipe.readExact(json_len + payload_len);
+        std::string body = pipe.readExact(json_len + payload_len, timeout);
         msg.json    = body.substr(0, json_len);
         msg.payload = payload_len ? body.substr(json_len) : std::string{};
     }
     return msg;
 }
 
-Message send(ClientNamedPipe& pipe, const Message& request)
+Message send(ClientNamedPipe& pipe, const Message& request,
+             std::optional<std::chrono::milliseconds> timeout)
 {
-    writeFrame(pipe, request);
-    return readFrame(pipe);
+    writeFrame(pipe, request, timeout);
+    return readFrame(pipe, timeout);
 }
 
 }

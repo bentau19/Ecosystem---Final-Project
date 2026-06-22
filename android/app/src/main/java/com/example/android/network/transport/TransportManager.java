@@ -246,6 +246,69 @@ public interface TransportManager {
     void serveJsonThenStreamOut(String channel, JsonToInputStreamHandler handler) throws Exception;
 
     /**
+     * Outcome of opening a read range for {@link #serveReadRequest}: either a failure
+     * with an error code, or a success carrying the exact byte count and the source stream.
+     */
+    final class ReadResult {
+        /** {@code true} on success, {@code false} on failure. */
+        public final boolean ok;
+        /** Error code when {@code !ok} (e.g. {@code "access_denied"}, {@code "not_found"}, {@code "io_error"}). */
+        public final String error;
+        /** Number of bytes the stream will yield (valid when {@code ok}). */
+        public final long length;
+        /** Source stream (non-null when {@code ok}; closed by the transport). */
+        public final java.io.InputStream stream;
+
+        private ReadResult(boolean ok, String error, long length, java.io.InputStream stream) {
+            this.ok = ok;
+            this.error = error;
+            this.length = length;
+            this.stream = stream;
+        }
+
+        /** Successful read of exactly {@code length} bytes from {@code stream}. */
+        public static ReadResult ok(long length, java.io.InputStream stream) {
+            return new ReadResult(true, null, length, stream);
+        }
+
+        /** Failed read; {@code code} is reported to the peer and mapped to an NTSTATUS. */
+        public static ReadResult error(String code) {
+            return new ReadResult(false, code, 0L, null);
+        }
+    }
+
+    /**
+     * Callback for {@link #serveReadRequest}: opens the requested read range, returning a
+     * {@link ReadResult} (success with byte count + stream, or an error code). The handler
+     * itself maps failures to error codes rather than throwing.
+     */
+    @FunctionalInterface
+    interface JsonToReadResultHandler {
+        /**
+         * @param jsonRequest The newline-terminated JSON request read from the channel.
+         * @return A {@link ReadResult} describing success (length + stream) or failure (code).
+         * @throws Exception only on an unexpected internal error (treated as {@code io_error}).
+         */
+        ReadResult openRead(String jsonRequest) throws Exception;
+    }
+
+    /**
+     * Serves the virtual-drive {@code read} op with an explicit framed response so a failed
+     * read is distinguishable from a clean EOF. Reads the JSON request, calls {@code handler},
+     * then writes a one-line JSON header followed (on success) by exactly {@code length} bytes:
+     *
+     * <pre>
+     *   success:  {"ok":true,"length":N}\n  &lt;N bytes&gt;
+     *   failure:  {"ok":false,"error":"&lt;code&gt;"}\n   (no bytes)
+     * </pre>
+     *
+     * @param channel Channel name (meeting word) to serve.
+     * @param handler Opens the read range, returning a {@link ReadResult}.
+     * @throws Exception if the channel connect, JSON read, or write fails.
+     */
+    void serveReadRequest(String channel, JsonToReadResultHandler handler) throws Exception;
+
+    /**
      * Callback for {@link #serveJsonHeaderThenStreamIn}: given the peer's newline-terminated
      * JSON header string, opens and returns the {@link java.io.OutputStream} into which the
      * remaining bytes from the peer will be piped.

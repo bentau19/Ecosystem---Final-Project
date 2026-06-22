@@ -28,7 +28,9 @@ public enum VirtualDriveChannels {
     /** Base prefix for truncate ops. Meeting word: {@code virtual_drive_truncate_{uuid8}}. PC sends {@code {path, new_size}}; Android resizes the file. */
     VIRTUAL_DRIVE_TRUNCATE("virtual_drive_truncate"),
     /** Base prefix for paginated listing ops. Meeting word: {@code virtual_drive_list_page_{uuid8}}. PC sends {@code {path, after, limit}}; Android responds with {@code {ok, entries, has_more, next_after}}. Entries are sorted by name; {@code after} is the last name received, or {@code null} for the first page. */
-    VIRTUAL_DRIVE_LIST_PAGE("virtual_drive_list_page");
+    VIRTUAL_DRIVE_LIST_PAGE("virtual_drive_list_page"),
+    /** Base prefix for full-directory enumeration. Meeting word: {@code virtual_drive_list_full_{uuid8}}. PC sends {@code {path}}; Android responds with {@code {ok, dir_mtime_ms, entries}} containing every child entry in one streamed response. The PC caches the listing keyed by {@code dir_mtime_ms} and serves all list_page requests locally, avoiding per-page round-trips for large folders. */
+    VIRTUAL_DRIVE_LIST_FULL("virtual_drive_list_full");
 
     private final String value;
 

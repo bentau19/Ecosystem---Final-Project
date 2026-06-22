@@ -1,4 +1,7 @@
+import bisect
+import contextlib
 import json
+import logging
 import os
 import struct
 import subprocess
@@ -6,6 +9,7 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Any
@@ -17,6 +21,8 @@ from domain.enums.virtual_drive_channels import VirtualDriveChannels
 from native import Server
 from services.connectivity import ConnectivityService
 from services.device_info import DeviceInfoService
+
+logger = logging.getLogger(__name__)
 
 
 class VirtualDriveService(QObject):
@@ -56,24 +62,40 @@ class VirtualDriveService(QObject):
 
     drive_error: Signal = Signal(str)
 
-    # Pipe name SyncDose exposes for VirtualDrive.exe.
+    # ─ Server capacity ───────────────────────────────────────────────────────
     _PIPE_NAME: str = r'\\.\pipe\SyncDoseVDrive'
-
-    # Seconds a cached stat/list entry stays valid before a fresh round-trip is
-    # forced. Bounds how stale phone-side changes can appear; mutations made
-    # through this service invalidate their paths immediately regardless.
-    _CACHE_TTL_SECONDS: float = 30.0
-
-    # Max concurrent VirtualDrive.exe connections served in parallel. Must be
-    # >= the C++ client's pipe-pool size so every pooled connection can be
-    # accepted and handled on its own thread. The +1 worker runs the accept loop.
-    _MAX_CONNECTIONS: int = 8
-
-    # How long a pooled connection's worker blocks waiting for the next request
-    # frame before looping to re-check _is_running. Bounds how long _stop() can
-    # wait on an idle (but still-connected) worker; ops still arrive instantly
-    # because read_exact returns as soon as a full frame is buffered.
+    # Must be >= C++ PIPE_POOL_SIZE (12); +1 extra worker runs the accept loop.
+    _MAX_CONNECTIONS: int = 12
+    # How long a worker blocks for the next frame before re-checking _is_running.
     _READ_POLL: timedelta = timedelta(seconds=2)
+
+    # ─ Session timeout ───────────────────────────────────────────────────────
+    _WRITE_SESSION_TIMEOUT_S: float = 300.0  # 5 minutes
+
+    # ─ Connect timeouts ──────────────────────────────────────────────────────
+    _LIST_FULL_TIMEOUT_S: int = 60
+    # Short so a slow phone causes Explorer lag, not a frozen pipe pool.
+    _META_CONNECT_TIMEOUT_S: int = 3
+    # Read/write ops stream large payloads — allow more time to establish the channel.
+    _DATA_CONNECT_TIMEOUT_S: int = 30
+
+    # ─ Read / stall timeouts ─────────────────────────────────────────────────
+    # Time-since-last-byte stall timer; slow-but-steady links still complete.
+    _READ_STALL_TIMEOUT_S: float = 10.0
+    _READ_TOTAL_TIMEOUT_S: float = 300.0
+    _READ_WATCHDOG_POLL_S: float = 0.5
+    # Kept below C++ PIPE_META_TIMEOUT (10 s) so desktop always replies first.
+    _META_STALL_TIMEOUT_S: float = 3.0
+
+    # ─ Connection gate ───────────────────────────────────────────────────────
+    # Ops gated on connectivity. Exemptions:
+    #   volume     — answered from cached DeviceEntity; no TauSync round-trip.
+    #   write      — write_open is gated; subsequent chunk writes follow an
+    #   write_close  already-established session and must not be blocked mid-file.
+    _CONNECTION_REQUIRED_OPS: frozenset[str] = frozenset({
+        "list", "list_page", "stat", "read",
+        "create", "delete", "rename", "truncate", "write_open",
+    })
 
     def __init__(
             self,
@@ -100,33 +122,37 @@ class VirtualDriveService(QObject):
         self._connectivity: ConnectivityService = connectivity
         self._device_info: DeviceInfoService = device_info
         self._is_running: threading.Event = threading.Event()
-        # Latest connected-device snapshot, refreshed on every device-info read.
-        # Guarded by _device_lock because _on_device_info runs on the Qt event
-        # thread while _op_volume reads it from a pipe-worker thread.
         self._device_lock: threading.Lock = threading.Lock()
-        self._current_device: DeviceEntity | None = None
+        self._current_device: DeviceEntity | None = None  # written on Qt thread, read on pipe workers
         device_info.device_info_ready.connect(self._on_device_info)
         self._executor: ThreadPoolExecutor | None = None
         self._process: subprocess.Popen | None = None
         self._lifecycle_lock: threading.Lock = threading.Lock()
-        # Active write sessions: virtual path → open TauSync stream. Now that
-        # connections are served concurrently, mutations are guarded by a lock.
         self._write_sessions_lock: threading.Lock = threading.Lock()
         self._write_sessions: dict[str, Any] = {}
-        # Metadata caches: virtual path → (response_dict, expiry_monotonic).
-        # _stat_cache answers `stat`; _list_cache answers `list`. TTL is 30 s,
-        # covering a full browsing session without re-fetching from Android.
-        # Mutations always call _invalidate() immediately so staleness is bounded.
-        # Guarded by _cache_lock for concurrent pipe-worker access.
-        self._cache_lock: threading.Lock = threading.Lock()
-        self._stat_cache: dict[str, tuple[dict, float]] = {}
-        self._list_cache: dict[str, tuple[dict, float]] = {}
-        # Currently-accepted pipe instances, one per in-flight VirtualDrive.exe
-        # connection. Tracked so _stop() can force-close them, which unblocks any
-        # worker parked in a blocking read_exact() so shutdown(wait=True) cannot
-        # hang forever when the peer vanishes mid-session.
+        self._write_session_start_times: dict[str, float] = {}
         self._open_pipes_lock: threading.Lock = threading.Lock()
-        self._open_pipes: set[Any] = set()
+        self._open_pipes: set[Any] = set()  # tracked so _stop() can force-close in-flight connections
+        # Pre-built once to avoid per-request dict allocation in _dispatch.
+        # Ordered by CRUD: Read → Create → Update → Delete.
+        self._dispatch_table: dict[str, Any] = {
+            # Read
+            "list":        self._op_list,
+            "list_page":   self._op_list_page,
+            "stat":        self._op_stat,
+            "volume":      self._op_volume,
+            "read":        self._op_read,
+            # Create
+            "create":      self._op_create,
+            "write_open":  self._op_write_open,
+            # Update
+            "write":       self._op_write,
+            "write_close": self._op_write_close,
+            "rename":      self._op_rename,
+            "truncate":    self._op_truncate,
+            # Delete
+            "delete":      self._op_delete,
+        }
 
     # ── Public lifecycle ───────────────────────────────────────────────────────
 
@@ -146,41 +172,24 @@ class VirtualDriveService(QObject):
             if self._is_running.is_set():
                 return
             self._is_running.set()
-            # One worker for the accept loop + one per concurrent connection.
             self._executor = ThreadPoolExecutor(max_workers=self._MAX_CONNECTIONS + 1)
             self._executor.submit(self._serve_loop)
-            # Launch the exe inside the lock so _stop() cannot race with process
-            # creation. The exe retries connecting to the pipe server for 30 s,
-            # so starting it after the serve_loop is submitted is safe.
             self._launch_exe()
-            # Pre-warm root listing so Explorer opens without cold-start latency.
-            threading.Thread(target=self._prefetch_root, daemon=True).start()
+            threading.Thread(target=self._watchdog_write_sessions, daemon=True).start()
+            threading.Thread(target=self._watchdog_exe, daemon=True).start()
 
     def _stop(self) -> None:
-        # _stop uses a bare thread (not executor) so it can call shutdown(wait=True)
-        # without deadlocking on the same executor it is trying to stop.
+        # Runs on a bare thread so shutdown(wait=True) cannot deadlock the executor.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 return
             self._is_running.clear()
-            # Terminate the exe before draining the executor so it cannot send
-            # new ops into a server that is already shutting down.
             if self._process is not None and self._process.poll() is None:
                 self._process.terminate()
             self._process = None
-            # Capture the executor reference inside the lock so a concurrent
-            # _start() that swaps self._executor cannot have its fresh pool
-            # shut down by this stop.  Shutdown runs outside the lock so a
-            # racing _start() is never blocked behind it.
-            executor = self._executor
+            executor = self._executor  # capture inside lock; _start() may swap self._executor after release
 
-        # Disconnect every in-flight pipe so any worker parked in a blocking
-        # read_exact() wakes immediately (its pending ReadFile fails). We only
-        # DisconnectNamedPipe here — never close() — because close() frees the
-        # shared I/O event the worker may still be waiting on; the owning worker
-        # closes its own handle in _serve_connection's finally. Terminating the
-        # exe alone does not reliably unblock a server-side read, so without this
-        # shutdown(wait=True) below could hang forever when the peer vanished.
+        # disconnect (not close) so each worker thread closes its own handle in _serve_connection's finally
         with self._open_pipes_lock:
             pipes = list(self._open_pipes)
         for pipe in pipes:
@@ -192,8 +201,6 @@ class VirtualDriveService(QObject):
         if executor is not None:
             executor.shutdown(wait=True, cancel_futures=True)
 
-        # All worker threads have exited — safe to purge shared state so the
-        # next session never sees stale cache entries or dead write streams.
         with self._write_sessions_lock:
             for stream in self._write_sessions.values():
                 try:
@@ -201,21 +208,17 @@ class VirtualDriveService(QObject):
                 except Exception:
                     pass
             self._write_sessions.clear()
-
-        with self._cache_lock:
-            self._stat_cache.clear()
-            self._list_cache.clear()
+            self._write_session_start_times.clear()
 
     # ── Exe management ────────────────────────────────────────────────────────
 
     @staticmethod
     def _find_exe() -> str:
-        # Frozen (PyInstaller): bundled under sys._MEIPASS.
+        # Return path to VirtualDrive.exe for frozen (PyInstaller) or dev builds.
         if getattr(sys, 'frozen', False):
             return os.path.join(
                 sys._MEIPASS, 'native', 'windows', 'virtual_drive', 'VirtualDrive.exe',
             )
-        # Dev: CMake Release output relative to the desktop/ root.
         desktop_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return os.path.join(
             desktop_root, 'native', 'windows', 'virtual_drive',
@@ -223,11 +226,7 @@ class VirtualDriveService(QObject):
         )
 
     def _launch_exe(self) -> None:
-        # Spawn VirtualDrive.exe without a console window. It polls
-        # \\.\pipe\SyncDoseVDrive for up to 30 s, so the pipe server (already
-        # submitted to the executor above) will be ready before the first retry.
-        # A global mutex inside the exe ensures only one instance ever runs;
-        # a duplicate launch exits immediately without side-effects.
+        # Spawn VirtualDrive.exe without a console window.
         exe = self._find_exe()
         if not os.path.isfile(exe):
             self.drive_error.emit(f"VirtualDrive.exe not found: {exe}")
@@ -240,86 +239,55 @@ class VirtualDriveService(QObject):
         except OSError as exc:
             self.drive_error.emit(f"Failed to launch VirtualDrive.exe: {exc}")
 
-    # ── Connect-time prefetch ─────────────────────────────────────────────────
-
-    def _prefetch_root(self) -> None:
-        """Pre-warm the root and immediate subdirectory listings on connect.
-
-        Called on a background thread after :meth:`_launch_exe`.  Waits briefly
-        for VirtualDrive.exe to finish mounting before sending the first request.
-        Caches root entries so the first Explorer open sees no cold-start delay,
-        then fetches each immediate subdirectory (up to 10) so tree-view
-        expansion feels instant too.
-        """
-        time.sleep(2.0)
-        if not self._is_running.is_set():
-            return
-        try:
-            resp, _ = self._op_list({"path": "/"}, b"")
-            if not resp.get("ok"):
-                return
-            subdirs = [
-                e["name"]
-                for e in resp.get("entries", [])
-                if e.get("is_dir") and e.get("name")
-            ]
-            for name in subdirs[:10]:
-                if not self._is_running.is_set():
-                    break
-                self._op_list({"path": f"/{name}"}, b"")
-        except Exception:
-            pass
-
     # ── Device-info cache ──────────────────────────────────────────────────────
 
     def _on_device_info(self, entity: object) -> None:
-        """Cache the latest connected-device entity for ``volume`` queries.
-
-        Connected to :attr:`DeviceInfoService.device_info_ready`, which fires on
-        every (periodic) device-info read. Stores the entity under
-        :attr:`_device_lock` so :meth:`_op_volume`, running on a pipe-worker
-        thread, always reads a consistent snapshot.
-
-        Args:
-            entity: The :class:`~domain.entities.device_info.DeviceEntity`
-                emitted by the device-info service.
-        """
+        # Cache latest device entity for _op_volume reads.
         with self._device_lock:
             self._current_device = entity if isinstance(entity, DeviceEntity) else None
+
+    # ── Connectivity-noise classifier ─────────────────────────────────────────
+
+    @staticmethod
+    def _is_connectivity_exc(exc: BaseException) -> bool:
+        # True for expected teardown I/O errors (aborted, broken pipe, eof, etc.).
+        msg = str(exc).lower()
+        return any(kw in msg for kw in (
+            "aborted",
+            "not connected",
+            "broken pipe",
+            "connection reset",
+            "disconnected",
+            "eof",
+        ))
 
     # ── Pipe server loop ───────────────────────────────────────────────────────
 
     def _serve_loop(self) -> None:
-        # Accept loop: each iteration creates a fresh pipe instance (the pipe is
-        # PIPE_UNLIMITED_INSTANCES), waits for a client, then hands the connected
-        # instance to a worker thread. This lets the C++ client's pool of N
-        # connections be served concurrently — N ops in flight at once.
+        # Accept loop: each accepted connection is handed off to its own worker thread.
         while self._is_running.is_set():
             pipe = Server(65536, 65536, self._PIPE_NAME, byte_stream=True)
             try:
                 pipe.wait_for_client(timeout=timedelta(seconds=3))
             except TimeoutError:
-                # No client this round — drop this instance and create a new one.
                 pipe.close()
                 continue
             except Exception as exc:
-                self.drive_error.emit(str(exc))
+                if self._is_running.is_set() and not self._is_connectivity_exc(exc):
+                    self.drive_error.emit(str(exc))
                 pipe.close()
                 continue
-            # Connection established — track it so _stop() can force it closed,
-            # then serve it on its own worker thread so the accept loop is free
-            # to take the next pooled connection immediately.
             with self._open_pipes_lock:
                 self._open_pipes.add(pipe)
             self._executor.submit(self._serve_connection, pipe)
 
     def _serve_connection(self, pipe: Any) -> None:
-        # Serve one connected VirtualDrive.exe pipe instance to completion, then
-        # tear it down. Runs on its own worker thread.
+        # Serve one connected pipe instance; clean up on exit.
         try:
             self._handle_connection(pipe)
         except Exception as exc:
-            self.drive_error.emit(str(exc))
+            if not self._is_connectivity_exc(exc):
+                self.drive_error.emit(str(exc))
         finally:
             with self._open_pipes_lock:
                 self._open_pipes.discard(pipe)
@@ -327,53 +295,35 @@ class VirtualDriveService(QObject):
                 pipe.disconnect()
                 pipe.close()
             except Exception:
-                # _stop() may already have closed this pipe to unblock us.
                 pass
 
     def _handle_connection(self, pipe: Any) -> None:
-        # Serve one connected VirtualDrive.exe session. Requests on a single
-        # connection are sequential (request→response paired on the wire);
-        # concurrency comes from multiple connections served in parallel.
+        # Serve sequential request→response pairs on one connection.
         while self._is_running.is_set():
             try:
                 req, payload, = self._read_frame(pipe, self._READ_POLL)
+                logger.debug("req: %s, payload_len: %d", req, len(payload))
             except TimeoutError:
-                # No new request this interval — re-check _is_running and keep
-                # the pooled connection alive. This is what lets _stop() drain
-                # idle workers promptly instead of blocking forever.
                 continue
             except Exception:
-                # Pipe broken or client disconnected — exit the session loop.
                 break
             try:
                 resp, resp_payload, = self._dispatch(req, payload)
+                logger.debug("resp: %s, payload_len: %d", resp, len(resp_payload))
             except Exception as exc:
-                # Surface the failure: a swallowed op error reaches VirtualDrive.exe
-                # as {"ok": false} with no indication of what actually went wrong.
-                self.drive_error.emit(f"op {req.get('op')!r} failed: {exc}")
+                if not self._is_connectivity_exc(exc):
+                    self.drive_error.emit(f"op {req.get('op')!r} failed: {exc}")
                 resp, resp_payload, = {"ok": False, "error": str(exc)}, b''
-            self._write_frame(pipe, resp, resp_payload)
+            try:
+                self._write_frame(pipe, resp, resp_payload)
+            except Exception:
+                break
 
     # ── Frame helpers (mirror of Protocol.cpp) ─────────────────────────────────
 
     @staticmethod
     def _read_frame(pipe: Any, header_timeout: timedelta | None = None) -> tuple[dict, bytes]:
-        """Read one framed message from the pipe.
-
-        Frame layout (matches ``Protocol.h``):
-            [4B LE jsonLen][JSON bytes][4B LE payloadLen][payload bytes]
-
-        Both length prefixes are read in a single ``read_exact(8)`` call; the
-        write side always sends the whole frame atomically so all bytes are
-        already in the kernel buffer by the time the first byte is readable.
-
-        Args:
-            pipe: The connected pipe ``Server`` instance.
-            header_timeout: Max time to wait for the *next* frame's 8-byte header
-                before raising ``TimeoutError``. ``None`` blocks indefinitely.
-                The body is read untimed because the sender frames atomically, so
-                once the header is readable the whole body is already buffered.
-        """
+        # Read one [4B jsonLen][4B payLen][json][payload] frame from the pipe.
         header = pipe.read_exact(8, header_timeout)
         json_len, pay_len = struct.unpack_from('<II', header)
         body = pipe.read_exact(json_len + pay_len) if (json_len + pay_len) else b''
@@ -381,44 +331,19 @@ class VirtualDriveService(QObject):
 
     @staticmethod
     def _write_frame(pipe: Any, resp: dict, payload: bytes = b'') -> None:
-        """Write one framed response to the pipe.
-
-        Frame layout: ``[4B JSON_len][4B payload_len][JSON bytes][payload bytes]``
-        Both lengths are front-loaded so the reader needs only one 8-byte read
-        for the header instead of two separate 4-byte reads.
-        """
+        # Write one [4B jsonLen][4B payLen][json][payload] frame to the pipe.
         j = json.dumps(resp).encode('utf-8')
         pipe.write(struct.pack('<II', len(j), len(payload)) + j + payload)
 
     # ── Dispatch ───────────────────────────────────────────────────────────────
 
     def _dispatch(self, req: dict, payload: bytes) -> tuple[dict, bytes]:
-        """Route a request to the appropriate op handler.
-
-        Args:
-            req: Parsed JSON from the pipe frame.
-            payload: Raw binary payload (non-empty only for ``write`` ops).
-
-        Returns:
-            ``(response_dict, response_payload)`` — response_payload is empty
-            for all ops except ``read``.
-        """
+        # Route a request to the appropriate op handler.
         op = req.get("op", "")
-        handlers = {
-            "list": self._op_list,
-            "list_page": self._op_list_page,
-            "stat": self._op_stat,
-            "volume": self._op_volume,
-            "read": self._op_read,
-            "write_open": self._op_write_open,
-            "write": self._op_write,
-            "write_close": self._op_write_close,
-            "create": self._op_create,
-            "delete": self._op_delete,
-            "rename": self._op_rename,
-            "truncate": self._op_truncate,
-        }
-        handler = handlers.get(op)
+        if op in self._CONNECTION_REQUIRED_OPS and not self._connectivity.connected:
+            # Fail fast while disconnected to avoid blocking a thread on a doomed connect.
+            return {"ok": False, "error": "not_connected"}, b''
+        handler = self._dispatch_table.get(op)
         if handler is None:
             return {"ok": False, "error": f"unknown op: {op}"}, b''
         return handler(req, payload)
@@ -427,150 +352,73 @@ class VirtualDriveService(QObject):
 
     @staticmethod
     def _unique_word(base: str) -> str:
-        """Return a collision-free meeting word ``{base}_{uuid}``.
-
-        Each request opens its own unique word so concurrent ops never share a
-        meeting word — the PC's ``_inFlightWords`` guard and Android's
-        ``inProgressChannels`` guard both reject a second concurrent
-        ``connect()`` on the same word. Android routes the dynamic word to the
-        correct handler via its registry prefix fallback.
-
-        Args:
-            base: The op's base meeting word (a ``VirtualDriveChannels`` value).
-
-        Returns:
-            ``base`` suffixed with an 8-char hex token unique to this request.
-        """
+        # Return collision-free meeting word {base}_{uuid8} for one request.
         return f"{base}_{uuid.uuid4().hex[:8]}"
 
-    # ── Metadata cache helpers ─────────────────────────────────────────────────
-
-    @staticmethod
-    def _parent_path(path: str) -> str | None:
-        # Parent virtual path, or None for the root.
-        if path == "/" or not path:
-            return None
-        idx = path.rfind("/")
-        return path[:idx] if idx > 0 else "/"
-
-    @staticmethod
-    def _child_path(parent: str, name: str) -> str:
-        # Join a parent dir and a child entry name into a normalized virtual path.
-        return f"/{name}" if parent == "/" else f"{parent}/{name}"
-
-    def _invalidate(self, *paths: str) -> None:
-        # Drop cached stat/list entries for the given paths and their parents,
-        # since a mutation changes both the path itself and its parent's listing.
-        with self._cache_lock:
-            for path in paths:
-                self._stat_cache.pop(path, None)
-                self._list_cache.pop(path, None)
-                parent = self._parent_path(path)
-                if parent is not None:
-                    self._stat_cache.pop(parent, None)
-                    self._list_cache.pop(parent, None)
-
-    # ── One-shot metadata ops (unique meeting word per request) ────────────────
+    # ── Read ops ──────────────────────────────────────────────────────────────
 
     def _op_list(self, req: dict, _: bytes) -> tuple[dict, bytes]:
-        """List directory entries at ``req["path"]``.
-
-        Cached for ``_CACHE_TTL_SECONDS``. A successful listing also seeds the
-        stat cache for every child so the per-entry ``stat`` storm WinFsp issues
-        right after a directory open is served locally without round-trips.
-        """
-        path = req["path"]
-        now = time.monotonic()
-        with self._cache_lock:
-            hit = self._list_cache.get(path)
-            if hit is not None and hit[1] > now:
-                return hit[0], b''
-
-        tau = self._connectivity.tau
-        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_LIST.value)
-        with tau.connect(word, timeout_seconds=30) as s:
-            s.write_string(json.dumps({"path": path}) + "\n")
-            resp = json.loads(s.read_all().decode())
-
-        if resp.get("ok"):
-            expiry = time.monotonic() + self._CACHE_TTL_SECONDS
-            with self._cache_lock:
-                self._list_cache[path] = (resp, expiry)
-                # Seed child stats from the listing.
-                for entry in resp.get("entries", []):
-                    name = entry.get("name")
-                    if not name:
-                        continue
-                    child = self._child_path(path, name)
-                    self._stat_cache[child] = ({**entry, "ok": True}, expiry)
+        # List directory entries at req["path"].
+        resp = self._json_exchange(
+            VirtualDriveChannels.VIRTUAL_DRIVE_LIST.value,
+            {"path": req["path"]},
+            self._META_CONNECT_TIMEOUT_S,
+            stall_s=self._META_STALL_TIMEOUT_S,
+        )
         return resp, b''
 
     def _op_list_page(self, req: dict, _: bytes) -> tuple[dict, bytes]:
-        """Return a page of directory entries starting after ``req["after"]``.
+        # Return a page of sorted entries starting after req["after"].
+        path = req["path"]
+        after = req.get("after")
+        limit = int(req.get("limit", 200))
 
-        Forwards a ``virtual_drive_list_page_{uuid}`` request to Android, which
-        returns entries sorted by name.  Pass ``req["after"] = None`` for the
-        first page; use the returned ``next_after`` value as ``after`` on the
-        next call to advance the cursor.  ``has_more`` is ``True`` when more
-        entries exist beyond this page.
+        entries = self._fetch_listing_full(path)
+        return self._page_entries(entries, after, limit), b''
 
-        Unlike ``_op_list``, this op is *not* cached at the Python layer —
-        caching is done per-FileNode in C++ for the lifetime of the directory
-        handle.
+    def _fetch_listing_full(self, path: str) -> list[dict]:
+        # Fetch the full sorted directory listing from Android in one round-trip.
+        resp = self._json_exchange(
+            VirtualDriveChannels.VIRTUAL_DRIVE_LIST_FULL.value,
+            {"path": path},
+            self._LIST_FULL_TIMEOUT_S,
+        )
+        if not resp.get("ok"):
+            return []
+        entries = resp.get("entries", [])
+        entries.sort(key=lambda e: e["name"])
+        return entries
 
-        Args:
-            req: Must contain ``"path"`` (str), optionally ``"after"`` (str|None)
-                 and ``"limit"`` (int, default 200).
-        """
-        tau  = self._connectivity.tau
-        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_LIST_PAGE.value)
-        with tau.connect(word, timeout_seconds=30) as s:
-            s.write_string(json.dumps({
-                "path":  req["path"],
-                "after": req.get("after"),   # None → JSON null → first page
-                "limit": req.get("limit", 200),
-            }) + "\n")
-            resp = json.loads(s.read_all().decode())
-        return resp, b''
+    @staticmethod
+    def _page_entries(entries: list[dict], after: str | None, limit: int) -> dict:
+        # Slice one page out of the full sorted listing using a binary-search cursor.
+        if after is None:
+            start = 0
+        else:
+            start = bisect.bisect_right(entries, after, key=lambda e: e["name"])
+        page = entries[start:start + limit]
+        end = start + len(page)
+        return {
+            "ok": True,
+            "entries": page,
+            "has_more": end < len(entries),
+            # Must be "" not null: nlohmann j.value("next_after","") only falls back when
+            # the key is absent; a present-null value raises type_error.302 in VirtualDrive.exe.
+            "next_after": page[-1]["name"] if page else "",
+        }
 
     def _op_stat(self, req: dict, _: bytes) -> tuple[dict, bytes]:
-        """Return metadata for the file or directory at ``req["path"]``.
-
-        Cached for ``_CACHE_TTL_SECONDS`` to absorb the repeated ``stat('/')``
-        refreshes and per-entry probes WinFsp issues while browsing.
-        """
-        path = req["path"]
-        now = time.monotonic()
-        with self._cache_lock:
-            hit = self._stat_cache.get(path)
-            if hit is not None and hit[1] > now:
-                return hit[0], b''
-
-        tau = self._connectivity.tau
-        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_STAT.value)
-        with tau.connect(word, timeout_seconds=30) as s:
-            s.write_string(json.dumps({"path": path}) + "\n")
-            resp = json.loads(s.read_all().decode())
-
-        if resp.get("ok"):
-            with self._cache_lock:
-                self._stat_cache[path] = (resp, time.monotonic() + self._CACHE_TTL_SECONDS)
+        # Return metadata for req["path"].
+        resp = self._json_exchange(
+            VirtualDriveChannels.VIRTUAL_DRIVE_STAT.value,
+            {"path": req["path"]},
+            self._META_CONNECT_TIMEOUT_S,
+            stall_s=self._META_STALL_TIMEOUT_S,
+        )
         return resp, b''
 
     def _op_volume(self, _req: dict, _: bytes) -> tuple[dict, bytes]:
-        """Report the connected device's storage for WinFsp ``GetVolumeInfo``.
-
-        Answers from the cached :class:`DeviceEntity` populated by the
-        device-info service (refreshed periodically) — no TauSync round-trip.
-        ``storage_total`` / ``storage_used`` are decimal GB, so values are
-        scaled back to bytes; ``free = total - used``.
-
-        Returns:
-            ``({"ok": True, "total": <bytes>, "free": <bytes>}, b'')`` when a
-            device snapshot is available, else ``({"ok": False}, b'')`` so the
-            VirtualDrive.exe caller falls back to its placeholder capacity until
-            the first device-info read completes.
-        """
+        # Report connected device storage from cached DeviceEntity (no TauSync round-trip).
         gb_to_bytes = 1000 ** 3
         with self._device_lock:
             device = self._current_device
@@ -581,104 +429,38 @@ class VirtualDriveService(QObject):
         free_bytes = int(free_gb * gb_to_bytes)
         return {"ok": True, "total": total_bytes, "free": free_bytes}, b''
 
+    # ── Create ops ────────────────────────────────────────────────────────────
+
     def _op_create(self, req: dict, _: bytes) -> tuple[dict, bytes]:
-        """Create a file or directory at ``req["path"]``."""
-        tau = self._connectivity.tau
-        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_CREATE.value)
-        with tau.connect(word, timeout_seconds=30) as s:
-            s.write_string(json.dumps({
-                "path": req["path"],
-                "is_dir": req.get("is_dir", False),
-            }) + "\n")
-            resp = json.loads(s.read_all().decode())
-        self._invalidate(req["path"])
+        # Create a file or directory at req["path"].
+        resp = self._json_exchange(
+            VirtualDriveChannels.VIRTUAL_DRIVE_CREATE.value,
+            {"path": req["path"], "is_dir": req.get("is_dir", False)},
+            self._META_CONNECT_TIMEOUT_S,
+            stall_s=self._META_STALL_TIMEOUT_S,
+        )
         return resp, b''
-
-    def _op_delete(self, req: dict, _: bytes) -> tuple[dict, bytes]:
-        """Delete the file or directory at ``req["path"]``."""
-        tau = self._connectivity.tau
-        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_DELETE.value)
-        with tau.connect(word, timeout_seconds=30) as s:
-            s.write_string(json.dumps({"path": req["path"]}) + "\n")
-            resp = json.loads(s.read_all().decode())
-        self._invalidate(req["path"])
-        return resp, b''
-
-    def _op_rename(self, req: dict, _: bytes) -> tuple[dict, bytes]:
-        """Rename or move ``req["from"]`` to ``req["to"]``."""
-        tau = self._connectivity.tau
-        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_RENAME.value)
-        with tau.connect(word, timeout_seconds=30) as s:
-            s.write_string(json.dumps({
-                "from": req["from"],
-                "to": req["to"],
-            }) + "\n")
-            resp = json.loads(s.read_all().decode())
-        self._invalidate(req["from"], req["to"])
-        return resp, b''
-
-    def _op_truncate(self, req: dict, _: bytes) -> tuple[dict, bytes]:
-        """Resize ``req["path"]`` to ``req["new_size"]`` bytes."""
-        tau = self._connectivity.tau
-        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_TRUNCATE.value)
-        with tau.connect(word, timeout_seconds=30) as s:
-            s.write_string(json.dumps({
-                "path": req["path"],
-                "new_size": req["new_size"],
-            }) + "\n")
-            resp = json.loads(s.read_all().decode())
-        self._invalidate(req["path"])
-        return resp, b''
-
-    # ── Read (single unique channel: request line → byte stream) ───────────────
-
-    def _op_read(self, req: dict, _: bytes) -> tuple[dict, bytes]:
-        """Read ``req["length"]`` bytes from ``req["path"]`` at ``req["offset"]``.
-
-        One round-trip on a unique ``virtual_drive_read_{uuid}`` channel: write a
-        ``{path, offset, length}`` request line, then read the file bytes back on
-        the same stream until Android closes it (EOF). The unique word means
-        concurrent reads never collide on a shared meeting word.
-        """
-        tau = self._connectivity.tau
-        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_READ.value)
-        with tau.connect(word, timeout_seconds=30) as s:
-            s.write_string(json.dumps({
-                "path": req["path"],
-                "offset": req["offset"],
-                "length": req["length"],
-            }) + "\n")
-            file_bytes = s.read_all()
-        return {"ok": True}, file_bytes
-
-    # ── Write (single unique channel: header line → held byte stream) ──────────
 
     def _op_write_open(self, req: dict, _: bytes) -> tuple[dict, bytes]:
-        """Open a write session for ``req["path"]``.
-
-        Opens a unique ``virtual_drive_write_{uuid}`` stream and writes a
-        ``{path}`` header line so Android knows the target before any bytes
-        arrive. The stream is then *held open* in ``_write_sessions`` keyed by
-        virtual path and fed by subsequent ``write`` ops until ``write_close``.
-        The unique word means concurrent write sessions never collide.
-        """
+        # Open a write session: connect a unique channel and hold the stream open.
         tau = self._connectivity.tau
         word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_WRITE.value)
 
-        # Open and HOLD the stream; the header line tells Android the target path.
-        stream = tau.connect(word, timeout_seconds=30)
-        stream.write_string(json.dumps({"path": req["path"]}) + "\n")
+        stream = tau.connect(word, timeout_seconds=self._DATA_CONNECT_TIMEOUT_S)
+        try:
+            stream.write_string(json.dumps({"path": req["path"]}) + "\n")
+        except Exception:
+            stream.close()
+            raise
         with self._write_sessions_lock:
             self._write_sessions[req["path"]] = stream
+            self._write_session_start_times[req["path"]] = time.monotonic()
         return {"ok": True}, b''
 
-    def _op_write(self, req: dict, payload: bytes) -> tuple[dict, bytes]:
-        """Stream a chunk into the active write session for ``req["path"]``.
+    # ── Update ops ────────────────────────────────────────────────────────────
 
-        ``stream.write(bytes) -> int`` blocks until the chunk is delivered over
-        Wi-Fi, so Explorer's progress bar reflects real transfer speed. The
-        lock only guards the dict lookup; the blocking write happens outside it.
-        """
+    def _op_write(self, req: dict, payload: bytes) -> tuple[dict, bytes]:
+        # Stream a chunk into the active write session for req["path"].
         with self._write_sessions_lock:
             stream = self._write_sessions.get(req["path"])
         if stream is None:
@@ -687,18 +469,252 @@ class VirtualDriveService(QObject):
         return {"ok": True}, b''
 
     def _op_write_close(self, req: dict, _: bytes) -> tuple[dict, bytes]:
-        """Close the active write session so Android finalizes the file.
-
-        Pops the stream from ``_write_sessions`` before calling ``__exit__``
-        so a failure during close does not leave a leaked open channel.
-        """
+        # Close the write session so Android finalizes the file.
         with self._write_sessions_lock:
             stream = self._write_sessions.pop(req["path"], None)
+            self._write_session_start_times.pop(req["path"], None)
         if stream is None:
-            # write_open was never called or already closed — no-op.
             return {"ok": True}, b''
-        # Android sees EOF when the stream closes and renames temp → final path.
+        # EOF on close signals Android to rename temp → final path.
         stream.close()
-        # The file's size/mtime changed and its parent listing now includes it.
-        self._invalidate(req["path"])
         return {"ok": True}, b''
+
+    def _op_rename(self, req: dict, _: bytes) -> tuple[dict, bytes]:
+        # Rename or move req["from"] to req["to"].
+        resp = self._json_exchange(
+            VirtualDriveChannels.VIRTUAL_DRIVE_RENAME.value,
+            {"from": req["from"], "to": req["to"]},
+            self._META_CONNECT_TIMEOUT_S,
+            stall_s=self._META_STALL_TIMEOUT_S,
+        )
+        return resp, b''
+
+    def _op_truncate(self, req: dict, _: bytes) -> tuple[dict, bytes]:
+        # Resize req["path"] to req["new_size"] bytes.
+        resp = self._json_exchange(
+            VirtualDriveChannels.VIRTUAL_DRIVE_TRUNCATE.value,
+            {"path": req["path"], "new_size": req["new_size"]},
+            self._META_CONNECT_TIMEOUT_S,
+            stall_s=self._META_STALL_TIMEOUT_S,
+        )
+        return resp, b''
+
+    # ── Delete ops ────────────────────────────────────────────────────────────
+
+    def _op_delete(self, req: dict, _: bytes) -> tuple[dict, bytes]:
+        # Delete the file or directory at req["path"].
+        resp = self._json_exchange(
+            VirtualDriveChannels.VIRTUAL_DRIVE_DELETE.value,
+            {"path": req["path"]},
+            self._META_CONNECT_TIMEOUT_S,
+            stall_s=self._META_STALL_TIMEOUT_S,
+        )
+        return resp, b''
+
+    # ── JSON exchange helper (used by all metadata ops) ────────────────────────
+
+    def _json_exchange(
+            self,
+            base_word: str,
+            request: dict,
+            connect_timeout: int,
+            stall_s: float | None = None,
+            total_s: float | None = None,
+    ) -> dict:
+        # One bounded JSON request/response on a fresh unique meeting word.
+        tau = self._connectivity.tau
+        word = self._unique_word(base_word)
+        try:
+            with tau.connect(word, timeout_seconds=connect_timeout) as s:
+                s.write_string(json.dumps(request) + "\n")
+                body = self._read_all_bounded(s, stall_s, total_s)
+            return json.loads(body.decode())
+        except TimeoutError:
+            return {"ok": False, "error": "timeout"}
+
+    # ── Read op and bounded-I/O helpers ────────────────────────────────────────
+
+    def _op_read(self, req: dict, _: bytes) -> tuple[dict, bytes]:
+        # Read req["length"] bytes from req["path"] at req["offset"].
+        tau = self._connectivity.tau
+        word = self._unique_word(VirtualDriveChannels.VIRTUAL_DRIVE_READ.value)
+        path = req["path"]
+        with tau.connect(word, timeout_seconds=self._DATA_CONNECT_TIMEOUT_S) as s:
+            s.write_string(json.dumps({
+                "path": path,
+                "offset": req["offset"],
+                "length": req["length"],
+            }) + "\n")
+            try:
+                header_line = self._read_line_bounded(s)
+                if not header_line:
+                    self._log_read_error(path, req, "empty header (peer closed)")
+                    return {"ok": False, "error": "io_error"}, b''
+                try:
+                    header = json.loads(header_line.decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    self._log_read_error(path, req, f"bad header: {header_line!r}")
+                    return {"ok": False, "error": "io_error"}, b''
+                if not header.get("ok", False):
+                    error = header.get("error", "io_error")
+                    self._log_read_error(path, req, f"android error: {error}")
+                    return {"ok": False, "error": error}, b''
+                expected = int(header.get("length", 0))
+                file_bytes = self._read_exact_bounded(s, expected)
+            except TimeoutError:
+                self._log_read_error(path, req, "stalled")
+                return {"ok": False, "error": "timeout"}, b''
+        if len(file_bytes) != expected:
+            self._log_read_error(
+                path, req, f"truncated: got {len(file_bytes)}/{expected} bytes")
+            return {"ok": False, "error": "io_error"}, b''
+        return {"ok": True}, file_bytes
+
+    def _log_read_error(self, path: str, req: dict, reason: str) -> None:
+        # Log a read failure with path, offset, length, and reason.
+        logger.warning(
+            "vdrive read failed: path=%s offset=%s length=%s: %s",
+            path, req.get("offset"), req.get("length"), reason,
+        )
+
+    @contextlib.contextmanager
+    def _read_deadline(
+            self,
+            s: Any,
+            stall_s: float | None = None,
+            total_s: float | None = None,
+    ) -> Generator[tuple[Callable[[], None], threading.Event], None, None]:
+        # Watchdog context manager that aborts a stalled read by closing the stream.
+        stall = self._READ_STALL_TIMEOUT_S if stall_s is None else stall_s
+        total = self._READ_TOTAL_TIMEOUT_S if total_s is None else total_s
+        start = time.monotonic()
+        last_progress = [start]
+        stalled = threading.Event()
+        stop_watchdog = threading.Event()
+
+        def _watchdog() -> None:
+            while not stop_watchdog.wait(self._READ_WATCHDOG_POLL_S):
+                now = time.monotonic()
+                if (now - last_progress[0] > stall
+                        or now - start > total):
+                    stalled.set()
+                    s.close()
+                    return
+
+        watchdog = threading.Thread(
+            target=_watchdog, name="vdrive-read-watchdog", daemon=True,
+        )
+        watchdog.start()
+
+        def mark_progress() -> None:
+            last_progress[0] = time.monotonic()
+
+        try:
+            yield mark_progress, stalled
+        finally:
+            stop_watchdog.set()
+            watchdog.join(timeout=1.0)
+
+    def _read_line_bounded(self, s: Any) -> bytes:
+        # Read one \n-terminated line, aborting on stall.
+        buf = bytearray()
+        with self._read_deadline(s) as (mark_progress, stalled):
+            while True:
+                try:
+                    chunk = s.read(1)
+                except Exception:
+                    break
+                if not chunk:
+                    break
+                mark_progress()
+                if chunk == b"\n":
+                    break
+                buf += chunk
+        if stalled.is_set():
+            raise TimeoutError("virtual-drive read header stalled")
+        return bytes(buf)
+
+    def _read_exact_bounded(self, s: Any, expected: int) -> bytes:
+        # Read up to expected bytes, aborting if the transfer stalls.
+        if expected <= 0:
+            return b''
+        parts: list[bytes] = []
+        got = 0
+        with self._read_deadline(s) as (mark_progress, stalled):
+            while got < expected:
+                try:
+                    chunk = s.read(min(65536, expected - got))
+                except Exception:
+                    break
+                if not chunk:
+                    break
+                parts.append(chunk)
+                got += len(chunk)
+                mark_progress()
+        if stalled.is_set():
+            raise TimeoutError("virtual-drive read stalled")
+        return b"".join(parts)
+
+    def _read_all_bounded(
+            self,
+            s: Any,
+            stall_s: float | None = None,
+            total_s: float | None = None,
+    ) -> bytes:
+        # Read the whole response until EOF, aborting if the read stalls.
+        parts: list[bytes] = []
+        with self._read_deadline(s, stall_s, total_s) as (mark_progress, stalled):
+            while True:
+                try:
+                    chunk = s.read(65536)
+                except Exception:
+                    break
+                if not chunk:
+                    break
+                parts.append(chunk)
+                mark_progress()
+        if stalled.is_set():
+            raise TimeoutError("virtual-drive response read stalled")
+        return b"".join(parts)
+
+    # ── Watchdog threads ───────────────────────────────────────────────────────
+
+    def _watchdog_write_sessions(self) -> None:
+        # Close write sessions open longer than _WRITE_SESSION_TIMEOUT_S.
+        while self._is_running.is_set():
+            time.sleep(30)
+            if not self._is_running.is_set():
+                break
+            now = time.monotonic()
+            with self._write_sessions_lock:
+                stale = [
+                    path for path, t in self._write_session_start_times.items()
+                    if now - t > self._WRITE_SESSION_TIMEOUT_S
+                ]
+            for path in stale:
+                with self._write_sessions_lock:
+                    stream = self._write_sessions.pop(path, None)
+                    self._write_session_start_times.pop(path, None)
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+                self.drive_error.emit(f"Write session timed out and was closed: {path}")
+
+    def _watchdog_exe(self) -> None:
+        # Restart VirtualDrive.exe if it exits unexpectedly while running.
+        while self._is_running.is_set():
+            time.sleep(5)
+            if not self._is_running.is_set():
+                break
+            with self._lifecycle_lock:
+                proc = self._process
+                running = self._is_running.is_set()
+            if running and proc is not None and proc.poll() is not None:
+                self._stop()
+                self.drive_error.emit(
+                    "VirtualDrive.exe exited unexpectedly — restarting"
+                )
+                self._start()
+                return  # _start() spawned a fresh watchdog; this thread exits.

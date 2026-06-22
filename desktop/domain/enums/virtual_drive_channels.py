@@ -33,3 +33,6 @@ class VirtualDriveChannels(StrEnum):
 
     # Base prefix for paginated listing ops. Meeting word: virtual_drive_list_page_{uuid8}. PC sends {path, after, limit}; Android responds with {ok, entries, has_more, next_after}. Entries are sorted by name; 'after' is the last name received (null for first page).
     VIRTUAL_DRIVE_LIST_PAGE = "virtual_drive_list_page"
+
+    # Base prefix for full-directory enumeration. Meeting word: virtual_drive_list_full_{uuid8}. PC sends {path}; Android responds with {ok, dir_mtime_ms, entries} containing every child entry in one streamed response. The PC caches the listing keyed by dir_mtime_ms and serves all list_page requests locally, avoiding per-page round-trips for large folders.
+    VIRTUAL_DRIVE_LIST_FULL = "virtual_drive_list_full"

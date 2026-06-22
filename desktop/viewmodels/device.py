@@ -56,7 +56,7 @@ class DeviceViewModel(QObject):
     connection_error: Signal = Signal(str)
     """Emitted when the TCP listener crashes — forwarded from ConnectivityService.connection_error."""
 
-    _TEN_MINUTES: int = 10 * 60 * 1000
+    _ONE_MINUTES: int = 60 * 1000
 
     def __init__(
             self,
@@ -100,7 +100,7 @@ class DeviceViewModel(QObject):
 
         self._refresh_timer: QTimer = QTimer(self)
         self._refresh_timer.timeout.connect(self._request_device_info_refresh)
-        self._refresh_timer.start(self._TEN_MINUTES)
+        self._refresh_timer.start(self._ONE_MINUTES)
 
         self._current_device_connected_id: str = ""
 

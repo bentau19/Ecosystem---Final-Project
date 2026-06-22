@@ -1,5 +1,7 @@
 import logging
 import logging.handlers
+import os
+import sys
 from pathlib import Path
 
 
@@ -9,7 +11,9 @@ def configure_logging() -> None:
     Sets up two handlers on the root logger:
 
     * A :class:`~logging.handlers.RotatingFileHandler` writing ``DEBUG``+
-      messages to ``data/syncdose.log`` (5 MB per file, 3 backups kept).
+      messages to ``syncdose.log`` (5 MB per file, 3 backups kept).
+      - Frozen build: ``%APPDATA%\\SyncDose\\syncdose.log`` (always writable).
+      - Dev (source): ``desktop/data/syncdose.log`` (easy to inspect locally).
     * A :class:`~logging.StreamHandler` writing ``INFO``+ to the console so
       developers get concise output without every debug trace.
 
@@ -28,7 +32,13 @@ def configure_logging() -> None:
     )
 
     # ── Rotating file handler ─────────────────────────────────────────────────
-    log_path = Path(__file__).parent.parent / "data" / "syncdose.log"
+    # Frozen (PyInstaller): write to %APPDATA%\SyncDose\ which is always
+    # writable without admin rights.  Source dev: write to desktop/data/ so
+    # logs are easy to find next to the code.
+    if getattr(sys, "frozen", False):
+        log_path = Path(os.environ["APPDATA"]) / "SyncDose" / "syncdose.log"
+    else:
+        log_path = Path(__file__).parent.parent / "data" / "syncdose.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     file_handler = logging.handlers.RotatingFileHandler(
         log_path,

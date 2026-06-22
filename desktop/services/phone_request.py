@@ -7,8 +7,10 @@ from typing import Callable
 from domain.enums.backup_channels import BackupChannels
 from domain.enums.file_transfer_channels import FileTransferChannels
 from domain.enums.session_channels import SessionChannels
+from domain.enums.device_info_channels import DeviceInfoChannels
 from services.backup import BackupService
 from services.connectivity import ConnectivityService
+from services.device_info import DeviceInfoService
 from services.file_transfer import FileTransferService
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,7 @@ class PhoneRequestService:
             self,
             connectivity_service: ConnectivityService,
             file_transfer_service: FileTransferService,
+            device_info_service: DeviceInfoService,
             backup_service: BackupService,
     ) -> None:
         """Initialize the service with the shared connectivity service.
@@ -49,6 +52,7 @@ class PhoneRequestService:
                 registered as the handler for incoming backup manifest requests.
         """
         self._connectivity: ConnectivityService = connectivity_service
+        self._device_info_service: DeviceInfoService = device_info_service
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
         self._is_running: threading.Event = threading.Event()
         self._lifecycle_lock: threading.Lock = threading.Lock()
@@ -57,6 +61,7 @@ class PhoneRequestService:
             FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC.value: file_transfer_service.receive_metadata,
             BackupChannels.BACKUP_MANIFEST_FROM_ANDROID.value: backup_service.receive_manifest,
             SessionChannels.DISCONNECT_FROM_PHONE.value: self._connectivity.stop,
+            DeviceInfoChannels.PC_NAME.value: self._device_info_service.send_pc_name
         }
 
     # ── Public API ─────────────────────────────────────────────────────────────

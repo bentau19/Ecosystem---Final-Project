@@ -86,11 +86,14 @@ public class VirtualDriveChannelHandler implements ChannelHandler {
     @Override
     public void onPeerRequest(String channel) {
         try {
-            // IMPORTANT: check VIRTUAL_DRIVE_LIST_PAGE before VIRTUAL_DRIVE_LIST because
-            // "virtual_drive_list_page_" starts with "virtual_drive_list_" — the longer
-            // (more specific) prefix must be matched first.
+            // IMPORTANT: check VIRTUAL_DRIVE_LIST_PAGE and VIRTUAL_DRIVE_LIST_FULL before
+            // VIRTUAL_DRIVE_LIST because "virtual_drive_list_page_" / "virtual_drive_list_full_"
+            // both start with "virtual_drive_list_" — the longer (more specific) prefix must
+            // be matched first.
             if (channel.startsWith(VirtualDriveChannels.VIRTUAL_DRIVE_LIST_PAGE.getValue() + "_")) {
                 useCase.handleListPage(channel);
+            } else if (channel.startsWith(VirtualDriveChannels.VIRTUAL_DRIVE_LIST_FULL.getValue() + "_")) {
+                useCase.handleListFull(channel);
             } else if (channel.startsWith(VirtualDriveChannels.VIRTUAL_DRIVE_LIST.getValue() + "_")) {
                 useCase.handleList(channel);
             } else if (channel.startsWith(VirtualDriveChannels.VIRTUAL_DRIVE_STAT.getValue() + "_")) {

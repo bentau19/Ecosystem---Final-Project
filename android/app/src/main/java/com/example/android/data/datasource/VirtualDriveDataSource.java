@@ -1,12 +1,18 @@
 package com.example.android.data.datasource;
 
 import android.os.Environment;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.StructStat;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.example.android.domain.entities.VDriveEntry;
+import com.example.android.domain.entities.VDrivePageResult;
+import com.example.android.domain.entities.VDriveReadRange;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
@@ -18,96 +24,59 @@ import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * File I/O layer for the virtual drive feature.
- *
- * <p>All operations map the virtual path space (rooted at {@code "/"}) 1:1 onto the
- * device's primary external storage ({@link Environment#getExternalStorageDirectory()},
- * i.e. {@code /storage/emulated/0/}).
- *
- * <p><b>Path traversal safety</b>: {@link #resolve} validates that the canonical
- * absolute path of every resolved file starts with the storage root — any attempt
- * to escape via {@code ".."} components throws a {@link SecurityException}.
- *
- * <h3>Metadata cache</h3>
- * <p>Stat and directory-listing results are cached for {@link #CACHE_TTL_MS} milliseconds
- * ({@value #CACHE_TTL_MS} ms = {@value #CACHE_TTL_S} s). This absorbs WinFsp's rapid
- * re-stat storms (Explorer probes every visible entry immediately after a
- * {@code ReadDirectory} call). Cache entries are invalidated on every mutation
- * (create / delete / rename / truncate / finalizeWrite), so stale data is only
- * possible for externally modified files.
- *
- * <p>All methods are <b>synchronous</b> and may block.  Always call from a
- * background thread — never from the main thread.
- *
- * <p>Callers are responsible for holding the appropriate storage permissions
- * before invoking any method:
- * <ul>
- *   <li>API 24–28: {@code READ_EXTERNAL_STORAGE} + {@code WRITE_EXTERNAL_STORAGE}
- *   <li>API 29:    {@code WRITE_EXTERNAL_STORAGE} (still honoured)
- *   <li>API 30+:   {@code MANAGE_EXTERNAL_STORAGE}
- * </ul>
+ * File I/O for the virtual drive: maps virtual paths 1:1 to external storage.
+ * On-demand request→response — no background scan or index.
+ * In-memory cache absorbs WinFsp stat storms; mutations invalidate affected entries.
  */
 public class VirtualDriveDataSource {
 
     private static final String TAG = "VirtualDriveDS";
 
-    /**
-     * Temp-file suffix used during write sessions to avoid partial writes being visible.
-     */
-    private static final String TMP_SUFFIX = ".vdtmp";
+    private static final String TMP_SUFFIX = ".vdtmp";             // avoids partial-write visibility
+    private static final long CACHE_TTL_MS = 3_000L;              // 3 s — absorbs WinFsp storms
+    private static final int  CACHE_TTL_S  = 3;
+    private static final int  WRITE_BUFFER_BYTES = 256 * 1024;    // 256 KB write buffer
+    private static final int  MAX_IDLE_READ_HANDLES = 16;         // soft fd-budget cap
+    private static final long READ_HANDLE_IDLE_MS   = 15_000L;    // evict handles idle > 15 s
 
-    /**
-     * Cache TTL in milliseconds. Must be short enough that externally modified files
-     * (e.g. a photo just taken by the camera) appear within a reasonable delay.
-     * 3 s is conservative; the desktop uses 5 s.
-     */
-    private static final long CACHE_TTL_MS = 3_000L;
-
-    /**
-     * Human-readable version of {@link #CACHE_TTL_MS} for log messages.
-     */
-    private static final int CACHE_TTL_S = 3;
-
-    /**
-     * Write-buffer size for temp files. Coalesces small TauSync payload chunks into
-     * larger kernel writes, reducing syscall overhead during streaming.
-     */
-    private static final int WRITE_BUFFER_BYTES = 256 * 1024; // 256 KB
-
-    /**
-     * Canonical absolute path of the storage root — used for traversal validation.
-     */
+    /** Canonical path of the storage root — used for traversal validation. */
     private final String storageRoot;
 
-    // ── Metadata caches ───────────────────────────────────────────────────────
+    // ── In-memory caches ──────────────────────────────────────────────────────
 
-    /**
-     * Immutable cache entry: a value paired with its expiry timestamp
-     * (milliseconds from {@link System#currentTimeMillis()}).
-     */
-    private record CacheEntry<T>(T value, long expiryMs) {
-    }
+    private record CacheEntry<T>(T value, long expiryMs) {}
 
-    /**
-     * Short-TTL stat cache: virtual path → {@link CacheEntry} holding a
-     * {@link VDriveEntry} and its expiry timestamp. Absorbs the per-entry stat
-     * probes WinFsp issues right after a directory listing.
-     * {@link ConcurrentHashMap} is safe for concurrent access from multiple
-     * {@code PeerRequestHandler} threads.
-     */
+    /** Stat cache: absorbs per-entry probes after a ReadDirectory. */
     private final ConcurrentHashMap<String, CacheEntry<VDriveEntry>> statCache =
             new ConcurrentHashMap<>();
 
-    /**
-     * Short-TTL list cache: virtual path → {@link CacheEntry} holding the full
-     * child list and its expiry timestamp. Absorbs Explorer's repeated
-     * {@code ReadDirectory} refreshes.
-     */
+    /** List cache: absorbs repeated ReadDirectory refreshes. */
     private final ConcurrentHashMap<String, CacheEntry<List<VDriveEntry>>> listCache =
             new ConcurrentHashMap<>();
+
+    /** Sorted-snapshot cache: reused across successive listDirPage cursor calls. */
+    private final ConcurrentHashMap<String, CacheEntry<File[]>> sortedChildCache =
+            new ConcurrentHashMap<>();
+
+    // ── Read-handle pool ──────────────────────────────────────────────────────
+
+    private static final class PooledReader {
+        final RandomAccessFile raf;
+        volatile long idleSinceMs;
+        PooledReader(RandomAccessFile raf) { this.raf = raf; }
+    }
+
+    // one idle handle per path; sequential reads reuse it (just a seek, no re-open)
+    private final ConcurrentHashMap<String, PooledReader> idleReaders =
+            new ConcurrentHashMap<>();
+
+    /** Approximate count of pooled handles; soft-bounds the fd budget. */
+    private final AtomicInteger idleReaderCount = new AtomicInteger();
 
     public VirtualDriveDataSource() {
         File root = Environment.getExternalStorageDirectory();
@@ -120,56 +89,36 @@ public class VirtualDriveDataSource {
 
     // ── Path resolution ───────────────────────────────────────────────────────
 
-    /**
-     * Maps a virtual path (e.g. {@code "/DCIM/Camera/photo.jpg"}) to the
-     * corresponding {@link File} on disk.
-     *
-     * @param virtualPath Absolute virtual path from the WinFsp client; {@code "/"} maps
-     *                    to the external storage root.
-     * @return Resolved {@link File} (may or may not exist).
-     * @throws SecurityException if the path escapes the storage root.
-     * @throws IOException       if canonical path resolution fails.
-     */
+    /** Maps a virtual path to the corresponding File on disk. Throws SecurityException on traversal. */
     public File resolve(String virtualPath) throws IOException {
-        // Strip leading slash so new File(root, "/foo") works correctly.
         String relative = virtualPath.startsWith("/") ? virtualPath.substring(1) : virtualPath;
         File resolved = new File(storageRoot, relative);
-
         String canonical = resolved.getCanonicalPath();
         if (!canonical.startsWith(storageRoot)) {
-            throw new SecurityException(
-                    "Virtual path escapes storage root: " + virtualPath);
+            throw new SecurityException("Virtual path escapes storage root: " + virtualPath);
         }
         return resolved;
     }
 
     // ── Directory listing ─────────────────────────────────────────────────────
 
-    /**
-     * Lists the direct children of the directory at {@code virtualPath}.
-     *
-     * <p>Results are cached for {@value #CACHE_TTL_S} s. A successful listing also
-     * seeds the stat cache for every child so the per-entry stat storm WinFsp issues
-     * right after a directory open is served locally without round-trips.
-     *
-     * @param virtualPath Virtual path of the directory to list.
-     * @return List of {@link VDriveEntry} objects; empty if the directory is
-     * empty or the path is not a readable directory.
-     * @throws IOException       on path resolution failure.
-     * @throws SecurityException on traversal attempt.
-     */
+    /** Lists direct children of virtualPath. Serves from cache when warm. */
     public List<VDriveEntry> listDir(String virtualPath) throws IOException {
-        // ── Cache check ───────────────────────────────────────────────────────
-        CacheEntry<List<VDriveEntry>> hit = listCache.get(virtualPath);
-        if (hit != null && hit.expiryMs > System.currentTimeMillis()) {
-            Log.v(TAG, "listDir cache hit: " + virtualPath);
-            return hit.value;
+        // restricted subtrees block without returning data — short-circuit entirely
+        if (isRestrictedDir(virtualPath) || isRestrictedDescendant(virtualPath)) {
+            return new ArrayList<>();
         }
 
-        // ── Real directory listing ────────────────────────────────────────────
+        // cache
+        CacheEntry<List<VDriveEntry>> hit = listCache.get(virtualPath);
+        if (hit != null && hit.expiryMs() > System.currentTimeMillis()) {
+            Log.v(TAG, "listDir cache hit: " + virtualPath);
+            return hit.value();
+        }
+
+        // filesystem
         File dir = resolve(virtualPath);
         List<VDriveEntry> entries = new ArrayList<>();
-
         if (!dir.isDirectory()) {
             Log.w(TAG, "listDir: not a directory — " + virtualPath);
         } else {
@@ -178,117 +127,234 @@ public class VirtualDriveDataSource {
                 Log.w(TAG, "listDir: listFiles() returned null for " + virtualPath);
             } else {
                 for (File child : children) {
+                    // hide /Android/data and /Android/obb — inaccessible via File API
+                    if (isRestrictedDir(childVirtualPath(virtualPath, child.getName()))) continue;
                     entries.add(fileToEntry(child, child.getName()));
                 }
             }
         }
 
-        // ── Populate caches ───────────────────────────────────────────────────
-        long expiry = System.currentTimeMillis() + CACHE_TTL_MS;
-        listCache.put(virtualPath, new CacheEntry<>(entries, expiry));
-
-        // Seed stat cache from listing so the WinFsp stat storm that immediately
-        // follows a ReadDirectory call is served from cache — no Android round-trips.
-        for (VDriveEntry e : entries) {
-            String childPath = childVirtualPath(virtualPath, e.getName());
-            statCache.put(childPath, new CacheEntry<>(e, expiry));
-        }
-
-        Log.d(TAG, "listDir: " + entries.size() + " entries for " + virtualPath
-                + " (cached " + CACHE_TTL_S + "s)");
-        return entries;
+        Log.d(TAG, "listDir (fs): " + entries.size() + " entries for " + virtualPath);
+        return cacheAndReturnList(virtualPath, entries);
     }
 
     // ── Stat ──────────────────────────────────────────────────────────────────
 
-    /**
-     * Returns metadata for the file or directory at {@code virtualPath}, or
-     * {@code null} if it does not exist.
-     *
-     * <p>Results are cached for {@value #CACHE_TTL_S} s to absorb WinFsp's repeated
-     * {@code stat("/")} refreshes and per-entry probes while browsing.
-     *
-     * @param virtualPath Virtual path of the target.
-     * @return {@link VDriveEntry} if the path exists; {@code null} otherwise.
-     * @throws IOException       on path resolution failure.
-     * @throws SecurityException on traversal attempt.
-     */
-    public VDriveEntry stat(String virtualPath) throws IOException {
-        // ── Cache check ───────────────────────────────────────────────────────
+    /** Returns metadata for virtualPath, or null if it does not exist. Serves from cache when warm. */
+    public @Nullable VDriveEntry stat(String virtualPath) throws IOException {
+        // Restricted roots (/Android/data, /Android/obb) exist on disk but their contents
+        // are inaccessible on Android 11+. Os.stat() on FUSE-mediated paths can block
+        // indefinitely — stalling TauSync and tearing the WinFsp drive down. Short-circuit
+        // to null here so genuinely missing paths still report not-found correctly.
+
+        // cache
         CacheEntry<VDriveEntry> hit = statCache.get(virtualPath);
-        if (hit != null && hit.expiryMs > System.currentTimeMillis()) {
+        if (hit != null && hit.expiryMs() > System.currentTimeMillis()) {
             Log.v(TAG, "stat cache hit: " + virtualPath);
-            return hit.value;
+            return hit.value();
         }
 
-        // ── Real stat ─────────────────────────────────────────────────────────
+        // filesystem
         File file = resolve(virtualPath);
         if (!file.exists()) {
             return null;
         }
         VDriveEntry entry = fileToEntry(file, file.getName());
-
-        // Cache non-null results only (missing paths are not cached to avoid
-        // hiding newly created files from other apps).
         statCache.put(virtualPath,
                 new CacheEntry<>(entry, System.currentTimeMillis() + CACHE_TTL_MS));
+        Log.v(TAG, "stat (fs): " + virtualPath);
         return entry;
+    }
+
+    // ── Paginated directory listing ────────────────────────────────────────────
+
+    /** Returns a sorted page of up to limit children starting after afterName. */
+    public VDrivePageResult listDirPage(String virtualPath,
+                                        @Nullable String afterName,
+                                        int limit) throws IOException {
+        if (isRestrictedDir(virtualPath) || isRestrictedDescendant(virtualPath)) {
+            return new VDrivePageResult(new ArrayList<>(), false, null);
+        }
+
+        File[] children;
+        CacheEntry<File[]> snap = sortedChildCache.get(virtualPath);
+        if (snap != null && snap.expiryMs() > System.currentTimeMillis()) {
+            children = snap.value();
+            Log.v(TAG, "listDirPage snapshot hit: " + virtualPath);
+        } else {
+            File dir = resolve(virtualPath);
+            if (!dir.isDirectory()) {
+                Log.w(TAG, "listDirPage: not a directory — " + virtualPath);
+                return new VDrivePageResult(new ArrayList<>(), false, null);
+            }
+            File[] all = dir.listFiles();
+            if (all == null) all = new File[0];
+
+            // filter restricted roots before sorting so the cursor operates on visible set only
+            List<File> visible = new ArrayList<>(all.length);
+            for (File child : all) {
+                if (!isRestrictedDir(childVirtualPath(virtualPath, child.getName()))) {
+                    visible.add(child);
+                }
+            }
+            children = visible.toArray(new File[0]);
+
+            Arrays.sort(children, (a, b) -> a.getName().compareTo(b.getName()));
+
+            sortedChildCache.put(virtualPath,
+                    new CacheEntry<>(children, System.currentTimeMillis() + CACHE_TTL_MS));
+            Log.d(TAG, "listDirPage (fs): sorted " + children.length
+                    + " entries for " + virtualPath);
+        }
+
+        if (children.length == 0) {
+            return new VDrivePageResult(new ArrayList<>(), false, null);
+        }
+
+        // binary-search cursor on sorted snapshot
+        int start = 0;
+        if (afterName != null) {
+            int lo = 0, hi = children.length - 1;
+            while (lo <= hi) {
+                int mid = (lo + hi) >>> 1;
+                int cmp = children[mid].getName().compareTo(afterName);
+                if (cmp < 0) {
+                    lo = mid + 1;
+                } else if (cmp > 0) {
+                    hi = mid - 1;
+                } else {
+                    lo = mid + 1;
+                    break;
+                }
+            }
+            start = lo;
+        }
+
+        int end = Math.min(start + limit, children.length);
+        List<VDriveEntry> page = new ArrayList<>(end - start);
+        for (int i = start; i < end; i++) {
+            page.add(fileToEntry(children[i], children[i].getName()));
+        }
+
+        boolean hasMore = end < children.length;
+        String nextAfter = (!page.isEmpty()) ? page.get(page.size() - 1).getName() : null;
+        return new VDrivePageResult(page, hasMore, nextAfter);
     }
 
     // ── Read ──────────────────────────────────────────────────────────────────
 
-    /**
-     * Opens a size-limited {@link InputStream} for the byte range
-     * [{@code offset}, {@code offset + length}) of the file at
-     * {@code virtualPath}.
-     *
-     * <p>Uses {@link RandomAccessFile#seek} to jump directly to {@code offset}
-     * (O(1) via {@code lseek64}). The returned {@link LimitedRandomAccessInputStream}
-     * closes the underlying {@code RandomAccessFile} when it is closed.
-     *
-     * <p>The caller is responsible for closing the returned stream.
-     *
-     * @param virtualPath Virtual path of the file to read.
-     * @param offset      Byte offset at which to begin reading.
-     * @param length      Maximum number of bytes to deliver.
-     * @return An {@link InputStream} that yields at most {@code length} bytes
-     * starting at {@code offset}.
-     * @throws IOException if the file cannot be opened or the seek fails.
-     */
+    /** Opens an InputStream for bytes [offset, offset+length) of virtualPath. */
     public InputStream openReadRange(String virtualPath, long offset, int length)
             throws IOException {
+        if (isRestrictedDescendant(virtualPath)) {
+            throw new java.io.FileNotFoundException("Restricted path: " + virtualPath);
+        }
         File file = resolve(virtualPath);
-        RandomAccessFile raf = new RandomAccessFile(file, "r");
+        RandomAccessFile raf = checkoutReader(virtualPath);
+        if (raf == null) {
+            raf = new RandomAccessFile(file, "r");
+        }
         try {
-            if (offset > 0) {
-                raf.seek(offset);
-            }
-            return new LimitedRandomAccessInputStream(raf, length);
+            // always seek — a reused handle is positioned at the previous read's end
+            raf.seek(offset);
+            return new PooledLimitedInputStream(virtualPath, raf, length);
         } catch (IOException e) {
-            // Close the RAF before propagating — caller won't get a stream to close.
             raf.close();
             throw e;
         }
     }
 
+    /**
+     * Like openReadRange but also returns the exact byte count the stream will yield,
+     * so the caller can frame the response and the peer can detect truncation.
+     */
+    public VDriveReadRange openReadRangeChecked(String virtualPath, long offset, int length)
+            throws IOException {
+        if (isRestrictedDescendant(virtualPath)) {
+            throw new java.io.FileNotFoundException("Restricted path: " + virtualPath);
+        }
+        File file = resolve(virtualPath);
+        RandomAccessFile raf = checkoutReader(virtualPath);
+        if (raf == null) {
+            raf = new RandomAccessFile(file, "r");
+        }
+        try {
+            long fileLen = raf.length();
+            long available = Math.max(0L, Math.min((long) length, fileLen - offset));
+            raf.seek(offset);
+            InputStream in = new PooledLimitedInputStream(virtualPath, raf, (int) available);
+            return new VDriveReadRange(available, in);
+        } catch (IOException e) {
+            raf.close();
+            throw e;
+        }
+    }
+
+    /** Returns true if virtualPath resolves to an existing entry. */
+    public boolean exists(String virtualPath) {
+        if (isRestrictedDescendant(virtualPath)) return false;
+        try {
+            return resolve(virtualPath).exists();
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    // ── Read-handle pool helpers ──────────────────────────────────────────────
+
+    // remove and return the idle handle for path, or null
+    private RandomAccessFile checkoutReader(String path) {
+        PooledReader pr = idleReaders.remove(path);
+        if (pr == null) return null;
+        idleReaderCount.decrementAndGet();
+        return pr.raf;
+    }
+
+    // return handle to pool, or close it if pool is full / handle is unhealthy
+    private void checkinReader(String path, RandomAccessFile raf, boolean healthy) {
+        if (!healthy || idleReaderCount.get() >= MAX_IDLE_READ_HANDLES) {
+            closeQuietly(raf);
+            return;
+        }
+        PooledReader pr = new PooledReader(raf);
+        pr.idleSinceMs = System.currentTimeMillis();
+        if (idleReaders.putIfAbsent(path, pr) != null) {
+            closeQuietly(raf); // already a handle parked for this path
+            return;
+        }
+        idleReaderCount.incrementAndGet();
+        sweepIdleReaders();
+    }
+
+    // close and drop the pooled handle for path, if any
+    private void evictReader(String path) {
+        PooledReader pr = idleReaders.remove(path);
+        if (pr != null) {
+            idleReaderCount.decrementAndGet();
+            closeQuietly(pr.raf);
+        }
+    }
+
+    // close handles idle longer than READ_HANDLE_IDLE_MS
+    private void sweepIdleReaders() {
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String, PooledReader> e : idleReaders.entrySet()) {
+            PooledReader pr = e.getValue();
+            if (now - pr.idleSinceMs > READ_HANDLE_IDLE_MS
+                    && idleReaders.remove(e.getKey(), pr)) {
+                idleReaderCount.decrementAndGet();
+                closeQuietly(pr.raf);
+            }
+        }
+    }
+
+    private static void closeQuietly(RandomAccessFile raf) {
+        try { raf.close(); } catch (IOException ignored) {}
+    }
+
     // ── Write (temp-file pattern for atomicity) ────────────────────────────────
 
-    /**
-     * Opens a buffered {@link OutputStream} targeting a temp file for {@code virtualPath}.
-     *
-     * <p>The temp file is {@code <realPath>.vdtmp}.  Call {@link #finalizeWrite}
-     * after all bytes have been written to atomically rename it to the final path.
-     *
-     * <p>The returned stream is wrapped in a {@link BufferedOutputStream} (buffer size
-     * {@value #WRITE_BUFFER_BYTES} bytes) to coalesce TauSync payload chunks into
-     * fewer, larger kernel write calls.
-     *
-     * <p>Parent directories are created automatically.
-     *
-     * @param virtualPath Destination virtual path.
-     * @return An open, buffered {@link OutputStream} pointing at the temp file.
-     * @throws IOException on resolution or stream-open failure.
-     */
+    /** Opens a buffered OutputStream to the temp file for virtualPath. */
     public OutputStream openWriteTemp(String virtualPath) throws IOException {
         File target = resolve(virtualPath);
         File parent = target.getParentFile();
@@ -301,15 +367,7 @@ public class VirtualDriveDataSource {
         return new BufferedOutputStream(new FileOutputStream(tmp), WRITE_BUFFER_BYTES);
     }
 
-    /**
-     * Atomically renames the temp file written by {@link #openWriteTemp} to the
-     * final destination path, then invalidates the stat / list caches for
-     * {@code virtualPath} and its parent.
-     *
-     * @param virtualPath The destination virtual path used in the corresponding
-     *                    {@link #openWriteTemp} call.
-     * @throws IOException if the rename fails.
-     */
+    /** Atomically renames the temp file to the final path and invalidates caches. */
     public void finalizeWrite(String virtualPath) throws IOException {
         File target = resolve(virtualPath);
         File tmp = new File(target.getAbsolutePath() + TMP_SUFFIX);
@@ -317,31 +375,23 @@ public class VirtualDriveDataSource {
             Log.w(TAG, "finalizeWrite: temp file missing for " + virtualPath);
             return;
         }
-        // Delete existing target if present (rename on Android does not overwrite)
         if (target.exists() && !target.delete()) {
             throw new IOException("Could not delete existing file before rename: " + target);
         }
         if (!tmp.renameTo(target)) {
             throw new IOException("Rename failed: " + tmp + " → " + target);
         }
-        // Invalidate so the PC sees the updated size/mtime immediately.
         invalidate(virtualPath);
         Log.d(TAG, "finalizeWrite: " + virtualPath + " ✓");
     }
 
     // ── Create ────────────────────────────────────────────────────────────────
 
-    /**
-     * Creates a file or directory at {@code virtualPath}.
-     *
-     * <p>Parent directories are created automatically for both files and
-     * directories.
-     *
-     * @param virtualPath Virtual path of the new entry.
-     * @param isDir       {@code true} to create a directory; {@code false} for a file.
-     * @throws IOException if creation fails.
-     */
+    /** Creates a file or directory at virtualPath. */
     public void create(String virtualPath, boolean isDir) throws IOException {
+        if (isRestrictedDir(virtualPath) || isRestrictedDescendant(virtualPath)) {
+            throw new IOException("Path is not writable: " + virtualPath);
+        }
         File file = resolve(virtualPath);
         if (isDir) {
             if (!file.mkdirs() && !file.isDirectory()) {
@@ -349,9 +399,7 @@ public class VirtualDriveDataSource {
             }
         } else {
             File parent = file.getParentFile();
-            if (parent != null && !parent.exists()) {
-                parent.mkdirs();
-            }
+            if (parent != null && !parent.exists()) parent.mkdirs();
             if (!file.createNewFile() && !file.exists()) {
                 throw new IOException("Failed to create file: " + virtualPath);
             }
@@ -362,13 +410,11 @@ public class VirtualDriveDataSource {
 
     // ── Delete ────────────────────────────────────────────────────────────────
 
-    /**
-     * Deletes the file or directory (recursively) at {@code virtualPath}.
-     *
-     * @param virtualPath Virtual path to delete.
-     * @throws IOException if the path does not exist or deletion fails.
-     */
+    /** Deletes the file or directory (recursively) at virtualPath. */
     public void delete(String virtualPath) throws IOException {
+        if (isRestrictedDir(virtualPath) || isRestrictedDescendant(virtualPath)) {
+            throw new IOException("Path is not writable: " + virtualPath);
+        }
         File file = resolve(virtualPath);
         if (!file.exists()) {
             throw new IOException("Delete target does not exist: " + virtualPath);
@@ -382,9 +428,7 @@ public class VirtualDriveDataSource {
         if (file.isDirectory()) {
             File[] children = file.listFiles();
             if (children != null) {
-                for (File child : children) {
-                    deleteRecursive(child);
-                }
+                for (File child : children) deleteRecursive(child);
             }
         }
         if (!file.delete()) {
@@ -394,25 +438,19 @@ public class VirtualDriveDataSource {
 
     // ── Rename ────────────────────────────────────────────────────────────────
 
-    /**
-     * Renames or moves the entry at {@code fromVirtual} to {@code toVirtual}.
-     *
-     * @param fromVirtual Source virtual path.
-     * @param toVirtual   Destination virtual path.
-     * @throws IOException if the source does not exist or the rename fails.
-     */
+    /** Renames or moves fromVirtual to toVirtual. */
     public void rename(String fromVirtual, String toVirtual) throws IOException {
+        if (isRestrictedDir(fromVirtual) || isRestrictedDescendant(fromVirtual)
+                || isRestrictedDir(toVirtual) || isRestrictedDescendant(toVirtual)) {
+            throw new IOException("Path is not writable: " + fromVirtual + " → " + toVirtual);
+        }
         File from = resolve(fromVirtual);
         File to = resolve(toVirtual);
-
         if (!from.exists()) {
             throw new IOException("Rename source does not exist: " + fromVirtual);
         }
-        // Create destination parent if needed
         File toParent = to.getParentFile();
-        if (toParent != null && !toParent.exists()) {
-            toParent.mkdirs();
-        }
+        if (toParent != null && !toParent.exists()) toParent.mkdirs();
         if (!from.renameTo(to)) {
             throw new IOException("Rename failed: " + fromVirtual + " → " + toVirtual);
         }
@@ -422,18 +460,11 @@ public class VirtualDriveDataSource {
 
     // ── Truncate ──────────────────────────────────────────────────────────────
 
-    /**
-     * Sets the length of the file at {@code virtualPath} to {@code newSize} bytes.
-     *
-     * <p>If {@code newSize} is smaller than the current file size, the file is
-     * truncated (bytes beyond {@code newSize} are discarded).  If larger, the file
-     * is extended with zero bytes.
-     *
-     * @param virtualPath Virtual path of the file.
-     * @param newSize     Target size in bytes.
-     * @throws IOException if the file does not exist or the operation fails.
-     */
+    /** Sets the length of the file at virtualPath to newSize bytes. */
     public void truncate(String virtualPath, long newSize) throws IOException {
+        if (isRestrictedDir(virtualPath) || isRestrictedDescendant(virtualPath)) {
+            throw new IOException("Path is not writable: " + virtualPath);
+        }
         File file = resolve(virtualPath);
         try (RandomAccessFile raf = new RandomAccessFile(file, "rw")) {
             raf.setLength(newSize);
@@ -442,32 +473,48 @@ public class VirtualDriveDataSource {
         Log.d(TAG, "truncate: " + virtualPath + " → " + newSize + " bytes ✓");
     }
 
-    // ── Cache helpers ─────────────────────────────────────────────────────────
+    // ── Cache invalidation ────────────────────────────────────────────────────
 
-    /**
-     * Drops cached stat and list entries for {@code paths} and their immediate
-     * parents. Called by every mutation so stale metadata is never served after
-     * an in-session change.
-     */
+    // evicts cache entries for paths and their parents; called by every mutation
     private void invalidate(String... paths) {
         for (String path : paths) {
             statCache.remove(path);
             listCache.remove(path);
+            sortedChildCache.remove(path);
+            evictReader(path); // stale content after write/rename/truncate/delete
             String parent = parentVirtualPath(path);
             if (parent != null) {
                 statCache.remove(parent);
                 listCache.remove(parent);
+                sortedChildCache.remove(parent);
             }
         }
-        Log.v(TAG, "cache invalidated for: " + java.util.Arrays.toString(paths));
+        Log.v(TAG, "invalidated caches for: " + Arrays.toString(paths));
     }
 
-    /**
-     * Returns the parent virtual path of {@code path}, or {@code null} for the root.
-     *
-     * <p>Examples: {@code "/DCIM/Camera"} → {@code "/DCIM"}; {@code "/DCIM"} → {@code "/"};
-     * {@code "/"} → {@code null}.
-     */
+    // ── Restricted-subtree guards ─────────────────────────────────────────────
+
+    // /Android/data and /Android/obb: FUSE-mediated, File API blocks on them —
+    // short-circuit to empty/not-found without touching the filesystem
+    private static final String[] RESTRICTED_ROOTS = {"/Android/data", "/Android/obb"};
+
+    private static boolean isRestrictedDir(String virtualPath) {
+        for (String root : RESTRICTED_ROOTS) {
+            if (root.equals(virtualPath)) return true;
+        }
+        return false;
+    }
+
+    private static boolean isRestrictedDescendant(String virtualPath) {
+        if (virtualPath == null) return false;
+        for (String root : RESTRICTED_ROOTS) {
+            if (virtualPath.startsWith(root + "/")) return true;
+        }
+        return false;
+    }
+
+    // ── Path helpers ──────────────────────────────────────────────────────────
+
     private static String parentVirtualPath(String path) {
         if (path == null || path.equals("/") || path.isEmpty()) return null;
         int idx = path.lastIndexOf('/');
@@ -475,128 +522,50 @@ public class VirtualDriveDataSource {
         return path.substring(0, idx);
     }
 
-    /**
-     * Joins a parent virtual path and a child entry name into a normalized path.
-     *
-     * <p>Example: {@code ("/DCIM", "Camera")} → {@code "/DCIM/Camera"};
-     * {@code ("/", "DCIM")} → {@code "/DCIM"}.
-     */
     private static String childVirtualPath(String parent, String name) {
         return "/".equals(parent) ? "/" + name : parent + "/" + name;
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
+    // ── VDriveEntry conversion ────────────────────────────────────────────────
 
     private static VDriveEntry fileToEntry(File file, String name) {
-        boolean isDir = file.isDirectory();
-        long size = isDir ? 0L : file.length();
-        return new VDriveEntry(name, isDir, size, file.lastModified());
-    }
-
-    // ── Paginated directory listing ───────────────────────────────────────────
-
-    /**
-     * Immutable result of a single {@link #listDirPage} call.
-     *
-     * <p>Entries are a name-sorted page starting just after {@code afterName}.
-     * {@code hasMore} is {@code true} when at least one more entry exists beyond
-     * this page; {@code nextAfter} is the last entry name in this page and should
-     * be passed as {@code afterName} on the next call to continue pagination.
-     */
-    public static final class ListPageResult {
-        @NonNull
-        public final List<VDriveEntry> entries;
-        public final boolean hasMore;
-        @Nullable
-        public final String nextAfter; // null when !hasMore
-
-        public ListPageResult(@NonNull List<VDriveEntry> entries,
-                              boolean hasMore,
-                              @Nullable String nextAfter) {
-            this.entries = entries;
-            this.hasMore = hasMore;
-            this.nextAfter = nextAfter;
+        // Os.stat() returns mode+size+mtime in one syscall vs three File.isX() calls
+        try {
+            StructStat st = Os.stat(file.getAbsolutePath());
+            boolean isDir = OsConstants.S_ISDIR(st.st_mode);
+            return new VDriveEntry(name, isDir, isDir ? 0L : st.st_size, st.st_mtime * 1000L);
+        } catch (ErrnoException e) {
+            boolean isDir = file.isDirectory();
+            return new VDriveEntry(name, isDir, isDir ? 0L : file.length(), file.lastModified());
         }
     }
 
-    /**
-     * Returns a page of up to {@code limit} children of {@code virtualPath},
-     * sorted alphabetically by name, starting just after {@code afterName}.
-     *
-     * <p>Pass {@code afterName = null} to start from the beginning.  On each
-     * subsequent call pass {@link ListPageResult#nextAfter} as {@code afterName}
-     * to advance the cursor.  When {@link ListPageResult#hasMore} is {@code false}
-     * the listing is exhausted.
-     *
-     * <p>This method always re-reads {@code dir.listFiles()} so the sort is
-     * deterministic even if external tools modify the directory between pages.
-     * For typical use (single Explorer open session) the OS page cache makes this
-     * fast.
-     *
-     * @param virtualPath Virtual path of the directory to list.
-     * @param afterName   Exclusive lower bound (last name from previous page),
-     *                    or {@code null} to start from the first entry.
-     * @param limit       Maximum number of entries to return.
-     * @return A {@link ListPageResult} with up to {@code limit} entries.
-     * @throws IOException       on path resolution failure.
-     * @throws SecurityException on traversal attempt.
-     */
-    public ListPageResult listDirPage(String virtualPath,
-                                      @Nullable String afterName,
-                                      int limit) throws IOException {
-        File dir = resolve(virtualPath);
-        if (!dir.isDirectory()) {
-            Log.w(TAG, "listDirPage: not a directory — " + virtualPath);
-            return new ListPageResult(new ArrayList<>(), false, null);
+    // ── Cache population helper ───────────────────────────────────────────────
+
+    private List<VDriveEntry> cacheAndReturnList(String virtualPath, List<VDriveEntry> entries) {
+        long expiry = System.currentTimeMillis() + CACHE_TTL_MS;
+        listCache.put(virtualPath, new CacheEntry<>(entries, expiry));
+        // seed stat cache so post-ReadDirectory stat probes are answered from cache
+        for (VDriveEntry e : entries) {
+            String childPath = childVirtualPath(virtualPath, e.getName());
+            statCache.put(childPath, new CacheEntry<>(e, expiry));
         }
-
-        File[] children = dir.listFiles();
-        if (children == null || children.length == 0) {
-            return new ListPageResult(new ArrayList<>(), false, null);
-        }
-
-        // Sort by name for a stable cursor across pages.
-        Arrays.sort(children, (a, b) -> a.getName().compareTo(b.getName()));
-
-        // Find the first index after 'afterName' (binary search on sorted array).
-        int start = 0;
-        if (afterName != null) {
-            for (int i = 0; i < children.length; i++) {
-                if (children[i].getName().equals(afterName)) {
-                    start = i + 1;
-                    break;
-                }
-            }
-        }
-
-        // Collect the page.
-        int end = Math.min(start + limit, children.length);
-        List<VDriveEntry> page = new ArrayList<>(end - start);
-        for (int i = start; i < end; i++) {
-            page.add(fileToEntry(children[i], children[i].getName()));
-        }
-
-        boolean hasMore = end < children.length;
-        String nextAfter = (!page.isEmpty()) ? page.get(page.size() - 1).getName() : null;
-        return new ListPageResult(page, hasMore, nextAfter);
+        return entries;
     }
 
-    // ── LimitedRandomAccessInputStream ────────────────────────────────────────
+    // ── PooledLimitedInputStream ──────────────────────────────────────────────
 
-    /**
-     * Wraps a {@link RandomAccessFile} (already seeked to the correct offset) and
-     * limits the number of bytes that can be read from it.  Used by
-     * {@link #openReadRange} to honour the {@code length} parameter of a WinFsp
-     * read request.
-     *
-     * <p>Closing this stream closes the underlying {@link RandomAccessFile}.
-     */
-    private static final class LimitedRandomAccessInputStream extends InputStream {
+    // limits bytes from a pooled RandomAccessFile; returns handle to pool on close
+    private final class PooledLimitedInputStream extends InputStream {
 
+        private final String path;
         private final RandomAccessFile raf;
         private int remaining;
+        private boolean healthy = true;
+        private boolean closed = false;
 
-        LimitedRandomAccessInputStream(RandomAccessFile raf, int limit) {
+        PooledLimitedInputStream(String path, RandomAccessFile raf, int limit) {
+            this.path = path;
             this.raf = raf;
             this.remaining = limit;
         }
@@ -604,22 +573,34 @@ public class VirtualDriveDataSource {
         @Override
         public int read() throws IOException {
             if (remaining <= 0) return -1;
-            int b = raf.read();
-            if (b >= 0) remaining--;
-            return b;
+            try {
+                int b = raf.read();
+                if (b >= 0) remaining--;
+                return b;
+            } catch (IOException e) {
+                healthy = false;
+                throw e;
+            }
         }
 
         @Override
         public int read(byte[] buf, int off, int len) throws IOException {
             if (remaining <= 0) return -1;
-            int n = raf.read(buf, off, Math.min(len, remaining));
-            if (n > 0) remaining -= n;
-            return n;
+            try {
+                int n = raf.read(buf, off, Math.min(len, remaining));
+                if (n > 0) remaining -= n;
+                return n;
+            } catch (IOException e) {
+                healthy = false;
+                throw e;
+            }
         }
 
         @Override
-        public void close() throws IOException {
-            raf.close();
+        public void close() {
+            if (closed) return;
+            closed = true;
+            checkinReader(path, raf, healthy);
         }
     }
 }

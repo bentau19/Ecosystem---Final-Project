@@ -7,16 +7,21 @@
 // VirtualDrive.h would bypass that fix.
 #include "VirtualDrive.h"
 #include "WinFspUtil.h"
+#include "PipeException.h"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
+#include <future>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 using json = nlohmann::json;
+
+// Pipe name and buffer size come from Protocol.h so they stay in sync with main.cpp.
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -136,25 +141,84 @@ void VirtualDrive::InvalidateStat(const std::string& path)
 }
 
 protocol::Message VirtualDrive::SendReq(const std::string& json_str,
-                                         const std::string& payload)
+                                         const std::string& payload,
+                                         std::chrono::milliseconds timeout)
 {
     // Check out an idle connection so concurrent dispatcher threads each get
     // their own pipe — no global serialisation. The pool is sized to the
     // dispatcher thread count, so this rarely blocks.
     ClientNamedPipe* pipe = AcquirePipe();
     try {
-        protocol::Message resp = protocol::send(*pipe, {json_str, payload});
+        protocol::Message resp = protocol::send(*pipe, {json_str, payload}, timeout);
         ReleasePipe(pipe);
         return resp;
+    } catch (const PipeException& e) {
+        if (e.code == PipeErrorCode::ConnectionTimeout) {
+            // SyncDose did not answer within the deadline. A late response may
+            // still arrive, leaving the pipe byte-stream frame-desynced, so the
+            // connection cannot be reused — swap in a fresh one (ReplacePipe).
+            // The drive stays mounted and the op returns a retryable timeout;
+            // STATUS_IO_TIMEOUT lets Windows re-issue the read.
+            ReplacePipe(pipe);
+            return protocol::Message{R"({"ok":false,"error":"timeout"})", ""};
+        }
+        // Genuine pipe break on ONE pooled connection. Do NOT tear down the whole
+        // drive — a single broken/desynced pipe is recoverable. Swap it for a
+        // fresh one (ReplacePipe) exactly like the timeout case, and return a
+        // retryable error so Explorer surfaces a transient I/O error and retries
+        // instead of the volume disappearing. ReplacePipe only signals _stopEvent
+        // if SyncDose is genuinely unreachable (its whole pool is dead).
+        ReplacePipe(pipe);
+        return protocol::Message{R"({"ok":false,"error":"io_error"})", ""};
     } catch (...) {
-        // Pipe broke — return it (we are tearing down anyway) and wake Mount()
-        // so it can stop the dispatcher from its thread. We must NOT call
-        // FspFileSystemStopDispatcher here: we may be on a WinFsp dispatcher
-        // thread, which would deadlock.
-        ReleasePipe(pipe);
-        if (_stopEvent) SetEvent(_stopEvent);
-        return protocol::Message{R"({"ok":false,"error":"not_connected"})", ""};
+        // Unknown failure on this connection — same recovery path as above.
+        ReplacePipe(pipe);
+        return protocol::Message{R"({"ok":false,"error":"io_error"})", ""};
     }
+}
+
+// Swap a frame-desynced (timed-out) pooled connection for a freshly opened one.
+// The poisoned pipe was already removed from the idle free-list by AcquirePipe,
+// so it lives only in _pipes; replacing its owning slot destroys (closes) it.
+void VirtualDrive::ReplacePipe(ClientNamedPipe* poisoned)
+{
+    // Try to reconnect with a few short retries before giving up. A momentary
+    // failure to reconnect (e.g. SyncDose's accept loop is briefly busy while
+    // many pooled pipes recycle at once during a probe storm) must NOT be treated
+    // as "SyncDose is gone" — otherwise a transient blip unmounts a healthy
+    // drive. Only a sustained inability to reconnect should tear the drive down.
+    std::unique_ptr<ClientNamedPipe> fresh;
+    for (int attempt = 0; attempt < RECONNECT_ATTEMPTS; ++attempt) {
+        try {
+            fresh = std::make_unique<ClientNamedPipe>(
+                protocol::PIPE_BUFFER_SIZE, protocol::PIPE_BUFFER_SIZE,
+                protocol::PIPE_NAME_A, /*duplex=*/true);
+            break;  // reconnected
+        } catch (const PipeException&) {
+            fresh.reset();
+            if (attempt + 1 < RECONNECT_ATTEMPTS)
+                Sleep(RECONNECT_BACKOFF_MS);
+        }
+    }
+
+    std::lock_guard<std::mutex> lk(_poolMtx);
+    for (auto& slot : _pipes) {
+        if (slot.get() == poisoned) {
+            slot = std::move(fresh);          // closes the poisoned connection
+            if (slot) _idle.push(slot.get()); // re-arm the pool slot
+            break;
+        }
+    }
+    _poolCv.notify_one();
+
+    // Only if reconnect failed after all retries AND the pool is now entirely
+    // empty would AcquirePipe block forever — wake Mount() to tear down instead
+    // of deadlocking. This is the sole self-stop trigger for SyncDose being gone.
+    bool anyAlive = false;
+    for (auto& slot : _pipes) {
+        if (slot) { anyAlive = true; break; }
+    }
+    if (!anyAlive && _stopEvent) SetEvent(_stopEvent);
 }
 
 // static
@@ -178,12 +242,32 @@ NTSTATUS VirtualDrive::ErrorToStatus(const std::string& error)
 {
     if (error == "not_found")     return STATUS_OBJECT_NAME_NOT_FOUND;
     if (error == "access_denied") return STATUS_ACCESS_DENIED;
-    if (error == "not_connected") return STATUS_DEVICE_NOT_CONNECTED;
+    // "not_connected" maps to a non-fatal I/O error, NOT STATUS_DEVICE_NOT_CONNECTED:
+    // returning the device-removed status from a callback makes Windows unmount the
+    // volume, so a brief connectivity blip would yank the drive. A genuine device
+    // disconnect still unmounts cleanly via the Python device_disconnected →
+    // VirtualDriveService.stop() path (which terminates this exe).
+    if (error == "not_connected") return STATUS_IO_DEVICE_ERROR;
     if (error == "not_dir")       return STATUS_NOT_A_DIRECTORY;
     if (error == "exists")        return STATUS_OBJECT_NAME_COLLISION;
     if (error == "not_empty")     return STATUS_DIRECTORY_NOT_EMPTY;
     if (error == "timeout")       return STATUS_IO_TIMEOUT;
     return STATUS_IO_DEVICE_ERROR;
+}
+
+// Parse a pipe response body without ever throwing out of a WinFsp callback.
+// SendReq always returns valid JSON on its own error paths, but a malformed or
+// truncated frame must NOT escape as an uncaught exception — that would crash the
+// dispatcher thread and unmount the drive. On failure the caller returns a
+// non-fatal STATUS_IO_DEVICE_ERROR instead.
+static bool TryParse(const std::string& body, json& out)
+{
+    try {
+        out = json::parse(body);
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 // ── WinFsp interface vtable ───────────────────────────────────────────────────
@@ -192,24 +276,35 @@ NTSTATUS VirtualDrive::ErrorToStatus(const std::string& error)
 FSP_FILE_SYSTEM_INTERFACE VirtualDrive::MakeInterface()
 {
     FSP_FILE_SYSTEM_INTERFACE iface = {};
-    iface.GetVolumeInfo      = GetVolumeInfo;
-    iface.GetSecurityByName  = GetSecurityByName;
-    iface.Create             = Create;
-    iface.Open               = Open;
-    iface.Overwrite          = Overwrite;
-    iface.Cleanup            = Cleanup;
-    iface.Close              = Close;
-    iface.Read               = Read;
-    iface.Write              = Write;
-    iface.Flush              = Flush;
-    iface.GetFileInfo        = GetFileInfo;
-    iface.SetBasicInfo       = SetBasicInfo;
-    iface.SetFileSize        = SetFileSize;
-    iface.CanDelete          = CanDelete;
-    iface.Rename             = Rename;
-    iface.GetSecurity        = GetSecurity;
-    iface.SetSecurity        = SetSecurity;
-    iface.ReadDirectory      = ReadDirectory;
+
+    // Volume / Security
+    iface.GetVolumeInfo     = GetVolumeInfo;
+    iface.GetSecurityByName = GetSecurityByName;
+    iface.GetSecurity       = GetSecurity;
+    iface.SetSecurity       = SetSecurity;
+
+    // Create
+    iface.Create            = Create;
+    iface.Open              = Open;
+    iface.Overwrite         = Overwrite;
+
+    // Read
+    iface.Read              = Read;
+    iface.ReadDirectory     = ReadDirectory;
+    iface.GetFileInfo       = GetFileInfo;
+
+    // Update
+    iface.Write             = Write;
+    iface.Flush             = Flush;
+    iface.SetBasicInfo      = SetBasicInfo;
+    iface.SetFileSize       = SetFileSize;
+    iface.Rename            = Rename;
+
+    // Delete
+    iface.CanDelete         = CanDelete;
+    iface.Cleanup           = Cleanup;
+    iface.Close             = Close;
+
     return iface;
 }
 
@@ -289,7 +384,10 @@ void VirtualDrive::Mount(const std::wstring& mountPoint)
     FspFileSystemStopDispatcher(_fs);
 }
 
-// ── WinFsp callbacks ──────────────────────────────────────────────────────────
+// ── WinFsp callbacks ─────────────────────────────────────────────────────────
+// Organised by CRUD: Volume/Security → Create → Read → Update → Delete.
+
+// ── Volume / Security ─────────────────────────────────────────────────────────
 
 NTSTATUS VirtualDrive::GetVolumeInfo(FSP_FILE_SYSTEM* fs,
                                       FSP_FSCTL_VOLUME_INFO* vi)
@@ -364,7 +462,9 @@ NTSTATUS VirtualDrive::GetSecurityByName(FSP_FILE_SYSTEM* fs,
     if (!self->LookupStat(path, cached)) {
         json req = {{"op", "stat"}, {"path", path}};
         protocol::Message resp = self->SendReq(req.dump());
-        json j = json::parse(resp.json);
+        json j;
+        if (!TryParse(resp.json, j))
+            return STATUS_IO_DEVICE_ERROR;
         if (!j.value("ok", false))
             return ErrorToStatus(j.value("error", "not_found"));
         cached = StatEntry{
@@ -392,350 +492,6 @@ NTSTATUS VirtualDrive::GetSecurityByName(FSP_FILE_SYSTEM* fs,
     return STATUS_SUCCESS;
 }
 
-NTSTATUS VirtualDrive::Open(FSP_FILE_SYSTEM* fs,
-                             PWSTR FileName,
-                             UINT32 CreateOptions,
-                             UINT32 GrantedAccess,
-                             PVOID* PFileContext,
-                             FSP_FSCTL_FILE_INFO* FileInfo)
-{
-    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
-
-    std::string path = WcharToUtf8(FileName);
-    NormalizeVPath(path);
-
-    StatEntry cached{};
-    if (!self->LookupStat(path, cached)) {
-        json req = {{"op", "stat"}, {"path", path}};
-        protocol::Message resp = self->SendReq(req.dump());
-        json j = json::parse(resp.json);
-        if (!j.value("ok", false))
-            return ErrorToStatus(j.value("error", "not_found"));
-        cached = StatEntry{
-            j.value("is_dir",   false),
-            j.value("size",     uint64_t(0)),
-            j.value("mtime_ms", uint64_t(0)),
-            std::chrono::steady_clock::now() + std::chrono::seconds(STAT_CACHE_TTL_S)
-        };
-        self->CacheStat(path, cached);
-    }
-
-    auto* node = new FileNode{path, cached.is_dir, cached.size, cached.mtime_ms, false};
-    *PFileContext = node;
-    FillFileInfo(*node, FileInfo);
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS VirtualDrive::Create(FSP_FILE_SYSTEM* fs,
-                               PWSTR FileName,
-                               UINT32 CreateOptions,
-                               UINT32 GrantedAccess,
-                               UINT32 FileAttributes,
-                               PSECURITY_DESCRIPTOR SecurityDescriptor,
-                               UINT64 AllocationSize,
-                               PVOID* PFileContext,
-                               FSP_FSCTL_FILE_INFO* FileInfo)
-{
-    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
-
-    std::string path = WcharToUtf8(FileName);
-    NormalizeVPath(path);
-    bool is_dir = (FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-
-    json req = {{"op", "create"}, {"path", path}, {"is_dir", is_dir}};
-    protocol::Message resp = self->SendReq(req.dump());
-    json j = json::parse(resp.json);
-
-    if (!j.value("ok", false))
-        return ErrorToStatus(j.value("error", ""));
-
-    // Evict parent's cached stat (its listing now includes the new entry).
-    self->InvalidateStat(path);
-    auto* node = new FileNode{path, is_dir, 0, 0, false};
-    *PFileContext = node;
-    FillFileInfo(*node, FileInfo);
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS VirtualDrive::Overwrite(FSP_FILE_SYSTEM* fs,
-                                  PVOID FileContext,
-                                  UINT32 FileAttributes,
-                                  BOOLEAN ReplaceFileAttributes,
-                                  UINT64 AllocationSize,
-                                  FSP_FSCTL_FILE_INFO* FileInfo)
-{
-    // Treat overwrite as truncate to 0 then normal write flow.
-    auto* node = static_cast<FileNode*>(FileContext);
-    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
-
-    json req = {{"op", "truncate"}, {"path", node->path}, {"new_size", 0}};
-    protocol::Message resp = self->SendReq(req.dump());
-    json j = json::parse(resp.json);
-    if (!j.value("ok", false))
-        return ErrorToStatus(j.value("error", ""));
-
-    // File was truncated; cached size is now stale.
-    self->InvalidateStat(node->path);
-    node->size = 0;
-    FillFileInfo(*node, FileInfo);
-    return STATUS_SUCCESS;
-}
-
-VOID VirtualDrive::Cleanup(FSP_FILE_SYSTEM* fs,
-                            PVOID FileContext,
-                            PWSTR FileName,
-                            ULONG Flags)
-{
-    auto* node = static_cast<FileNode*>(FileContext);
-    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
-
-    // Close any open write session first.
-    if (node->write_open) {
-        json req = {{"op", "write_close"}, {"path", node->path}};
-        self->SendReq(req.dump());
-        node->write_open = false;
-        // File contents changed; cached size/mtime are now stale.
-        self->InvalidateStat(node->path);
-    }
-
-    // Delete if Explorer flagged this handle for deletion.
-    if (Flags & FspCleanupDelete) {
-        json req = {{"op", "delete"}, {"path", node->path}};
-        self->SendReq(req.dump());
-        // File is gone; evict its cache entry and parent's listing stat.
-        self->InvalidateStat(node->path);
-    }
-}
-
-VOID VirtualDrive::Close(FSP_FILE_SYSTEM* /*fs*/, PVOID FileContext)
-{
-    delete static_cast<FileNode*>(FileContext);
-}
-
-// Read-ahead window size. When a Read misses the cache we ask Android for
-// this many bytes starting at Offset. Android naturally stops at EOF, so
-// requesting more than the remaining file size is always safe.
-// 4 MB reduces named-pipe round-trips by ~64× for sequential file copies
-// (e.g. 64 KB WinFsp chunks × 64 = one round-trip per 4 MB of data).
-static constexpr uint64_t READ_PREFETCH_BYTES = 4ULL * 1024 * 1024;
-
-NTSTATUS VirtualDrive::Read(FSP_FILE_SYSTEM* fs,
-                             PVOID FileContext,
-                             PVOID Buffer,
-                             UINT64 Offset,
-                             ULONG Length,
-                             PULONG PBytesTransferred)
-{
-    auto* node = static_cast<FileNode*>(FileContext);
-    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
-
-    // Clamp length to what the file actually has.
-    if (Offset >= node->size) {
-        *PBytesTransferred = 0;
-        return STATUS_END_OF_FILE;
-    }
-    ULONG actual = static_cast<ULONG>(
-        std::min(static_cast<uint64_t>(Length), node->size - Offset));
-
-    // ── Cache hit path ─────────────────────────────────────────────────────
-    // Serve the request entirely from the prefetch buffer when the requested
-    // range [Offset, Offset+actual) falls within the cached window.
-    if (node->readCache) {
-        const auto& rc = *node->readCache;
-        uint64_t cacheEnd = rc.startOffset + static_cast<uint64_t>(rc.data.size());
-        if (Offset >= rc.startOffset && (Offset + actual) <= cacheEnd) {
-            size_t idx = static_cast<size_t>(Offset - rc.startOffset);
-            std::memcpy(Buffer, rc.data.data() + idx, actual);
-            *PBytesTransferred = actual;
-            return STATUS_SUCCESS;
-        }
-    }
-
-    // ── Cache miss: fetch a prefetch-sized chunk ───────────────────────────
-    // Request up to READ_PREFETCH_BYTES starting at Offset so that subsequent
-    // sequential reads hit the cache.  Clamped to the remaining file size so
-    // we never ask for bytes past EOF.
-    uint64_t fetchLen = std::min(
-        std::max(static_cast<uint64_t>(actual), READ_PREFETCH_BYTES),
-        node->size - Offset);
-
-    json req = {
-        {"op",     "read"},
-        {"path",   node->path},
-        {"offset", Offset},
-        {"length", fetchLen}
-    };
-    protocol::Message resp = self->SendReq(req.dump());
-    json j = json::parse(resp.json);
-
-    if (!j.value("ok", false))
-        return ErrorToStatus(j.value("error", ""));
-
-    // Store the full prefetched chunk in the per-handle read cache.
-    if (!node->readCache)
-        node->readCache = std::make_unique<FileNode::ReadCache>();
-    node->readCache->startOffset = Offset;
-    node->readCache->data.assign(resp.payload.begin(), resp.payload.end());
-
-    // Deliver only the bytes WinFsp asked for this call.
-    ULONG received = static_cast<ULONG>(
-        std::min(static_cast<uint64_t>(resp.payload.size()),
-                 static_cast<uint64_t>(actual)));
-    std::memcpy(Buffer, resp.payload.data(), received);
-    *PBytesTransferred = received;
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS VirtualDrive::Write(FSP_FILE_SYSTEM* fs,
-                              PVOID FileContext,
-                              PVOID Buffer,
-                              UINT64 Offset,
-                              ULONG Length,
-                              BOOLEAN WriteToEndOfFile,
-                              BOOLEAN ConstrainedIo,
-                              PULONG PBytesTransferred,
-                              FSP_FSCTL_FILE_INFO* FileInfo)
-{
-    auto* node = static_cast<FileNode*>(FileContext);
-    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
-
-    // Open the write session on the first Write call for this file handle.
-    if (!node->write_open) {
-        json req = {{"op", "write_open"}, {"path", node->path}};
-        protocol::Message resp = self->SendReq(req.dump());
-        json j = json::parse(resp.json);
-        if (!j.value("ok", false))
-            return ErrorToStatus(j.value("error", ""));
-        node->write_open = true;
-    }
-
-    // Send the chunk with its offset so the Python service can seek the temp
-    // buffer correctly for non-sequential writes.
-    std::string payload(static_cast<const char*>(Buffer), Length);
-    json req = {
-        {"op",     "write"},
-        {"path",   node->path},
-        {"offset", WriteToEndOfFile ? node->size : Offset}
-    };
-    protocol::Message resp = self->SendReq(req.dump(), payload);
-    json j = json::parse(resp.json);
-    if (!j.value("ok", false))
-        return ErrorToStatus(j.value("error", ""));
-
-    *PBytesTransferred = Length;
-    if (WriteToEndOfFile)
-        node->size += Length;
-    else
-        node->size = std::max(node->size, Offset + Length);
-    FillFileInfo(*node, FileInfo);
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS VirtualDrive::Flush(FSP_FILE_SYSTEM* /*fs*/,
-                              PVOID /*FileContext*/,
-                              FSP_FSCTL_FILE_INFO* FileInfo)
-{
-    // Nothing to flush — data is streamed directly to Android.
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS VirtualDrive::GetFileInfo(FSP_FILE_SYSTEM* /*fs*/,
-                                    PVOID FileContext,
-                                    FSP_FSCTL_FILE_INFO* FileInfo)
-{
-    FillFileInfo(*static_cast<FileNode*>(FileContext), FileInfo);
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS VirtualDrive::SetBasicInfo(FSP_FILE_SYSTEM* /*fs*/,
-                                     PVOID FileContext,
-                                     UINT32 FileAttributes,
-                                     UINT64 CreationTime,
-                                     UINT64 LastAccessTime,
-                                     UINT64 LastWriteTime,
-                                     UINT64 ChangeTime,
-                                     FSP_FSCTL_FILE_INFO* FileInfo)
-{
-    // Phone timestamps are not settable — silently succeed so Explorer doesn't error.
-    FillFileInfo(*static_cast<FileNode*>(FileContext), FileInfo);
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS VirtualDrive::SetFileSize(FSP_FILE_SYSTEM* fs,
-                                    PVOID FileContext,
-                                    UINT64 NewSize,
-                                    BOOLEAN SetAllocationSize,
-                                    FSP_FSCTL_FILE_INFO* FileInfo)
-{
-    if (SetAllocationSize) {
-        // WinFsp sends SetAllocationSize before actual write — just update the
-        // cached size hint so FillFileInfo reports the right allocation.
-        auto* node = static_cast<FileNode*>(FileContext);
-        node->size = NewSize;
-        FillFileInfo(*node, FileInfo);
-        return STATUS_SUCCESS;
-    }
-
-    auto* node = static_cast<FileNode*>(FileContext);
-    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
-
-    json req = {{"op", "truncate"}, {"path", node->path}, {"new_size", NewSize}};
-    protocol::Message resp = self->SendReq(req.dump());
-    json j = json::parse(resp.json);
-    if (!j.value("ok", false))
-        return ErrorToStatus(j.value("error", ""));
-
-    node->size = NewSize;
-    FillFileInfo(*node, FileInfo);
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS VirtualDrive::CanDelete(FSP_FILE_SYSTEM* fs,
-                                  PVOID FileContext,
-                                  PWSTR FileName)
-{
-    auto* node = static_cast<FileNode*>(FileContext);
-    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
-
-    // The node was stat'd during Open, so it is almost certainly still in the
-    // C++ cache.  Only fall back to a round-trip on a cache miss (rare).
-    StatEntry cached{};
-    if (self->LookupStat(node->path, cached))
-        return STATUS_SUCCESS;
-
-    json req = {{"op", "stat"}, {"path", node->path}};
-    protocol::Message resp = self->SendReq(req.dump());
-    json j = json::parse(resp.json);
-    if (!j.value("ok", false))
-        return ErrorToStatus(j.value("error", "not_found"));
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS VirtualDrive::Rename(FSP_FILE_SYSTEM* fs,
-                               PVOID FileContext,
-                               PWSTR FileName,
-                               PWSTR NewFileName,
-                               BOOLEAN ReplaceIfExists)
-{
-    auto* node = static_cast<FileNode*>(FileContext);
-    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
-
-    std::string to = WcharToUtf8(NewFileName);
-    NormalizeVPath(to);
-
-    json req = {{"op", "rename"}, {"from", node->path}, {"to", to}};
-    protocol::Message resp = self->SendReq(req.dump());
-    json j = json::parse(resp.json);
-    if (!j.value("ok", false))
-        return ErrorToStatus(j.value("error", ""));
-
-    // Evict both old and new paths (and their parents) from the C++ cache.
-    self->InvalidateStat(node->path);
-    self->InvalidateStat(to);
-    node->path = to;
-    return STATUS_SUCCESS;
-}
-
 NTSTATUS VirtualDrive::GetSecurity(FSP_FILE_SYSTEM* /*fs*/,
                                     PVOID /*FileContext*/,
                                     PSECURITY_DESCRIPTOR SecurityDescriptor,
@@ -755,6 +511,313 @@ NTSTATUS VirtualDrive::SetSecurity(FSP_FILE_SYSTEM* /*fs*/,
                                     PSECURITY_DESCRIPTOR /*ModificationDescriptor*/)
 {
     // Not supported — silently succeed.
+    return STATUS_SUCCESS;
+}
+
+// ── Create ────────────────────────────────────────────────────────────────────
+
+NTSTATUS VirtualDrive::Create(FSP_FILE_SYSTEM* fs,
+                               PWSTR FileName,
+                               UINT32 CreateOptions,
+                               UINT32 GrantedAccess,
+                               UINT32 FileAttributes,
+                               PSECURITY_DESCRIPTOR SecurityDescriptor,
+                               UINT64 AllocationSize,
+                               PVOID* PFileContext,
+                               FSP_FSCTL_FILE_INFO* FileInfo)
+{
+    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
+
+    std::string path = WcharToUtf8(FileName);
+    NormalizeVPath(path);
+    bool is_dir = (FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+
+    json req = {{"op", "create"}, {"path", path}, {"is_dir", is_dir}};
+    protocol::Message resp = self->SendReq(req.dump());
+    json j;
+    if (!TryParse(resp.json, j))
+        return STATUS_IO_DEVICE_ERROR;
+
+    if (!j.value("ok", false))
+        return ErrorToStatus(j.value("error", ""));
+
+    // Evict parent's cached stat (its listing now includes the new entry).
+    self->InvalidateStat(path);
+    auto* node = new FileNode{path, is_dir, 0, 0, false};
+    *PFileContext = node;
+    FillFileInfo(*node, FileInfo);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS VirtualDrive::Open(FSP_FILE_SYSTEM* fs,
+                             PWSTR FileName,
+                             UINT32 CreateOptions,
+                             UINT32 GrantedAccess,
+                             PVOID* PFileContext,
+                             FSP_FSCTL_FILE_INFO* FileInfo)
+{
+    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
+
+    std::string path = WcharToUtf8(FileName);
+    NormalizeVPath(path);
+
+    StatEntry cached{};
+    if (!self->LookupStat(path, cached)) {
+        json req = {{"op", "stat"}, {"path", path}};
+        protocol::Message resp = self->SendReq(req.dump());
+        json j;
+        if (!TryParse(resp.json, j))
+            return STATUS_IO_DEVICE_ERROR;
+        if (!j.value("ok", false))
+            return ErrorToStatus(j.value("error", "not_found"));
+        cached = StatEntry{
+            j.value("is_dir",   false),
+            j.value("size",     uint64_t(0)),
+            j.value("mtime_ms", uint64_t(0)),
+            std::chrono::steady_clock::now() + std::chrono::seconds(STAT_CACHE_TTL_S)
+        };
+        self->CacheStat(path, cached);
+    }
+
+    auto* node = new FileNode{path, cached.is_dir, cached.size, cached.mtime_ms, false};
+    // Streaming media gets a larger read window + prefetch-ahead (see Read).
+    node->streaming = !cached.is_dir && IsStreamingPath(path);
+    *PFileContext = node;
+    FillFileInfo(*node, FileInfo);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS VirtualDrive::Overwrite(FSP_FILE_SYSTEM* fs,
+                                  PVOID FileContext,
+                                  UINT32 FileAttributes,
+                                  BOOLEAN ReplaceFileAttributes,
+                                  UINT64 AllocationSize,
+                                  FSP_FSCTL_FILE_INFO* FileInfo)
+{
+    // Treat overwrite as truncate to 0 then normal write flow.
+    auto* node = static_cast<FileNode*>(FileContext);
+    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
+
+    json req = {{"op", "truncate"}, {"path", node->path}, {"new_size", 0}};
+    protocol::Message resp = self->SendReq(req.dump());
+    json j;
+    if (!TryParse(resp.json, j))
+        return STATUS_IO_DEVICE_ERROR;
+    if (!j.value("ok", false))
+        return ErrorToStatus(j.value("error", ""));
+
+    // File was truncated; cached size is now stale.
+    self->InvalidateStat(node->path);
+    node->size = 0;
+    FillFileInfo(*node, FileInfo);
+    return STATUS_SUCCESS;
+}
+
+// ── Read ──────────────────────────────────────────────────────────────────────
+
+// Maximum read-ahead window for ordinary files. When a sequential read has
+// fully ramped (see below) we ask Android for up to this many bytes per fetch.
+// 8 MB reduces named-pipe round-trips by ~128× for sequential file copies
+// (e.g. 64 KB WinFsp chunks × 128 = one round-trip per 8 MB of data).
+static constexpr uint64_t READ_PREFETCH_BYTES = 8ULL * 1024 * 1024;
+
+// Maximum read-ahead window for streaming media (video). Combined with
+// prefetch-ahead this keeps a decoder fed: while the player drains the current
+// window we fetch the next one in the background, so a sequential read never
+// blocks on the round-trip at a window boundary. Memory: up to 2 windows
+// (current + next) per open video handle = 200 MB, bounded by the number of
+// concurrently open videos (usually 1–2). NOTE: a single 100 MB fetch can take
+// minutes over slow Wi-Fi — the read timeouts (PIPE_READ_TIMEOUT here, and the
+// Python _READ_TOTAL_TIMEOUT_S) are sized to span a full-window transfer.
+static constexpr uint64_t READ_PREFETCH_BYTES_STREAM = 100ULL * 1024 * 1024;
+
+// ── Sequential read-ahead ramp ─────────────────────────────────────────────
+// The window is NOT fixed: it starts small and doubles only while reads stay
+// sequential. This distinguishes a hover/thumbnail read (a short, often
+// non-sequential burst near the start — stays at the small window, fetching
+// little) from a real playback/copy (sustained sequential reads — ramps up to
+// the max window for throughput). WinFsp gives no reliable open-time "intent"
+// signal, so the read *pattern* is the signal.
+static constexpr uint64_t READ_WINDOW_MIN  = 256ULL * 1024;  // initial / hover window
+static constexpr uint32_t READ_RAMP_MAX    = 9;  // 256 KB << 9 = 128 MB, clamped to the max window
+static constexpr uint32_t PREFETCH_RAMP_MIN = 3; // ramp (window ≥ 2 MB) before prefetch
+
+// Max read-ahead window for a node, by its streaming flag.
+static uint64_t MaxWindowFor(const FileNode* node)
+{
+    return node->streaming ? READ_PREFETCH_BYTES_STREAM : READ_PREFETCH_BYTES;
+}
+
+// True if [Offset, Offset+len) is fully contained in cache window rc.
+static bool CacheCovers(const FileNode::ReadCache& rc, uint64_t Offset, uint64_t len)
+{
+    uint64_t end = rc.startOffset + static_cast<uint64_t>(rc.data.size());
+    return Offset >= rc.startOffset && (Offset + len) <= end;
+}
+
+bool VirtualDrive::IsStreamingPath(const std::string& path)
+{
+    size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos) return false;
+    std::string ext = path.substr(dot + 1);
+    for (char& c : ext)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return ext == "mp4" || ext == "mkv" || ext == "mov" || ext == "avi"
+        || ext == "webm" || ext == "m4v" || ext == "ts" || ext == "m2ts";
+}
+
+void VirtualDrive::PrefetchInto(FileNode* node, uint64_t start, uint64_t len)
+{
+    protocol::Message resp;
+    bool ok = false;
+    try {
+        json req = {
+            {"op", "read"}, {"path", node->path},
+            {"offset", start}, {"length", len}
+        };
+        resp = SendReq(req.dump(), {}, PIPE_READ_TIMEOUT);
+        ok = json::parse(resp.json).value("ok", false);
+    } catch (...) {
+        ok = false;  // prefetch is best-effort; the foreground read will retry
+    }
+
+    std::lock_guard<std::mutex> lk(node->readMtx);
+    if (ok) {
+        auto nc = std::make_unique<FileNode::ReadCache>();
+        nc->startOffset = start;
+        nc->data.assign(resp.payload.begin(), resp.payload.end());
+        // Advance the sequential frontier so a later sync miss past the
+        // prefetched region is still seen as sequential (keeps the ramp at max).
+        node->lastFetchEnd = std::max(node->lastFetchEnd, start + nc->data.size());
+        node->nextCache = std::move(nc);
+    }
+    node->prefetchInFlight = false;
+}
+
+void VirtualDrive::StartPrefetchLocked(FileNode* node, uint64_t offset)
+{
+    if (!node->streaming || !node->readCache) return;
+    // Only prefetch once the handle has proven a sustained sequential read — a
+    // hover/thumbnail (low rampStep) must never spawn a 32 MB prefetch.
+    if (node->rampStep < PREFETCH_RAMP_MIN) return;
+    const auto& rc = *node->readCache;
+    uint64_t winEnd = rc.startOffset + static_cast<uint64_t>(rc.data.size());
+    uint64_t half   = rc.startOffset + rc.data.size() / 2;
+    if (offset < half)        return;  // not yet far enough to prefetch
+    if (winEnd >= node->size) return;  // nothing beyond the current window
+    if (node->prefetchInFlight) return;                                   // busy
+    if (node->nextCache && node->nextCache->startOffset == winEnd) return; // ready
+
+    // Prefetch a full max-size window (the ramp has already engaged).
+    uint64_t start = winEnd;
+    uint64_t len   = std::min(MaxWindowFor(node), node->size - start);
+    node->prefetchInFlight = true;
+    node->prefetchStart    = start;
+    // Reassigning prefetchFut is safe: a prior task is only ever finished here
+    // (prefetchInFlight is set false at its end under readMtx), so the future's
+    // destructor does not block. The future is joined in Close before delete.
+    try {
+        node->prefetchFut = std::async(
+            std::launch::async,
+            [this, node, start, len]() { PrefetchInto(node, start, len); });
+    } catch (...) {
+        // Thread/resource exhaustion: skip prefetch this round (the foreground
+        // read still works). Never let this escape into the WinFsp callback.
+        node->prefetchInFlight = false;
+    }
+}
+
+NTSTATUS VirtualDrive::Read(FSP_FILE_SYSTEM* fs,
+                             PVOID FileContext,
+                             PVOID Buffer,
+                             UINT64 Offset,
+                             ULONG Length,
+                             PULONG PBytesTransferred)
+{
+    auto* node = static_cast<FileNode*>(FileContext);
+    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
+
+    // Clamp length to what the file actually has.
+    if (Offset >= node->size) {
+        *PBytesTransferred = 0;
+        return STATUS_END_OF_FILE;
+    }
+    ULONG actual = static_cast<ULONG>(
+        std::min(static_cast<uint64_t>(Length), node->size - Offset));
+
+    std::unique_lock<std::mutex> lk(node->readMtx);
+
+    // ── Current window hit ─────────────────────────────────────────────────
+    if (node->readCache && CacheCovers(*node->readCache, Offset, actual)) {
+        size_t idx = static_cast<size_t>(Offset - node->readCache->startOffset);
+        std::memcpy(Buffer, node->readCache->data.data() + idx, actual);
+        *PBytesTransferred = actual;
+        self->StartPrefetchLocked(node, Offset);
+        return STATUS_SUCCESS;
+    }
+
+    // ── Prefetched next window hit: promote it to current and serve ─────────
+    if (node->nextCache && CacheCovers(*node->nextCache, Offset, actual)) {
+        node->readCache = std::move(node->nextCache);
+        size_t idx = static_cast<size_t>(Offset - node->readCache->startOffset);
+        std::memcpy(Buffer, node->readCache->data.data() + idx, actual);
+        *PBytesTransferred = actual;
+        // Consuming a full prefetched window is a confirmed sequential run; keep
+        // the ramp pinned high so any later sync-miss fallback uses the max
+        // window immediately instead of re-ramping from small.
+        node->rampStep = std::min(node->rampStep + 1, READ_RAMP_MAX);
+        self->StartPrefetchLocked(node, Offset);
+        return STATUS_SUCCESS;
+    }
+
+    // ── Miss: fetch synchronously ──────────────────────────────────────────
+    // Adaptive window: grow only while reads stay sequential. A miss that
+    // continues exactly where the last fetch ended is a sustained sequential
+    // read (playback/copy) → ramp the window up; anything else (first read of a
+    // handle, or a seek — e.g. a thumbnailer probing the start/moov atom) resets
+    // the ramp, so a hover fetches just READ_WINDOW_MIN instead of the full max.
+    bool sequential = (node->lastFetchEnd != 0 && Offset == node->lastFetchEnd);
+    node->rampStep = sequential ? std::min(node->rampStep + 1, READ_RAMP_MAX) : 0;
+    uint64_t window = std::min(READ_WINDOW_MIN << node->rampStep, MaxWindowFor(node));
+
+    // Release readMtx during the blocking pipe round-trip so a concurrent Read
+    // (or the prefetch task) is not stalled behind it. Clamp to EOF.
+    uint64_t fetchLen = std::min(
+        std::max(static_cast<uint64_t>(actual), window),
+        node->size - Offset);
+    lk.unlock();
+
+    json req = {
+        {"op",     "read"},
+        {"path",   node->path},
+        {"offset", Offset},
+        {"length", fetchLen}
+    };
+    protocol::Message resp = self->SendReq(req.dump(), {},
+                                           VirtualDrive::PIPE_READ_TIMEOUT);
+    json j;
+    if (!TryParse(resp.json, j))
+        return STATUS_IO_DEVICE_ERROR;
+    if (!j.value("ok", false))
+        return ErrorToStatus(j.value("error", ""));
+
+    ULONG received = static_cast<ULONG>(
+        std::min(static_cast<uint64_t>(resp.payload.size()),
+                 static_cast<uint64_t>(actual)));
+    std::memcpy(Buffer, resp.payload.data(), received);
+    *PBytesTransferred = received;
+
+    // Install the fetched chunk as the current window and consider prefetching.
+    lk.lock();
+    auto rc = std::make_unique<FileNode::ReadCache>();
+    rc->startOffset = Offset;
+    rc->data.assign(resp.payload.begin(), resp.payload.end());
+    node->readCache = std::move(rc);
+    // Advance the sequential-fetch frontier so the next contiguous miss is seen
+    // as sequential and keeps ramping the window.
+    node->lastFetchEnd = std::max(node->lastFetchEnd,
+                                  Offset + node->readCache->data.size());
+    self->StartPrefetchLocked(node, Offset);
     return STATUS_SUCCESS;
 }
 
@@ -810,8 +873,10 @@ NTSTATUS VirtualDrive::ReadDirectory(FSP_FILE_SYSTEM* fs,
             {"after", nullptr},          // null → start from beginning
             {"limit", LIST_PAGE_SIZE}
         };
-        protocol::Message resp = self->SendReq(req.dump());
-        json j = json::parse(resp.json);
+        protocol::Message resp = self->SendReq(req.dump(), {}, PIPE_LIST_TIMEOUT);
+        json j;
+        if (!TryParse(resp.json, j))
+            return STATUS_IO_DEVICE_ERROR;
         if (!j.value("ok", false))
             return ErrorToStatus(j.value("error", ""));
 
@@ -888,8 +953,10 @@ NTSTATUS VirtualDrive::ReadDirectory(FSP_FILE_SYSTEM* fs,
             {"after", cur.nextAfter.empty() ? json(nullptr) : json(cur.nextAfter)},
             {"limit", LIST_PAGE_SIZE}
         };
-        protocol::Message resp = self->SendReq(req.dump());
-        json j = json::parse(resp.json);
+        protocol::Message resp = self->SendReq(req.dump(), {}, PIPE_LIST_TIMEOUT);
+        json j;
+        if (!TryParse(resp.json, j))
+            return STATUS_IO_DEVICE_ERROR;
         if (!j.value("ok", false))
             return ErrorToStatus(j.value("error", ""));
 
@@ -908,4 +975,206 @@ NTSTATUS VirtualDrive::ReadDirectory(FSP_FILE_SYSTEM* fs,
     // Signal end-of-directory.
     FspFileSystemAddDirInfo(nullptr, Buffer, Length, PBytesTransferred);
     return STATUS_SUCCESS;
+}
+
+NTSTATUS VirtualDrive::GetFileInfo(FSP_FILE_SYSTEM* /*fs*/,
+                                    PVOID FileContext,
+                                    FSP_FSCTL_FILE_INFO* FileInfo)
+{
+    FillFileInfo(*static_cast<FileNode*>(FileContext), FileInfo);
+    return STATUS_SUCCESS;
+}
+
+// ── Update ────────────────────────────────────────────────────────────────────
+
+NTSTATUS VirtualDrive::Write(FSP_FILE_SYSTEM* fs,
+                              PVOID FileContext,
+                              PVOID Buffer,
+                              UINT64 Offset,
+                              ULONG Length,
+                              BOOLEAN WriteToEndOfFile,
+                              BOOLEAN ConstrainedIo,
+                              PULONG PBytesTransferred,
+                              FSP_FSCTL_FILE_INFO* FileInfo)
+{
+    auto* node = static_cast<FileNode*>(FileContext);
+    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
+
+    // Open the write session on the first Write call for this file handle.
+    if (!node->write_open) {
+        json req = {{"op", "write_open"}, {"path", node->path}};
+        protocol::Message resp = self->SendReq(req.dump(), {}, PIPE_WRITE_TIMEOUT);
+        json j;
+        if (!TryParse(resp.json, j))
+            return STATUS_IO_DEVICE_ERROR;
+        if (!j.value("ok", false))
+            return ErrorToStatus(j.value("error", ""));
+        node->write_open = true;
+    }
+
+    // Send the chunk with its offset so the Python service can seek the temp
+    // buffer correctly for non-sequential writes.
+    std::string payload(static_cast<const char*>(Buffer), Length);
+    json req = {
+        {"op",     "write"},
+        {"path",   node->path},
+        {"offset", WriteToEndOfFile ? node->size : Offset}
+    };
+    protocol::Message resp = self->SendReq(req.dump(), payload, PIPE_WRITE_TIMEOUT);
+    json j;
+    if (!TryParse(resp.json, j))
+        return STATUS_IO_DEVICE_ERROR;
+    if (!j.value("ok", false))
+        return ErrorToStatus(j.value("error", ""));
+
+    *PBytesTransferred = Length;
+    if (WriteToEndOfFile)
+        node->size += Length;
+    else
+        node->size = std::max(node->size, Offset + Length);
+    FillFileInfo(*node, FileInfo);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS VirtualDrive::Flush(FSP_FILE_SYSTEM* /*fs*/,
+                              PVOID /*FileContext*/,
+                              FSP_FSCTL_FILE_INFO* FileInfo)
+{
+    // Nothing to flush — data is streamed directly to Android.
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS VirtualDrive::SetBasicInfo(FSP_FILE_SYSTEM* /*fs*/,
+                                     PVOID FileContext,
+                                     UINT32 FileAttributes,
+                                     UINT64 CreationTime,
+                                     UINT64 LastAccessTime,
+                                     UINT64 LastWriteTime,
+                                     UINT64 ChangeTime,
+                                     FSP_FSCTL_FILE_INFO* FileInfo)
+{
+    // Phone timestamps are not settable — silently succeed so Explorer doesn't error.
+    FillFileInfo(*static_cast<FileNode*>(FileContext), FileInfo);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS VirtualDrive::SetFileSize(FSP_FILE_SYSTEM* fs,
+                                    PVOID FileContext,
+                                    UINT64 NewSize,
+                                    BOOLEAN SetAllocationSize,
+                                    FSP_FSCTL_FILE_INFO* FileInfo)
+{
+    if (SetAllocationSize) {
+        // WinFsp sends SetAllocationSize before actual write — just update the
+        // cached size hint so FillFileInfo reports the right allocation.
+        auto* node = static_cast<FileNode*>(FileContext);
+        node->size = NewSize;
+        FillFileInfo(*node, FileInfo);
+        return STATUS_SUCCESS;
+    }
+
+    auto* node = static_cast<FileNode*>(FileContext);
+    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
+
+    json req = {{"op", "truncate"}, {"path", node->path}, {"new_size", NewSize}};
+    protocol::Message resp = self->SendReq(req.dump());
+    json j;
+    if (!TryParse(resp.json, j))
+        return STATUS_IO_DEVICE_ERROR;
+    if (!j.value("ok", false))
+        return ErrorToStatus(j.value("error", ""));
+
+    node->size = NewSize;
+    FillFileInfo(*node, FileInfo);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS VirtualDrive::Rename(FSP_FILE_SYSTEM* fs,
+                               PVOID FileContext,
+                               PWSTR FileName,
+                               PWSTR NewFileName,
+                               BOOLEAN ReplaceIfExists)
+{
+    auto* node = static_cast<FileNode*>(FileContext);
+    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
+
+    std::string to = WcharToUtf8(NewFileName);
+    NormalizeVPath(to);
+
+    json req = {{"op", "rename"}, {"from", node->path}, {"to", to}};
+    protocol::Message resp = self->SendReq(req.dump());
+    json j;
+    if (!TryParse(resp.json, j))
+        return STATUS_IO_DEVICE_ERROR;
+    if (!j.value("ok", false))
+        return ErrorToStatus(j.value("error", ""));
+
+    // Evict both old and new paths (and their parents) from the C++ cache.
+    self->InvalidateStat(node->path);
+    self->InvalidateStat(to);
+    node->path = to;
+    return STATUS_SUCCESS;
+}
+
+// ── Delete ────────────────────────────────────────────────────────────────────
+
+NTSTATUS VirtualDrive::CanDelete(FSP_FILE_SYSTEM* fs,
+                                  PVOID FileContext,
+                                  PWSTR FileName)
+{
+    auto* node = static_cast<FileNode*>(FileContext);
+    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
+
+    // The node was stat'd during Open, so it is almost certainly still in the
+    // C++ cache.  Only fall back to a round-trip on a cache miss (rare).
+    StatEntry cached{};
+    if (self->LookupStat(node->path, cached))
+        return STATUS_SUCCESS;
+
+    json req = {{"op", "stat"}, {"path", node->path}};
+    protocol::Message resp = self->SendReq(req.dump());
+    json j;
+    if (!TryParse(resp.json, j))
+        return STATUS_IO_DEVICE_ERROR;
+    if (!j.value("ok", false))
+        return ErrorToStatus(j.value("error", "not_found"));
+    return STATUS_SUCCESS;
+}
+
+VOID VirtualDrive::Cleanup(FSP_FILE_SYSTEM* fs,
+                            PVOID FileContext,
+                            PWSTR FileName,
+                            ULONG Flags)
+{
+    auto* node = static_cast<FileNode*>(FileContext);
+    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
+
+    // Close any open write session first.
+    if (node->write_open) {
+        json req = {{"op", "write_close"}, {"path", node->path}};
+        self->SendReq(req.dump(), {}, PIPE_WRITE_TIMEOUT);
+        node->write_open = false;
+        // File contents changed; cached size/mtime are now stale.
+        self->InvalidateStat(node->path);
+    }
+
+    // Delete if Explorer flagged this handle for deletion.
+    if (Flags & FspCleanupDelete) {
+        json req = {{"op", "delete"}, {"path", node->path}};
+        self->SendReq(req.dump());
+        // File is gone; evict its cache entry and parent's listing stat.
+        self->InvalidateStat(node->path);
+    }
+}
+
+VOID VirtualDrive::Close(FSP_FILE_SYSTEM* /*fs*/, PVOID FileContext)
+{
+    auto* node = static_cast<FileNode*>(FileContext);
+    // Join any in-flight prefetch first: its async task captures `node`, so it
+    // must finish before the node is freed (otherwise use-after-free). WinFsp
+    // guarantees no Read is in flight on this handle once Close is called, so the
+    // prefetch future is the only outstanding work touching the node.
+    if (node->prefetchFut.valid())
+        node->prefetchFut.wait();
+    delete node;
 }

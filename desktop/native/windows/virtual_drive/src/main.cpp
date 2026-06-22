@@ -15,8 +15,7 @@
 #include <thread>
 #include <vector>
 
-// Pipe name SyncDose.exe exposes for VirtualDrive IPC.
-static constexpr char PIPE_NAME[] = "\\\\.\\pipe\\SyncDoseVDrive";
+// Pipe name and buffer size come from Protocol.h so they stay in sync with VirtualDrive.cpp.
 
 // Retry parameters for the initial pipe connection.
 static constexpr int RETRY_INTERVAL_MS = 2000;
@@ -24,8 +23,9 @@ static constexpr int RETRY_TIMEOUT_MS  = 30000;
 
 // Number of pipe connections to open. Sets the desktop-side concurrency ceiling:
 // this many virtual-drive ops can be in flight at once. Must be <= the Python
-// server's _MAX_CONNECTIONS.
-static constexpr int PIPE_POOL_SIZE = 8;
+// server's _MAX_CONNECTIONS. Sized at 12 so a streaming read (1 foreground +
+// 1 background prefetch pipe per open video) does not starve metadata ops.
+static constexpr int PIPE_POOL_SIZE = 12;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -64,7 +64,8 @@ int wmain(int /*argc*/, wchar_t* /*argv*/[])
                && elapsed < RETRY_TIMEOUT_MS) {
             try {
                 pipes.push_back(std::make_unique<ClientNamedPipe>(
-                    65536, 65536, PIPE_NAME, /*duplex=*/true));
+                    protocol::PIPE_BUFFER_SIZE, protocol::PIPE_BUFFER_SIZE,
+                    protocol::PIPE_NAME_A, /*duplex=*/true));
             } catch (const PipeException&) {
                 std::wcout << L"[VirtualDrive] Waiting for SyncDose ("
                            << pipes.size() << L"/" << PIPE_POOL_SIZE

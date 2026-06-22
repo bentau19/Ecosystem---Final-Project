@@ -113,7 +113,10 @@ public class TauSyncTransportManager implements TransportManager {
                 TauSync previousTauSync = tauSync;
                 tauSync = null;
                 if (previousTauSync != null) {
-                    try { previousTauSync.disconnect(); } catch (Exception ignored) {}
+                    try {
+                        previousTauSync.disconnect();
+                    } catch (Exception ignored) {
+                    }
                 }
 
                 tauSync = new TauSync();
@@ -582,6 +585,60 @@ public class TauSyncTransportManager implements TransportManager {
                 out.flush();
                 Log.d(TAG, "serveJsonThenStreamOut [" + channel + "]: streamed "
                         + totalBytes + "B in " + chunkCount + " chunks");
+            }
+        }
+    }
+
+    @Override
+    public void serveReadRequest(String channel, JsonToReadResultHandler handler) throws Exception {
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException(
+                    "Cannot serve channel [" + channel + "]: Not connected");
+        }
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
+                     tauSync.connect(channel, DEFAULT_WRITE_CONNECT_TIMEOUT_S)) {
+            String request = stream.readLine();
+            if (request == null) {
+                throw new java.io.EOFException(
+                        "serveReadRequest: peer closed without sending request on ["
+                                + channel + "]");
+            }
+            Log.d(TAG, "serveReadRequest [" + channel + "]: req=" + request);
+
+            ReadResult result;
+            try {
+                result = handler.openRead(request);
+            } catch (Exception e) {
+                // The handler is expected to map failures to error codes; an escape
+                // here is unexpected — report it as io_error rather than streaming
+                // nothing (which the peer could not distinguish from a clean EOF).
+                Log.w(TAG, "serveReadRequest [" + channel + "]: handler threw", e);
+                result = ReadResult.error("io_error");
+            }
+
+            if (!result.ok) {
+                // Header only: the peer reads this line and surfaces the error.
+                stream.writeString("{\"ok\":false,\"error\":\"" + result.error + "\"}\n");
+                Log.d(TAG, "serveReadRequest [" + channel + "]: error=" + result.error);
+                return;
+            }
+
+            // Success: declare the exact byte count, then stream exactly that many.
+            stream.writeString("{\"ok\":true,\"length\":" + result.length + "}\n");
+            try (java.io.InputStream in = result.stream) {
+                java.io.OutputStream out = stream.getOutputStream();
+                byte[] buf = new byte[FILE_CHUNK_SIZE];
+                long remaining = result.length;
+                while (remaining > 0) {
+                    int want = (int) Math.min(buf.length, remaining);
+                    int n = in.read(buf, 0, want);
+                    if (n <= 0) break;  // file shrank under us → peer detects truncation
+                    out.write(buf, 0, n);
+                    remaining -= n;
+                }
+                out.flush();
+                Log.d(TAG, "serveReadRequest [" + channel + "]: streamed "
+                        + (result.length - remaining) + "/" + result.length + "B");
             }
         }
     }

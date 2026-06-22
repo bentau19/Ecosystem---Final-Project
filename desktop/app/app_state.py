@@ -61,18 +61,20 @@ class AppState:
             backup_service=self.backup_service,
             connectivity_service=self.connectivity_service,
         )
-        self.phone_request_service: Final[PhoneRequestService] = PhoneRequestService(
-            connectivity_service=self.connectivity_service,
-            file_transfer_service=self.file_transfer_service,
-            backup_service=self.backup_service,
-        )
         self.virtual_drive_service: Final[VirtualDriveService] = VirtualDriveService(
             connectivity=self.connectivity_service,
             device_info=self.device_info_service,
         )
 
+        self.phone_request_service: Final[PhoneRequestService] = PhoneRequestService(
+            connectivity_service=self.connectivity_service,
+            file_transfer_service=self.file_transfer_service,
+            backup_service=self.backup_service,
+            device_info_service=self.device_info_service,
+        )
+
         # Wire service lifecycles to device connection events.
-        # BackupService is wired first so its executor is initialised before
+        # BackupService is wired first so its executor is initialized before
         # PhoneRequestService can dispatch receive_manifest() on the first poll.
         self.device_viewmodel.device_connected.connect(self.backup_service.start)
         self.device_viewmodel.device_connected.connect(self.phone_request_service.start)
@@ -84,6 +86,22 @@ class AppState:
         # Wire VirtualDriveService lifecycle to device connection events.
         # start() opens \\.\pipe\SyncDoseVDrive and begins serving VirtualDrive.exe.
         # stop() shuts the executor down after all in-flight ops complete.
+
+    def shutdown(self) -> None:
+        """Stop all background services in dependency order on app exit.
+
+        Called via ``QApplication.aboutToQuit`` so every exit path is covered
+        (X button, tray Quit, sys.exit, etc.).  All ``stop()`` implementations
+        are idempotent and non-blocking (they spawn daemon threads), so this
+        returns immediately and the process exits cleanly.
+
+        Order: dependent services first, connectivity last so the phone
+        receives a disconnect notification before the transport closes.
+        """
+        self.phone_request_service.stop()
+        self.backup_service.stop()
+        self.virtual_drive_service.stop()   # also terminates VirtualDrive.exe
+        self.connectivity_service.stop()    # notifies phone, then closes TauSync
 
 
 app_state: Final[AppState] = AppState()
