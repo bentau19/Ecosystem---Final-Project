@@ -112,12 +112,13 @@ jobs:
           java-version: "21"
           distribution: "temurin"
 
-      - name: Make gradlew executable
-        run: chmod +x TauSync/Tausync_Android/tausync-lib/gradlew
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
 
-      - name: Run TauSync Android tests
+      - name: Run TauSync Android integration tests
         working-directory: TauSync/Tausync_Android/tausync-lib
-        run: ./gradlew test
+        run: python run_integration_tests.py
 
 
   # =========================
@@ -129,6 +130,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: ./.github/actions/tau_sync
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -136,6 +139,7 @@ jobs:
       - name: Install TauSync dependencies
         run: |
           pip install -r TauSync/windows/requirements.txt
+          pip install TauSync/windows
           pip install pytest pytest-timeout
 
       - name: Run TauSync Windows tests
