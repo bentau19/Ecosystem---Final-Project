@@ -85,6 +85,34 @@ public interface IConnectionManager extends AutoCloseable {
     CompletableFuture<Void> sendStreamDataAsync(int localId, byte[] buffer, int offset, int count);
 
     /**
+     * Sends data over an existing stream channel, choosing the transport explicitly in hybrid
+     * (Bluetooth + Wi-Fi) mode.
+     *
+     * <p>{@code preferWifi == true} routes this send over the Wi-Fi link — bringing it up on demand
+     * (and reviving it after an idle teardown), falling back to Bluetooth only if Wi-Fi cannot be
+     * established. {@code false} routes it over Bluetooth. The flag is ignored in single-transport
+     * mode (Wi-Fi-only or Bluetooth-only), where the one transport is always used.
+     *
+     * <p>Routing is per send: a stream may use Bluetooth for one write and Wi-Fi for the next, but a
+     * single send is never split across both links (all its wire frames ride the one chosen link).
+     *
+     * <p>Default implementation ignores the hint and delegates to
+     * {@link #sendStreamData(int, byte[], int, int)} so non-hybrid implementations need not override it.
+     *
+     * @param preferWifi true to send over Wi-Fi, false to send over Bluetooth
+     */
+    default void sendStreamData(int localId, byte[] buffer, int offset, int count, boolean preferWifi) {
+        sendStreamData(localId, buffer, offset, count);
+    }
+
+    /**
+     * Async variant of {@link #sendStreamData(int, byte[], int, int, boolean)}.
+     */
+    default CompletableFuture<Void> sendStreamDataAsync(int localId, byte[] buffer, int offset, int count, boolean preferWifi) {
+        return sendStreamDataAsync(localId, buffer, offset, count);
+    }
+
+    /**
      * Sends FIN and releases the local ID.
      *
      * @param localId the local stream ID to complete

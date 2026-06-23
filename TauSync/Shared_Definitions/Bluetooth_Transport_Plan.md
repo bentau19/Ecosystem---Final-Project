@@ -12,17 +12,17 @@ Bluetooth Low Energy is designed for small, infrequent payloads (sensor readings
 
 ### Why this fits the existing architecture
 
-`ITransport` (C#) and the transport interface (Android) were already designed as transport-agnostic interfaces. `SocketTransport` is one implementation; `BluetoothTransport` will be another. The protocol, multiplexing, and SDK layers are completely unaware of what carries the bytes. This is a Layer 1 addition, not a protocol change.
+`ITransport` (C#) and the transport interface (Android) were already designed as transport-agnostic interfaces. `SocketTransport` is one implementation; `BluetoothTransport` is another. The protocol, multiplexing, and SDK layers are completely unaware of what carries the bytes. This is a Layer 1 addition, not a protocol change.
 
 ### What it unlocks
 
 - **Connectivity independence** — sync works anywhere two devices are within ~10 meters, regardless of network.
 - **Simpler connection UX** — Bluetooth pairing replaces manual IP entry. After the first pair, reconnection is automatic.
-- **Fallback resilience** — with both transports available, each channel can use the transport best suited for its data size.
+- **Automatic performance scaling** — the same `ConnectionManager` sends small frames over BT and large frames over Wi-Fi, connecting Wi-Fi only when it's actually needed.
 
 ### Accepted tradeoff
 
-Bluetooth Classic throughput is roughly 1–3 Mbps effective, compared to tens or hundreds of Mbps over Wi-Fi. Large file transfers will be noticeably slower. This is acceptable: the Bluetooth transport is the "always works" path, not the "maximum performance" path.
+Bluetooth Classic throughput is roughly 1–3 Mbps effective, compared to tens or hundreds of Mbps over Wi-Fi. Large file transfers will be noticeably slower over BT. This is acceptable: the Bluetooth transport is the "always works" path, not the "maximum performance" path. Wi-Fi is added lazily when large payloads need it.
 
 ---
 
@@ -38,17 +38,16 @@ After this feature is complete, a TauSync session can run over three configurati
 |------|-----------|-----------|
 | Wi-Fi only (existing) | `SocketTransport` | No Bluetooth available, or user has not paired |
 | Bluetooth only | `BluetoothTransport` | No shared Wi-Fi network |
-| Hybrid | `BluetoothTransport` + `SocketTransport` | Both available — BT bootstraps Wi-Fi |
+| Hybrid | `BluetoothTransport` primary + `SocketTransport` lazy | Both available — BT is always connected; Wi-Fi connects on demand for large payloads |
 
-The protocol stack does not change. `BluetoothTransport` is a new implementation of `ITransport` (C#) / the existing transport interface (Android). Everything at Layer 2 and above is unaffected.
+The protocol stack does not change. `BluetoothTransport` is a `ITransport` implementation alongside `SocketTransport`. Everything at Layer 2 and above is unaffected.
 
-The app works with three `ConnectionManager` configurations. The caller chooses which one to use for each channel:
+**There is no separate `HybridConnectionManager`, `EcoConnectionManager`, or `PerformanceConnectionManager` class.** `ConnectionManager` itself accepts one or two transports and handles routing internally. The caller does not choose transports per-channel — the manager auto-routes based on payload size.
 
-- **`EcoConnectionManager`** — a `ConnectionManager` wrapping `BluetoothTransport` only. Reliable everywhere, lower throughput.
-- **`PerformanceConnectionManager`** — a `ConnectionManager` wrapping `SocketTransport` only. Fast, requires shared network.
-- **`HybridConnectionManager`** — owns the full session setup (BLE pairing → BT Classic session handshake → Wi-Fi bootstrap via session token). After setup it exposes both an `EcoConnectionManager` and a `PerformanceConnectionManager` to the app. The app explicitly picks which one to use per channel based on the `HYBRID_SMALL_THRESHOLD_BYTES` constant as a guide. `HybridConnectionManager` does not auto-route individual frames.
+- **Single-transport mode** (`new ConnectionManager(socketTransport)` or `new ConnectionManager(btTransport)`) — behaves exactly as today, no routing logic.
+- **Hybrid mode** (`new ConnectionManager(btTransport, socketTransport)`) — BT is the primary transport, always connected. Wi-Fi is lazy: it connects on demand when a payload exceeds `HYBRID_SMALL_THRESHOLD_BYTES`, coordinated via a request/ready protocol over BT, and disconnects after 60 seconds of idle.
 
-Note: `EcoConnectionManager` and `PerformanceConnectionManager` are not separate classes — they are `ConnectionManager` instances constructed with different `ITransport` implementations and exposed via factory methods on the SDK.
+Wi-Fi-only mode (existing behavior, single `SocketTransport`) is completely unchanged.
 
 ---
 
@@ -59,14 +58,9 @@ Note: `EcoConnectionManager` and `PerformanceConnectionManager` are not separate
 ```
 Windows (server)                             Android (client)
 ────────────────                             ────────────────
-HybridConnectionManager.StartAsync():
-  BleAdvertiser.Start()
-    └─ BLE GATT peripheral advertising
-       TauSync BLE_SERVICE_UUID
-  BluetoothTransport.StartListening()
+ConnectionManager(btTransport, wifiTransport):
+  BluetoothTransport.Connect(null)
     └─ RFCOMM listener waiting
-  SocketTransport.StartListening()
-    └─ TCP listener waiting on DEFAULT_PORT
 
                                              First launch — BleDiscovery.startDiscovery()
                                              ← BLE advertisement found (BluetoothLeDeviceFilter
@@ -77,43 +71,45 @@ HybridConnectionManager.StartAsync():
                                              (future launches skip BleDiscovery entirely)
 
                           ←── RFCOMM socket opens ───────────
-BT Session Handshake (control channel, TargetID=0 only — no meeting word):
+
+BT Session Handshake (TargetID=0, no meeting word):
   Server → Client: {"MagicBytes": 1414743891}
   Client → Server: {"MagicBytes": 1414743891}
   Both sides confirm peer is a valid TauSync endpoint.
+  Server generates sessionToken, stores in ConnectionContext.
 
-Server generates sessionToken (UUID v4)
-ConnectionContext.setSessionToken(token)
-Server sends SESSION_INFO on TargetID=0:
-  {"Type":"SESSION_INFO",
-   "SessionToken":"<token>",
-   "WifiHost":"192.168.x.x",
-   "WifiPort":5000}
-                          ───── SESSION_INFO ─────────────→
-                                             Client stores token:
-                                             ConnectionContext.setSessionToken(token)
-                                             Client opens TCP to WifiHost:WifiPort
+Both sides now connected over BT only.
+Small frames (<= 64 KB) flow over BT.
 
-SocketTransport already listening on DEFAULT_PORT
-                          ←── TCP socket opens ──────────────
-Client sends SESSION_JOIN on Wi-Fi TargetID=0:
+── Later: first large payload (> 64 KB) on either side ──────────────────────
+
+Side that needs Wi-Fi sends over BT:          Side that needs Wi-Fi sends over BT:
+WIFI_CONNECT_REQ ───────────────────────────→
+                                             (Windows is always Wi-Fi server)
+                                             Starts TCP listener
+                              ←──────────────  WIFI_CONNECT_READY
+                                               {"Type":"WIFI_CONNECT_READY",
+                                                "SessionToken":"<token>",
+                                                "WifiHost":"192.168.x.x",
+                                                "WifiPort":5000}
+Opens TCP to WifiHost:WifiPort ─────────────→
+Sends SESSION_JOIN on TCP ───────────────────→
   {"MagicBytes":1414743891,
    "Type":"SESSION_JOIN",
    "SessionToken":"<token>"}
-                          ───── SESSION_JOIN ──────────────→
-Server verifies token == ConnectionContext.getSessionToken()
-Server sends SESSION_JOIN_ACK:
-  {"Type":"SESSION_JOIN_ACK"}
-                          ←── SESSION_JOIN_ACK ────────────
+                                             Verifies token == ConnectionContext.getSessionToken()
+                              ←──────────────  SESSION_JOIN_ACK
+                                               {"Type":"SESSION_JOIN_ACK"}
 
-HybridConnectionManager on both sides now holds both transports.
-App uses getEcoManager() for small/control channels (BT).
-App uses getPerformanceManager() for large transfers (Wi-Fi).
+Wi-Fi is now live. Large payload sent over Wi-Fi.
+60-second idle timer starts on both sides.
+If no frame received on Wi-Fi for 60s → both sides disconnect Wi-Fi cleanly.
+Next large payload triggers WIFI_CONNECT_REQ again from scratch.
 ```
 
-### 2.2 Returning Launch (Hybrid — Device Already Paired)
+### 2.2 Returning Launch (Device Already Paired)
 
-Identical to 2.1 except BleDiscovery is skipped entirely. Android reads the saved device address from SharedPreferences and calls `BluetoothTransport.connect(savedAddress)` directly. BleAdvertiser still runs on Windows because it is cheap and harmless.
+Identical to 2.1 except BleDiscovery is skipped entirely. Android reads the saved device address from SharedPreferences and calls `BluetoothTransport.connect(savedAddress)` directly.
 
 ### 2.3 Bond Lost (Device Unpaired from System Settings)
 
@@ -121,511 +117,416 @@ Identical to 2.1 except BleDiscovery is skipped entirely. Android reads the save
 
 ### 2.4 Fallback Path (Wi-Fi Only — No Changes)
 
-If Bluetooth is unavailable or the user never paired, the app uses the existing `ConnectionManager` directly with `SocketTransport`. The user enters an IP address as today. Zero changes to this path.
+If Bluetooth is unavailable or the user never paired, the app creates `ConnectionManager` with a single `SocketTransport`. No routing, no BT handshake, no `WIFI_CONNECT_REQ` protocol. Behaves exactly as today.
+
+### 2.5 Transport Drop Fallback (Hybrid Mode)
+
+| Situation | Behavior |
+|-----------|----------|
+| BT drops unexpectedly | Phase 2 reconnect loop fires for BT. All frames (including small ones) reroute to Wi-Fi if it is connected. |
+| Wi-Fi drops unexpectedly | Phase 2 reconnect loop fires for Wi-Fi. All frames reroute to BT (degraded throughput). |
+| Both drop | Sends block on Phase 2 send gate. Session stays alive waiting for either to reconnect. |
+| Explicit `disconnect()` on all transports | `activeTransportCount` hits 0 → `abortAllChannels()` + `reset()`. |
 
 ---
 
-## 3. Protocol Changes
+## 3. Routing Algorithm
 
-### 3.1 New CoreConfig Constants
+Applied per outgoing frame inside `ConnectionManager.sendRaw()` / `SendRaw()`:
 
-Add to `CoreConfig.java` (Android) and `Core.cs` (Windows). All values must match across platforms.
+```
+if only one transport configured:
+    send on it  ← single-transport mode, no routing
+
+else (hybrid mode):
+    if payload.length <= HYBRID_SMALL_THRESHOLD_BYTES:
+        send on BT
+
+    else (large payload):
+        if Wi-Fi is connected:
+            send on Wi-Fi
+            reset 60s idle timer
+        else:
+            trigger WIFI_CONNECT_REQ flow (see Section 2.1)
+            wait on wifiSendGate (blocks until Wi-Fi is up)
+            send on Wi-Fi
+```
+
+Incoming frames: both receive loops run independently and share the same `targetId → handler` routing map in `ConnectionContext`. A frame arriving on either transport dispatches correctly regardless of which transport carried it.
+
+**Wi-Fi idle disconnect:** Both sides track last-received-frame time on the Wi-Fi transport. When 60 seconds pass without any received frame, call `disconnect()` on `SocketTransport` (intentional close — Phase 2 reconnect loop does NOT fire). `activeTransportCount` does not hit 0 because BT is still up, so channels are not aborted. The next large payload triggers `WIFI_CONNECT_REQ` again.
+
+**Role assignment:** BT server (Windows) = Wi-Fi TCP server (starts listener, sends `WIFI_CONNECT_READY`). BT client (Android) = Wi-Fi TCP client (connects, sends `SESSION_JOIN`). Fixed for the session lifetime.
+
+---
+
+## 4. Protocol Changes
+
+### 4.1 New CoreConfig Constants
+
+Already added in Phase 1. Listed here for reference — all values must match across platforms.
 
 ```java
-// Android — CoreConfig.java additions
-public static final String BLE_SERVICE_UUID    = "12345678-1234-5678-1234-56789abcde01";
-public static final String RFCOMM_SERVICE_UUID = "12345678-1234-5678-1234-56789abcde02";
+// Android — CoreConfig.java
+public static final String BLE_SERVICE_UUID             = "12345678-1234-5678-1234-56789abcde01";
+public static final String RFCOMM_SERVICE_UUID          = "12345678-1234-5678-1234-56789abcde02";
 public static final int    BT_CONNECT_TIMEOUT_MS        = 15_000;
 public static final int    SESSION_JOIN_ACK_TIMEOUT_MS  = 10_000;
-public static final int    HYBRID_SMALL_THRESHOLD_BYTES = 65_536; // 64 KB — configurable
+public static final int    HYBRID_SMALL_THRESHOLD_BYTES = 65_536; // 64 KB
+public static final int    WIFI_IDLE_TIMEOUT_MS         = 60_000; // 60 s
+public static final int    RECONNECT_INITIAL_DELAY_MS   = 1_000;
+public static final int    RECONNECT_MAX_DELAY_MS       = 30_000;
+public static final int    SEND_RECONNECT_WAIT_MS       = 30_000;
 ```
 
 ```csharp
-// Windows — Core.cs additions
-public static readonly Guid BleServiceUuid    = new Guid("12345678-1234-5678-1234-56789abcde01");
-public static readonly Guid RfcommServiceUuid = new Guid("12345678-1234-5678-1234-56789abcde02");
-public const int BtConnectTimeoutMs       = 15_000;
-public const int SessionJoinAckTimeoutMs  = 10_000;
-public const int HybridSmallThresholdBytes = 65_536; // 64 KB — configurable
+// Windows — Core.cs
+public static readonly Guid BleServiceUuid             = new Guid("12345678-1234-5678-1234-56789abcde01");
+public static readonly Guid RfcommServiceUuid          = new Guid("12345678-1234-5678-1234-56789abcde02");
+public const int BtConnectTimeoutMs                    = 15_000;
+public const int SessionJoinAckTimeoutMs               = 10_000;
+public const int HybridSmallThresholdBytes             = 65_536; // 64 KB
+public const int WifiIdleTimeoutMs                     = 60_000; // 60 s
+public const int ReconnectInitialDelayMs               = 1_000;
+public const int ReconnectMaxDelayMs                   = 30_000;
+public const int SendReconnectWaitMs                   = 30_000;
 ```
 
-`HYBRID_SMALL_THRESHOLD_BYTES` is intentionally a constant (not hardcoded) so it can be tuned without touching logic. The app reads it as a guide when deciding which manager to open a channel on — `HybridConnectionManager` itself never routes on this value.
+`HYBRID_SMALL_THRESHOLD_BYTES` is a constant so it can be tuned without touching logic. `ConnectionManager` reads it to decide routing — it is never hardcoded.
 
-### 3.2 New Control Channel Message Types
+`WIFI_IDLE_TIMEOUT_MS` needs to be added in Phase 3.
 
-The control channel (TargetID = 0) already carries handshake JSON. Four new message types are added. All are JSON objects sent on TargetID = 0.
+### 4.2 Control Channel Message Types
 
-**BT_MAGIC** — exchanged on both sides immediately after RFCOMM socket opens, before any other message. Confirms both peers are TauSync endpoints. No meeting word involved.
+All sent on TargetID = 0 with `FLAG_CONTROL`. Existing handshake messages have no `Type` field and are unaffected by the new branches.
+
+**BT_MAGIC** — exchanged on both sides immediately after RFCOMM opens. Confirms both peers are TauSync endpoints. No meeting word.
 ```json
 {"MagicBytes": 1414743891}
 ```
 
-**SESSION_INFO** — Server → Client, sent over BT after BT_MAGIC exchange succeeds.
+**WIFI_CONNECT_REQ** — sent by either side over BT when it first needs Wi-Fi (large payload queued).
+```json
+{"Type": "WIFI_CONNECT_REQ"}
+```
+
+**WIFI_CONNECT_READY** — sent by the Wi-Fi server (BT server = Wi-Fi server always) over BT in reply. Carries the session token and TCP address.
 ```json
 {
-  "Type": "SESSION_INFO",
-  "SessionToken": "<uuid-v4-string>",
+  "Type": "WIFI_CONNECT_READY",
+  "SessionToken": "<uuid-v4>",
   "WifiHost": "192.168.1.100",
   "WifiPort": 5000
 }
 ```
 
-**SESSION_JOIN** — Client → Server, sent over the Wi-Fi TCP control channel as the very first frame after TCP connects.
+**SESSION_JOIN** — sent by the Wi-Fi client as the very first frame on the new TCP socket.
 ```json
 {
   "MagicBytes": 1414743891,
   "Type": "SESSION_JOIN",
-  "SessionToken": "<uuid-v4-string>"
+  "SessionToken": "<uuid-v4>"
 }
 ```
-`MagicBytes` is included so the server's existing control-channel dispatcher recognizes it as a valid TauSync frame before branching on `Type`.
+`MagicBytes` is included so the server's existing control-channel dispatcher recognizes the frame as valid before branching on `Type`.
 
-**SESSION_JOIN_ACK** — Server → Client, sent over Wi-Fi after successful token verification.
+**SESSION_JOIN_ACK** — sent by the Wi-Fi server after successful token verification.
 ```json
 {"Type": "SESSION_JOIN_ACK"}
 ```
 
 If the token does not match, the server closes the TCP connection immediately with no response.
 
-### 3.3 Session Token Lifecycle
+### 4.3 Session Token Lifecycle
 
-- Generated server-side as `UUID.randomUUID().toString()` / `Guid.NewGuid().ToString()` immediately after BT_MAGIC exchange succeeds.
+- Generated server-side (Windows) immediately after BT_MAGIC exchange succeeds: `UUID.randomUUID().toString()` / `Guid.NewGuid().ToString()`.
 - Stored in `ConnectionContext.sessionToken` (nullable string, initially null).
-- Cleared by `ConnectionContext.reset()` — but see Section 6.3 for when `reset()` is actually called in Hybrid mode.
-- Single-use for session establishment. Once Wi-Fi joins, the token remains stored but is not reused.
+- Sent to the client inside `WIFI_CONNECT_READY` when Wi-Fi is first requested.
+- Client stores the token in `ConnectionContext.setSessionToken()` on receiving `WIFI_CONNECT_READY`.
+- Used once to verify `SESSION_JOIN`. After that it remains stored but is not reused.
+- Cleared by `ConnectionContext.reset()` (which fires only when the last transport explicitly disconnects).
 
-### 3.4 Existing Handshake is Untouched
+### 4.4 Existing Handshake is Untouched
 
-The regular `ConnectionManager` meeting-word handshake (used for app-level channels on both BT and Wi-Fi) is unchanged. The BT session handshake described above is a separate flow handled entirely by `HybridConnectionManager`. Existing handshake messages have no `Type` field, so the new SESSION_JOIN branch in the dispatcher is never triggered by them.
+The regular `ConnectionManager` meeting-word handshake (used for app-level channels) is unchanged. The new control message types are dispatched by checking the `"Type"` field; existing handshake messages have no `Type` field and fall through to the existing handler untouched.
 
 ---
 
-## 4. New Files to Create
+## 5. Files to Create
 
 ### Windows (C#)
 
 | File | Purpose |
 |------|---------|
-| `TauSync.Lib/Implementations/Transport/BluetoothTransport.cs` | RFCOMM ITransport implementation |
-| `TauSync.Lib/Implementations/Discovery/BleAdvertiser.cs` | BLE GATT peripheral, advertises TauSync BLE_SERVICE_UUID |
-| `TauSync.Lib/Implementations/Management/HybridConnectionManager.cs` | Session orchestrator, starts both listeners, exposes eco/performance managers |
+| `TauSync.Lib/Implementations/Discovery/BleAdvertiser.cs` | BLE GATT peripheral, advertises TauSync `BLE_SERVICE_UUID` for first-time pairing (Phase 4) |
 
 ### Android (Java)
 
 | File | Purpose |
 |------|---------|
-| `tausync-lib/implementations/transport/BluetoothTransport.java` | RFCOMM ITransport implementation |
-| `tausync-lib/implementations/discovery/BleDiscovery.java` | CompanionDeviceManager + bond-loss re-pairing |
-| `tausync-lib/implementations/management/HybridConnectionManager.java` | Session orchestrator |
+| `tausync-lib/implementations/discovery/BleDiscovery.java` | `CompanionDeviceManager` + bond-loss re-pairing (Phase 4) |
+
+`BluetoothTransport.cs` and `BluetoothTransport.java` were created in Phase 1 and are complete.
 
 ---
 
-## 5. Files to Modify
+## 6. Files to Modify
 
-| File | Change |
-|------|--------|
-| `CoreConfig.java` / `Core.cs` | Add new constants (Section 3.1) |
-| `ConnectionContext.java` / `ConnectionContext.cs` | Add `sessionToken` field + getter/setter + `activeTransportCount` for safe reset (Section 6.3) |
-| `ConnectionManager.java` / `ConnectionManager.cs` | Add `startBtSession()` / `joinBtSession()` and `joinSession(token)` methods; add control-message hook for SESSION_JOIN |
-| `ITransport.cs` / transport interface | Add `TransportType` property (enum: WiFi, Bluetooth) |
-| `AndroidManifest.xml` | Add BT permissions |
-| `TauSync.java` (SDK) | Expose factory methods for hybrid/eco/performance managers |
+| File | Change | Phase |
+|------|--------|-------|
+| `CoreConfig.java` / `Core.cs` | Add `WIFI_IDLE_TIMEOUT_MS` | 3 |
+| `ConnectionContext.java` / `ConnectionContext.cs` | Add `sessionToken` field + getter/setter; clear in `reset()` | 3 |
+| `ConnectionManager.java` / `ConnectionManager.cs` | Add second transport slot; routing algorithm; BT_MAGIC handshake; `WIFI_CONNECT_REQ/READY` flow; `SESSION_JOIN` dispatcher branch; 60s idle timer | 3 |
+| `AndroidManifest.xml` | Add `BLUETOOTH_ADVERTISE` permission (needed for BLE advertising in Phase 4) | 4 |
+| `TauSync.java` (SDK) | Expose factory methods for hybrid and single-transport managers | 5 |
 
 ---
 
-## 6. Detailed Implementation Guide
+## 7. Detailed Implementation Guide
 
 Implement in this exact order. Each phase is independently testable before moving to the next.
 
 ---
 
-### Phase 1 — `BluetoothTransport` (both platforms)
+### Phase 1 — `BluetoothTransport` (both platforms) ✅ COMPLETE
 
-This is the core deliverable. Implement it to be structurally identical to `SocketTransport` — same receive loop pattern, same `sendRaw` pattern, same connect/disconnect lifecycle. Read `SocketTransport` carefully before writing `BluetoothTransport`; the only differences are the underlying stream source and connection setup calls.
-
-**`ITransport` addition — `TransportType`**
-
-Before writing `BluetoothTransport`, add this to the interface on both platforms:
-
-```csharp
-// C# — ITransport.cs
-TransportKind TransportType { get; }
-public enum TransportKind { WiFi, Bluetooth }
-```
-```java
-// Java — add to transport interface
-TransportKind getTransportType();
-enum TransportKind { WIFI, BLUETOOTH }
-```
-
-`SocketTransport` returns `WiFi`. `BluetoothTransport` returns `Bluetooth`. `HybridConnectionManager` uses this to identify which transport is which.
-
-**Windows — `BluetoothTransport.cs`**
-
-Fields (mirror `SocketTransport`):
-```csharp
-private StreamSocket? _socket;
-private DataWriter? _writer;
-private DataReader? _reader;
-private CancellationTokenSource? _receiveCts;
-private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
-private bool _isConnected;
-private bool _disposed;
-```
-
-Server-mode `StartListeningAsync()` — Windows is always server for Bluetooth:
-```csharp
-var serviceProvider = await RfcommServiceProvider.CreateAsync(
-    RfcommServiceId.FromUuid(CoreConfig.RfcommServiceUuid));
-
-var listener = new StreamSocketListener();
-listener.ConnectionReceived += OnConnectionReceived;
-await listener.BindServiceNameAsync(
-    serviceProvider.ServiceId.AsString(),
-    SocketProtectionLevel.BluetoothEncryptionAllowNullAuthentication);
-
-serviceProvider.StartAdvertising(listener, true); // true = include SDP record so Android can find channel by UUID
-```
-
-`OnConnectionReceived`: store the `StreamSocket`, set `_isConnected = true`, notify `ConnectionContext.NotifyTransportConnected()` (Phase 6.3), start the receive loop (copy from `SocketTransport.ReceiveLoopAsync` — identical TPack framing logic).
-
-`SendRawAsync(byte[] data)`: copy from `SocketTransport.SendRawAsync`, swap `NetworkStream.WriteAsync` for `DataWriter.WriteBytes` + `DataWriter.StoreAsync`.
-
-`Disconnect()`: cancel `_receiveCts`, close `_socket`, call `ConnectionContext.Instance.NotifyTransportDisconnected()` (NOT `reset()` directly — see Section 6.3).
-
-**Android — `BluetoothTransport.java`**
-
-Fields (mirror `SocketTransport`):
-```java
-private BluetoothSocket btSocket;
-private InputStream inputStream;
-private OutputStream outputStream;
-private volatile boolean connected = false;
-private volatile boolean disposed  = false;
-private Thread receiveThread;
-private final Semaphore sendLock = new Semaphore(1);
-```
-
-Client-mode `connect(String deviceAddress)`:
-```java
-// API 31+: use BluetoothManager.getAdapter() instead of getDefaultAdapter()
-BluetoothAdapter adapter = ((BluetoothManager)
-    context.getSystemService(Context.BLUETOOTH_SERVICE)).getAdapter();
-
-BluetoothDevice device = adapter.getRemoteDevice(deviceAddress);
-
-// Bond check — triggers re-pairing if bond lost (see Section 2.3)
-if (device.getBondState() != BluetoothDevice.BOND_BONDED) {
-    bleDiscovery.startDiscovery(activity, pairingCallback); // blocks until re-paired
-    device = adapter.getRemoteDevice(/* updated address from pairingCallback */);
-}
-
-btSocket = device.createRfcommSocketToServiceRecord(
-    UUID.fromString(CoreConfig.RFCOMM_SERVICE_UUID));
-// SDP lookup uses RFCOMM_SERVICE_UUID to find the correct RFCOMM channel on the Windows side.
-// This is why both platforms MUST use the same UUID — without it, connect() throws.
-
-adapter.cancelDiscovery(); // always cancel active BT discovery before connect; it slows RFCOMM
-btSocket.connect();        // blocks — call on background thread; wrap in Future with BT_CONNECT_TIMEOUT_MS
-inputStream  = btSocket.getInputStream();
-outputStream = btSocket.getOutputStream();
-connected = true;
-ConnectionContext.getInstance().notifyTransportConnected();
-startReceiveLoop();
-```
-
-`startReceiveLoop()`: copy from `SocketTransport.receiveLoop()` — TPack framing is identical. Only difference: read from `btSocket.getInputStream()` instead of TCP socket's stream.
-
-`sendRaw(byte[] data)`: copy from `SocketTransport.sendRaw()` — same semaphore pattern, same output stream write.
-
-`disconnect()`: set `connected = false`, close streams, close `btSocket`, call `ConnectionContext.getInstance().notifyTransportDisconnected()` (NOT `reset()` directly).
-
-**Test after Phase 1:** Write a standalone test that connects `BluetoothTransport` (Windows server + Android client), sends TPack frames both ways, and verifies data arrives intact. Do NOT involve `ConnectionManager` yet — test transport in isolation.
+**What was done:**
+- `ITransport`: added `TransportKind` enum (`WiFi/Bluetooth`, `WIFI/BLUETOOTH`) + `TransportType`/`getTransportType()`. `SocketTransport` returns `WiFi`.
+- `CoreConfig`/`Core.cs`: added `BleServiceUuid`, `RfcommServiceUuid`, `BtConnectTimeoutMs`, `SessionJoinAckTimeoutMs`, `HybridSmallThresholdBytes`.
+- Windows csproj TFM bumped `net8.0` → `net8.0-windows10.0.19041.0`.
+- `BluetoothTransport.cs` — Windows RFCOMM server (advertises via `RfcommServiceProvider`, reads/writes via `DataReader`/`DataWriter`).
+- `BluetoothTransport.java` — Android RFCOMM client (connects to paired Windows device by MAC, `createRfcommSocketToServiceRecord`).
+- `AndroidManifest.xml`: added `BLUETOOTH_CONNECT`, `BLUETOOTH_SCAN`, legacy `BLUETOOTH`/`BLUETOOTH_ADMIN`.
+- Hardware test passed: Windows received "hello from android" over RFCOMM.
 
 ---
 
-### Phase 2 — Session Token + Transport Count in `ConnectionContext`
+### Phase 2 — Reconnect Resilience ✅ COMPLETE
 
-Add to `ConnectionContext` on both platforms:
+**What was done (scope differs from original plan doc — see decisions below):**
+
+- `sessionToken` was NOT added in this phase — deferred to Phase 3.
+- Session ends ONLY on explicit `disconnect()`. Any unexpected drop (peer vanished, socket killed) triggers indefinite reconnect with exponential back-off (`RECONNECT_INITIAL_DELAY_MS=1s` → `RECONNECT_MAX_DELAY_MS=30s`), never `reset()`/`abortAllChannels()`.
+- Channels survive drops. `routingMap`/`targetMap` and in-memory `BackBuffered*` streams stay intact so both sides resume on the same channel/stream objects with no meeting-word re-handshake after reconnect.
+- `abortAllChannels()` + `reset()` fire only when the LAST transport is explicitly disconnected (ref-counted).
+- `ConnectionContext` (both): `activeTransportCount` + `notifyTransportConnected()`/`notifyTransportDisconnected()`.
+- `SocketTransport` + `BluetoothTransport` (both platforms): `intentionalClose` flag, `sendGate` (`TaskCompletionSource`/`CompletableFuture`), `markInitialConnection()`, `handleConnectionDropped()`, reconnect loop, `WaitForConnectionAsync()`.
+- `CoreConfig`/`Core.cs`: added `RECONNECT_INITIAL_DELAY_MS`, `RECONNECT_MAX_DELAY_MS`, `SEND_RECONNECT_WAIT_MS`.
+- Automated localhost WiFi reconnect test (`SocketReconnect.ManualTest`) — all 6 checks passed.
+
+---
+
+### Phase 3 — BT Session Handshake + Hybrid Wi-Fi Lazy Connect ✅ IMPLEMENTED (2026-06-18)
+
+This phase upgrades `ConnectionManager` to own two transports and handle routing. After this phase, BT and Wi-Fi are a unified session from the app's perspective.
+
+**Status:** both platforms compile; in-process C# test (`Phase3.ManualTest`, 12 checks) passes. The full two-endpoint lazy-Wi-Fi flow (REQ→READY→JOIN→ACK, idle teardown, drop fallback) is NOT run end-to-end yet — it needs two processes/machines because `ConnectionContext` is a process-wide singleton (same constraint as the real BT hardware test).
+
+**What was built:**
+- `sessionToken` + `WIFI_IDLE_TIMEOUT_MS` (Step 3a).
+- `SessionControlMessage` model + a session-control dispatch hook in `ConnectionContext` (checked before meeting-word discovery; keyed by reserved `Type`).
+- `NetworkUtils.getLocalWifiIpAddress()` on both platforms.
+- `HybridSessionCoordinator` (owned by `ConnectionManager`) implementing the BT_MAGIC handshake, `WIFI_CONNECT_REQ/READY` + `SESSION_JOIN/_ACK` flow, size-based routing, and the 60 s idle teardown.
+- `ConnectionManager(primary, secondary)` constructor; field `wifiTransport` renamed `primaryTransport`; control + small data over BT, large data routed to Wi-Fi.
+- Transport additions: `ITransport.IsServerMode` (C#, to match Java) implemented on `BluetoothTransport`; `LastActivityTicks`/`getLastActivityMillis()` on `SocketTransport` for idle detection.
+
+**Refinement vs. this doc:** BT_MAGIC carries an explicit `"Type":"BT_MAGIC"` (the doc showed a bare `{"MagicBytes":…}`) so every session-control frame dispatches uniformly by `Type`.
+
+---
+
+#### Phase 3 addendum (2026-06-18) — Wi-Fi IP auto-discovery over Bluetooth
+
+Two follow-up changes so the user never types a Wi-Fi IP:
+
+1. **BT_MAGIC carries the sender's Wi-Fi IP.** When each side sends BT_MAGIC it now fills `WifiHost`
+   (from `NetworkUtils.getLocalWifiIpAddress()`) and `WifiPort` (`DEFAULT_PORT`). On receiving the
+   peer's BT_MAGIC, the coordinator stores `message.WifiHost` via
+   `ConnectionContext.SetPeerWifiHost()`. So the peer's Wi-Fi address is known the moment the BT
+   handshake completes — earlier than `WIFI_CONNECT_READY`, which only arrives on the first large
+   payload. `_peerWifiHost` is cleared by `Reset()`.
+2. **The SDK exposes it and the test app auto-fills the IP field.** `ConnectionContext` gains
+   `Set/GetPeerWifiHost`; the SDK exposes `getPeerWifiIp()` (Android `TauSync`) / `peer_wifi_ip`
+   (Python). The Android test activity, right after `connectHybrid()` returns, writes the discovered
+   IP into its `ipAddressInput` field — no manual entry for either the hybrid or the Wi-Fi-only flow.
+
+Supporting SDK surface added for the hybrid end-to-end test harness:
+- Android `TauSync`: `connectHybrid(Context, btMac)`, `getPeerWifiIp()`, `isWifiActive()`.
+- Python `TauSync`: `connect_hybrid()`, `peer_wifi_ip`, `wifi_active` (Windows = BT/Wi-Fi server).
+
+---
+
+**Step 3a — Add `sessionToken` to `ConnectionContext` (both platforms)**
 
 ```java
 // Java
 private volatile String sessionToken = null;
-private final AtomicInteger activeTransportCount = new AtomicInteger(0);
-
-public void setSessionToken(String token)  { this.sessionToken = token; }
-public String getSessionToken()            { return sessionToken; }
-
-public void notifyTransportConnected()     { activeTransportCount.incrementAndGet(); }
-public void notifyTransportDisconnected() {
-    if (activeTransportCount.decrementAndGet() == 0) {
-        reset(); // only reset when the last transport disconnects
-    }
-}
-
-// In reset() — add:
-sessionToken = null;
-// activeTransportCount is NOT reset here — it is managed by connect/disconnect calls
+public void setSessionToken(String token) { this.sessionToken = token; }
+public String getSessionToken()           { return sessionToken; }
+// In reset(): sessionToken = null;
 ```
 
 ```csharp
 // C#
 private volatile string? _sessionToken;
-private int _activeTransportCount = 0;
-
-public void SetSessionToken(string token)  => _sessionToken = token;
-public string? GetSessionToken()           => _sessionToken;
-
-public void NotifyTransportConnected()     => Interlocked.Increment(ref _activeTransportCount);
-public void NotifyTransportDisconnected()
-{
-    if (Interlocked.Decrement(ref _activeTransportCount) == 0)
-        Reset();
-}
-
-// In Reset() — add:
-_sessionToken = null;
+public void SetSessionToken(string token) => _sessionToken = token;
+public string? GetSessionToken()          => _sessionToken;
+// In Reset(): _sessionToken = null;
 ```
 
-This is the fix for the critical bug where one transport disconnecting would destroy the other transport's active channels. By counting active transports, `reset()` only fires when the last one drops — safe for both solo and hybrid use.
-
-**Important:** `SocketTransport.Disconnect()` must also be updated to call `NotifyTransportDisconnected()` instead of `Reset()` directly.
+Also add `WIFI_IDLE_TIMEOUT_MS = 60_000` to `CoreConfig`/`Core.cs`.
 
 ---
 
-### Phase 3 — BT Session Handshake + SESSION_INFO + SESSION_JOIN
+**Step 3b — `ConnectionManager` constructor change (both platforms)**
 
-This phase wires the two transports into a single session. It adds new methods to `ConnectionManager` and new branches in the control channel dispatcher.
-
-**Step 3a — Add `startBtSession()` to `ConnectionManager` (server side)**
-
-`HybridConnectionManager` calls this after `BluetoothTransport` connects. It runs the BT session handshake on TargetID=0 — no meeting word.
+Currently parameterless. New signatures:
 
 ```java
-// Java — new method on ConnectionManager (server only)
-public String startBtSession() throws IOException {
-    // 1. Exchange MagicBytes to confirm peer is TauSync
-    byte[] magicPayload = new Gson()
-        .toJson(Map.of("MagicBytes", CoreConfig.MAGIC_BYTES))
-        .getBytes(StandardCharsets.UTF_8);
-    transport.sendRaw(protocolHandler.buildFrame(
-        CoreConfig.CONTROL_TARGET_ID, magicPayload, CoreConfig.FLAG_CONTROL)).get();
+// Java — single transport (backward compat: Wi-Fi only or BT only)
+new ConnectionManager(ITransport transport)
 
-    // 2. Wait for peer MagicBytes (control channel dispatcher routes TargetID=0 frames here)
-    Map<String, Object> peerMagic = waitForControlMessage(BT_CONNECT_TIMEOUT_MS);
-    if (!CoreConfig.MAGIC_BYTES.equals(((Double) peerMagic.get("MagicBytes")).intValue()))
-        throw new IOException("Peer MagicBytes mismatch");
-
-    // 3. Generate token and send SESSION_INFO
-    String token = UUID.randomUUID().toString();
-    ConnectionContext.getInstance().setSessionToken(token);
-    String wifiHost = NetworkUtils.getLocalWifiIpAddress(); // utility — see note below
-    int    wifiPort = CoreConfig.DEFAULT_PORT;
-    byte[] infoPayload = new Gson()
-        .toJson(Map.of("Type", "SESSION_INFO", "SessionToken", token,
-                       "WifiHost", wifiHost, "WifiPort", wifiPort))
-        .getBytes(StandardCharsets.UTF_8);
-    transport.sendRaw(protocolHandler.buildFrame(
-        CoreConfig.CONTROL_TARGET_ID, infoPayload, CoreConfig.FLAG_CONTROL)).get();
-    return token;
-}
+// Java — hybrid: BT primary + Wi-Fi lazy secondary
+new ConnectionManager(ITransport primaryTransport, ITransport secondaryTransport)
 ```
 
-`NetworkUtils.getLocalWifiIpAddress()`: enumerate `NetworkInterface.getNetworkInterfaces()`, find the interface that is up, not loopback, not Bluetooth, and has an IPv4 address. Write this once in a shared utility class. Known limitation: on machines with VPN or multiple adapters it may pick the wrong IP — acceptable for now, can be made configurable later.
-
-**Step 3b — Add `joinBtSession()` to `ConnectionManager` (client side)**
-
-```java
-// Java — new method on ConnectionManager (client only)
-public SessionInfo joinBtSession() throws IOException {
-    // 1. Send MagicBytes
-    byte[] magicPayload = new Gson()
-        .toJson(Map.of("MagicBytes", CoreConfig.MAGIC_BYTES))
-        .getBytes(StandardCharsets.UTF_8);
-    transport.sendRaw(protocolHandler.buildFrame(
-        CoreConfig.CONTROL_TARGET_ID, magicPayload, CoreConfig.FLAG_CONTROL)).get();
-
-    // 2. Wait for peer MagicBytes
-    Map<String, Object> peerMagic = waitForControlMessage(BT_CONNECT_TIMEOUT_MS);
-    if (!CoreConfig.MAGIC_BYTES.equals(((Double) peerMagic.get("MagicBytes")).intValue()))
-        throw new IOException("Peer MagicBytes mismatch");
-
-    // 3. Wait for SESSION_INFO
-    Map<String, Object> info = waitForControlMessage(BT_CONNECT_TIMEOUT_MS);
-    if (!"SESSION_INFO".equals(info.get("Type")))
-        throw new IOException("Expected SESSION_INFO, got: " + info.get("Type"));
-
-    String token    = (String) info.get("SessionToken");
-    String wifiHost = (String) info.get("WifiHost");
-    int    wifiPort = ((Double) info.get("WifiPort")).intValue();
-    ConnectionContext.getInstance().setSessionToken(token);
-    return new SessionInfo(token, wifiHost, wifiPort);
-}
+```csharp
+// C#
+new ConnectionManager(ITransport transport)
+new ConnectionManager(ITransport primaryTransport, ITransport secondaryTransport)
 ```
 
-`waitForControlMessage(timeout)`: blocks until a frame arrives on TargetID=0, parses it as JSON, and returns the map. Use a `SynchronousQueue` or `CompletableFuture` that the control channel dispatcher writes into. This is analogous to the existing pending-response pattern already in `ConnectionManager`.
+`getTransportType()` (added Phase 1) tells the manager which slot each transport fills. In single-transport mode all routing and handshake logic is skipped entirely.
 
-**Step 3c — Add `joinSession(token)` to `ConnectionManager` (Wi-Fi client side)**
+---
 
-```java
-// Java — new method on ConnectionManager
-public void joinSession(String token) throws IOException {
-    byte[] payload = new Gson()
-        .toJson(Map.of("MagicBytes", CoreConfig.MAGIC_BYTES,
-                       "Type",        "SESSION_JOIN",
-                       "SessionToken", token))
-        .getBytes(StandardCharsets.UTF_8);
-    transport.sendRaw(protocolHandler.buildFrame(
-        CoreConfig.CONTROL_TARGET_ID, payload, CoreConfig.FLAG_CONTROL)).get();
+**Step 3c — BT Session Handshake on connect**
 
-    // Wait for SESSION_JOIN_ACK with SESSION_JOIN_ACK_TIMEOUT_MS timeout
-    Map<String, Object> ack = waitForControlMessage(CoreConfig.SESSION_JOIN_ACK_TIMEOUT_MS);
-    if (!"SESSION_JOIN_ACK".equals(ack.get("Type")))
-        throw new IOException("SESSION_JOIN rejected or timed out");
-}
+Runs automatically after BT connects, before any app-level traffic. Implemented inside `ConnectionManager` when in hybrid mode.
+
+**Server (Windows) — `startBtSession()`:**
+1. Send `{"MagicBytes": 1414743891}` on TargetID=0 (`FLAG_CONTROL`).
+2. Wait for peer's MagicBytes reply (timeout: `BT_CONNECT_TIMEOUT_MS`). Mismatch → close BT, throw.
+3. Generate `sessionToken = Guid.NewGuid().ToString()`.
+4. Store via `ConnectionContext.SetSessionToken(token)`.
+
+**Client (Android) — `joinBtSession()`:**
+1. Send `{"MagicBytes": 1414743891}` on TargetID=0.
+2. Wait for peer's MagicBytes reply. Mismatch → close BT, throw.
+3. *(sessionToken not yet known — received later in `WIFI_CONNECT_READY`)*
+
+`waitForControlMessage(timeoutMs)`: a `CompletableFuture` / `TaskCompletionSource` that the control channel dispatcher resolves when a TargetID=0 frame arrives outside of an active meeting-word handshake. Analogous to the existing pending-response pattern.
+
+---
+
+**Step 3d — Wi-Fi Lazy Connect: `WIFI_CONNECT_REQ` / `WIFI_CONNECT_READY`**
+
+Either side sends `WIFI_CONNECT_REQ` over BT when it first needs Wi-Fi (large payload queued and Wi-Fi not yet up):
+
+```
+Initiator (either side)                      Responder (other side)
+───────────────────────                      ──────────────────────
+large payload arrives, Wi-Fi not up
+wifiSendGate blocks
+send WIFI_CONNECT_REQ over BT ─────────────→
+
+                                             if I am BT server (= Wi-Fi server):
+                                               start TCP listener on DEFAULT_PORT
+                                               find local Wi-Fi IP (NetworkUtils)
+                                               store + send WIFI_CONNECT_READY over BT
+                             ←───────────────
+if I am BT client (= Wi-Fi client):
+  store token from WIFI_CONNECT_READY
+  ConnectionContext.setSessionToken(token)
+  open TCP to WifiHost:WifiPort ────────────→
+  send SESSION_JOIN on TCP ─────────────────→
+                                             verify token == ConnectionContext.getSessionToken()
+                                             if mismatch → close TCP, no ACK
+                             ←───────────────  send SESSION_JOIN_ACK
+wifiSendGate opens
+queued large payload sent over Wi-Fi
 ```
 
-**Step 3d — Add SESSION_JOIN handler to the control channel dispatcher (server side)**
+If both sides simultaneously try to send a large payload, both send `WIFI_CONNECT_REQ`. The BT server receives the client's request and the client receives the server's — handle deduplication by checking: if I am the Wi-Fi server and I already started the listener, ignore a duplicate `WIFI_CONNECT_REQ`.
 
-In the existing control channel frame handler, add a new branch before the existing meeting-word logic:
+**`NetworkUtils.getLocalWifiIpAddress()`:** enumerate network interfaces → pick the one that is up, not loopback, not a BT interface, and has an IPv4 address. Shared utility class on both platforms. Known limitation: VPN or multi-adapter machines may pick the wrong IP — acceptable for now.
+
+---
+
+**Step 3e — `SESSION_JOIN` branch in the control dispatcher (server side)**
+
+Add before the existing meeting-word logic in the control frame handler:
 
 ```java
 if ("SESSION_JOIN".equals(parsed.get("Type"))) {
     String incoming = (String) parsed.get("SessionToken");
     String expected = ConnectionContext.getInstance().getSessionToken();
     if (expected == null || !expected.equals(incoming)) {
-        transport.disconnect(); // invalid or expired token
+        wifiTransport.disconnect(); // invalid token — close TCP only, BT stays up
         return;
     }
-    // Notify HybridConnectionManager via injected callback (see Phase 4)
-    if (wifiJoinCallback != null) wifiJoinCallback.run();
-    // Send ACK
-    byte[] ack = new Gson()
-        .toJson(Map.of("Type", "SESSION_JOIN_ACK"))
-        .getBytes(StandardCharsets.UTF_8);
-    transport.sendRaw(protocolHandler.buildFrame(
-        CoreConfig.CONTROL_TARGET_ID, ack, CoreConfig.FLAG_CONTROL)).get();
+    byte[] ack = gson.toJson(Map.of("Type", "SESSION_JOIN_ACK"))
+                     .getBytes(StandardCharsets.UTF_8);
+    wifiTransport.sendRaw(protocolHandler.buildFrame(
+        CoreConfig.CONTROL_CHANNEL_ID, ack, CoreConfig.FLAG_CONTROL)).get();
     return;
 }
 ```
 
-`wifiJoinCallback` is a `Runnable` injected by `HybridConnectionManager` at construction time (see Phase 4). This is how `HybridConnectionManager` learns that Wi-Fi has joined without `ConnectionManager` depending on it.
-
-**Test after Phase 3:** BT connects, BT_MAGIC exchanged, SESSION_INFO received by Android, Wi-Fi TCP connects, SESSION_JOIN sent, ACK received. Verify `ConnectionContext.getSessionToken()` is set on both sides and matches.
+Existing handshake messages have no `Type` field → fall through to existing logic untouched.
 
 ---
 
-### Phase 4 — `HybridConnectionManager` (both platforms)
+**Step 3f — Routing in `sendRaw` / `SendRaw`**
 
-`HybridConnectionManager` is the session orchestrator. It does not extend `ConnectionManager` — it owns two `ConnectionManager` instances, starts both listeners together, and manages the handshake flow between them.
-
-**Callback wiring:** `HybridConnectionManager` injects two callbacks into the inner managers at construction time:
-1. Into the BT `ConnectionManager`: a `sessionInfoCallback` that fires when SESSION_INFO arrives (gives Wi-Fi address).
-2. Into the Wi-Fi `ConnectionManager`: a `wifiJoinCallback` that fires when SESSION_JOIN is successfully verified.
-
-These callbacks let `HybridConnectionManager` coordinate the flow without creating a circular dependency.
-
-**Android — `HybridConnectionManager.java`:**
-
-```java
-public class HybridConnectionManager {
-
-    private final ConnectionManager btManager;
-    private final ConnectionManager wifiManager;
-    private final CountDownLatch wifiJoinLatch = new CountDownLatch(1);
-    private volatile boolean sessionReady = false;
-
-    public HybridConnectionManager(Context context) {
-        BluetoothTransport btTransport   = new BluetoothTransport(context);
-        SocketTransport    wifiTransport = new SocketTransport();
-
-        // Inject wifiJoinCallback into wifiManager's control dispatcher
-        this.wifiManager = new ConnectionManager(wifiTransport,
-            /* wifiJoinCallback */ wifiJoinLatch::countDown);
-
-        this.btManager = new ConnectionManager(btTransport);
-    }
-
-    // Call after CompanionDeviceManager returns the device address (first launch)
-    // or after reading saved address from SharedPreferences (subsequent launches)
-    public CompletableFuture<Void> connect(String btDeviceAddress) {
-        return CompletableFuture.runAsync(() -> {
-            try {
-                // 1. Connect BT transport and run BT session handshake
-                btManager.connectTransport(btDeviceAddress);
-                SessionInfo info = btManager.joinBtSession(); // client sends MagicBytes, receives SESSION_INFO
-
-                // 2. Connect Wi-Fi using address from SESSION_INFO
-                wifiManager.connectTransportToAddress(info.wifiHost, info.wifiPort);
-
-                // 3. Send SESSION_JOIN, wait for ACK
-                wifiManager.joinSession(ConnectionContext.getInstance().getSessionToken());
-
-                // 4. Wait for server-side Wi-Fi join confirmation (wifiJoinCallback fires on server)
-                // On client side, joinSession() already confirmed ACK received — sessionReady here
-                sessionReady = true;
-            } catch (Exception e) {
-                throw new RuntimeException("Hybrid connect failed", e);
-            }
-        });
-    }
-
-    public ConnectionManager getEcoManager()         { assertReady(); return btManager; }
-    public ConnectionManager getPerformanceManager() { assertReady(); return wifiManager; }
-
-    private void assertReady() {
-        if (!sessionReady) throw new IllegalStateException("Session not established yet");
-    }
-}
 ```
+if single-transport mode:
+    send on the one transport
 
-**Windows — `HybridConnectionManager.cs` (server side):**
+else (hybrid mode):
+    if payload.length <= CoreConfig.HYBRID_SMALL_THRESHOLD_BYTES:
+        send on BT transport
 
-```csharp
-public class HybridConnectionManager
-{
-    private readonly ConnectionManager _btManager;
-    private readonly ConnectionManager _wifiManager;
-    private readonly TaskCompletionSource _wifiJoinTcs = new TaskCompletionSource();
-
-    public HybridConnectionManager()
-    {
-        // Inject wifiJoinCallback — fires when SESSION_JOIN is verified on the Wi-Fi manager
-        _wifiManager = new ConnectionManager(new SocketTransport(),
-            wifiJoinCallback: () => _wifiJoinTcs.TrySetResult());
-
-        _btManager = new ConnectionManager(new BluetoothTransport());
-    }
-
-    public async Task StartAsync()
-    {
-        // Start both listeners in parallel — either can receive a connection first
-        var btListenTask   = _btManager.StartTransportListeningAsync();
-        var wifiListenTask = _wifiManager.StartTransportListeningAsync();
-        await Task.WhenAll(btListenTask, wifiListenTask);
-
-        // Run BT session handshake (sends SESSION_INFO to Android)
-        await _btManager.StartBtSessionAsync();
-
-        // Wait for Android to connect Wi-Fi and send SESSION_JOIN
-        using var cts = new CancellationTokenSource(
-            TimeSpan.FromMilliseconds(CoreConfig.SessionJoinAckTimeoutMs));
-        await _wifiJoinTcs.Task.WaitAsync(cts.Token);
-        // If timeout: throw, surface error to caller
-    }
-
-    public ConnectionManager EcoManager         => _btManager;
-    public ConnectionManager PerformanceManager => _wifiManager;
-}
+    else:
+        if Wi-Fi transport is connected:
+            send on Wi-Fi transport
+            reset wifiIdleTimer
+        else:
+            if Wi-Fi connect is not already in progress:
+                trigger WIFI_CONNECT_REQ flow (async)
+            await wifiSendGate (up to SESSION_JOIN_ACK_TIMEOUT_MS)
+            send on Wi-Fi transport
 ```
-
-**Test after Phase 4:** Full end-to-end Hybrid flow — BT session handshake, Wi-Fi join, both managers available. Open a channel on `EcoManager` and exchange data. Open a channel on `PerformanceManager` and exchange data. Both simultaneously — verify no cross-talk.
 
 ---
 
-### Phase 5 — BLE Discovery
+**Step 3g — Wi-Fi idle timeout**
 
-This phase handles the first-time pairing UX. After the first pairing, the saved device address is used directly and BLE is only used again if the bond is lost.
+Both sides run a 60-second timer, reset on every frame received over Wi-Fi. On expiry:
+- Call `wifiTransport.disconnect()` — intentional close, so Phase 2 reconnect loop does NOT fire.
+- `activeTransportCount` does not hit 0 (BT still up) → channels not aborted.
+- Reset `wifiSendGate` to incomplete so the next large payload triggers `WIFI_CONNECT_REQ` again.
+
+---
+
+**Step 3h — Test Plan**
+
+1. BT connects → BT_MAGIC exchanged → `getSessionToken()` set on server.
+2. Small payload (≤ 64 KB) → arrives over BT, Wi-Fi never triggered.
+3. Large payload (> 64 KB) → `WIFI_CONNECT_REQ` over BT → `WIFI_CONNECT_READY` received → TCP connects → `SESSION_JOIN` / `SESSION_JOIN_ACK` → payload arrives over Wi-Fi.
+4. Second large payload immediately → reuses existing Wi-Fi, no second handshake.
+5. 60s idle → Wi-Fi disconnects cleanly, BT still alive, channels unaffected.
+6. Large payload after idle → full `WIFI_CONNECT_REQ` flow again.
+7. BT drops mid-session → large payload reroutes to Wi-Fi.
+8. Wi-Fi drops mid-session → large payload reroutes to BT (degraded).
+9. Invalid `SESSION_JOIN` token → server closes TCP, no crash, no state corruption.
+10. Session join ACK timeout → `wifiSendGate` fails, caller sees exception.
+11. Wi-Fi-only mode (single `SocketTransport`) → existing behavior completely unaffected.
+
+---
+
+### Phase 4 — BLE Discovery
+
+This phase handles the first-time pairing UX. After the first pairing the saved device address is used directly; BLE is only used again if the bond is lost.
 
 **Windows — `BleAdvertiser.cs`:**
 
@@ -636,21 +537,19 @@ public class BleAdvertiser
 
     public async Task StartAsync()
     {
-        // Check hardware capability first
         var btAdapter = await BluetoothAdapter.GetDefaultAsync();
         if (btAdapter == null || !btAdapter.IsPeripheralRoleSupported)
-            return; // BLE peripheral not supported — skip advertising, manual MAC entry required
+            return; // BLE peripheral not supported — skip, manual MAC entry required
 
         var result = await GattServiceProvider.CreateAsync(CoreConfig.BleServiceUuid);
         if (result.Error != BluetoothError.Success)
             throw new InvalidOperationException($"GATT create failed: {result.Error}");
 
         _serviceProvider = result.ServiceProvider;
-
         _serviceProvider.StartAdvertising(new GattServiceProviderAdvertisingParameters
         {
             IsDiscoverable = true,
-            IsConnectable  = false // BLE is discovery-only; data travels on RFCOMM Classic
+            IsConnectable  = false // discovery-only; data travels on RFCOMM Classic
         });
     }
 
@@ -658,7 +557,7 @@ public class BleAdvertiser
 }
 ```
 
-`IsConnectable = false`: Android does not need to connect to the GATT service — the mere presence of `BLE_SERVICE_UUID` in the advertisement is the signal. No GATT characteristics need to be defined.
+`IsConnectable = false`: Android does not need to connect to the GATT service — the mere presence of `BLE_SERVICE_UUID` in the advertisement is the signal.
 
 **Android — `BleDiscovery.java`:**
 
@@ -671,9 +570,8 @@ public class BleDiscovery {
     }
 
     public void startDiscovery(Activity activity, PairingCallback callback) {
-        // BluetoothLeDeviceFilter — matches BLE advertisements carrying BLE_SERVICE_UUID.
-        // This is the correct filter type because Windows advertises via BLE, not Classic.
-        // Using BluetoothDeviceFilter (Classic) here would find every nearby BT device — wrong.
+        // BluetoothLeDeviceFilter matches BLE advertisements carrying BLE_SERVICE_UUID.
+        // Do NOT use BluetoothDeviceFilter (Classic) — that finds every nearby BT device.
         BluetoothLeDeviceFilter filter = new BluetoothLeDeviceFilter.Builder()
             .setScanFilter(new ScanFilter.Builder()
                 .setServiceUuid(ParcelUuid.fromString(CoreConfig.BLE_SERVICE_UUID))
@@ -691,9 +589,9 @@ public class BleDiscovery {
         manager.associate(request, new CompanionDeviceManager.Callback() {
             @Override
             public void onDeviceFound(IntentSender chooserLauncher) {
-                // OS shows native "Found nearby device" popup — no custom UI needed
-                // Note: startIntentSenderForResult is deprecated in API 33+.
-                // Use ActivityResultLauncher / registerForActivityResult for new code targeting API 33+.
+                // OS shows native pairing popup — no custom UI needed.
+                // startIntentSenderForResult is deprecated in API 33+;
+                // use ActivityResultLauncher / registerForActivityResult for API 33+.
                 try {
                     activity.startIntentSenderForResult(
                         chooserLauncher, REQUEST_CODE_PAIRING, null, 0, 0, 0);
@@ -708,14 +606,10 @@ public class BleDiscovery {
         }, null);
     }
 
-    // Call from onActivityResult
     public void onActivityResult(int requestCode, int resultCode,
                                   Intent data, PairingCallback callback) {
         if (requestCode != REQUEST_CODE_PAIRING) return;
-        if (resultCode != Activity.RESULT_OK) {
-            callback.onPairingFailed("user cancelled");
-            return;
-        }
+        if (resultCode != Activity.RESULT_OK) { callback.onPairingFailed("user cancelled"); return; }
         BluetoothDevice device = data.getParcelableExtra(CompanionDeviceManager.EXTRA_DEVICE);
         if (device != null) callback.onDevicePaired(device);
         else                callback.onPairingFailed("no device in result");
@@ -725,56 +619,50 @@ public class BleDiscovery {
 }
 ```
 
-After `onDevicePaired`, the caller:
-1. Saves `device.getAddress()` to SharedPreferences under key `"tausync_bt_device_address"`.
-2. Passes the address to `HybridConnectionManager.connect(address)`.
+After `onDevicePaired`:
+1. Save `device.getAddress()` to SharedPreferences under key `"tausync_bt_device_address"`.
+2. Pass the address to `ConnectionManager` (hybrid mode) to start the BT connect.
 
-On subsequent launches, read the address from SharedPreferences and call `HybridConnectionManager.connect(address)` directly — `BleDiscovery` is skipped. `BluetoothTransport.connect()` will check bond state and call `BleDiscovery.startDiscovery()` automatically if the bond was lost (see Phase 1 connect code).
+On subsequent launches: read the address from SharedPreferences and pass directly — `BleDiscovery` is skipped. `BluetoothTransport.connect()` checks bond state and calls `BleDiscovery.startDiscovery()` automatically if the bond was lost.
 
-**AndroidManifest.xml additions:**
+**AndroidManifest.xml — add `BLUETOOTH_ADVERTISE`:**
 ```xml
-<uses-permission android:name="android.permission.BLUETOOTH" />
-<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
-<!-- API 31+ — these are runtime permissions; request them before calling BleDiscovery or BluetoothTransport -->
-<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-<uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
 <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
-<!-- Mark BT as optional so the app still installs on devices without BT hardware -->
-<uses-feature android:name="android.hardware.bluetooth" android:required="false" />
 <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 ```
 
-For API 31+, request `BLUETOOTH_CONNECT` and `BLUETOOTH_SCAN` via `ActivityCompat.requestPermissions` before calling any BT code. Gate the entire Hybrid flow behind a BT availability check:
-```java
-BluetoothAdapter adapter = ((BluetoothManager)
-    context.getSystemService(Context.BLUETOOTH_SERVICE)).getAdapter();
-if (adapter == null || !adapter.isEnabled()) {
-    // BT unavailable — fall back to Wi-Fi only flow
-}
-```
+(Other BT permissions were already added in Phase 1.)
+
+**Test after Phase 4:**
+- Windows advertises BLE; Android `CompanionDeviceManager` shows native popup with only the TauSync PC (not all nearby devices).
+- Saved address reused on second launch — BLE popup does NOT appear.
+- Bond lost (unpair from system settings) → `BluetoothTransport.connect()` detects it, triggers `BleDiscovery`, RFCOMM connects after re-pairing.
+- BLE peripheral not supported on Windows hardware → `BleAdvertiser.StartAsync()` exits gracefully (manual MAC entry fallback).
 
 ---
 
-### Phase 6 — SDK Integration
+### Phase 5 — SDK Integration
 
 **Android — `TauSync.java`:**
 
 ```java
 public class TauSync {
-    // All existing methods unchanged
+    // All existing methods unchanged.
 
-    // New factory methods
-    public HybridConnectionManager newHybridManager(Context context) {
-        return new HybridConnectionManager(context);
+    // Hybrid: BT primary + Wi-Fi lazy. Caller provides the paired device MAC address.
+    public ConnectionManager newHybridManager(Context context, String btDeviceAddress) {
+        BluetoothTransport bt   = new BluetoothTransport(context);
+        SocketTransport    wifi = new SocketTransport();
+        return new ConnectionManager(bt, wifi);
     }
 
-    // Eco = BT only. Caller is responsible for connecting BluetoothTransport first.
-    public ConnectionManager newEcoManager(Context context) {
+    // BT only. Caller provides the paired device MAC address.
+    public ConnectionManager newBtManager(Context context) {
         return new ConnectionManager(new BluetoothTransport(context));
     }
 
-    // Performance = Wi-Fi only. Identical to existing newManager().
-    public ConnectionManager newPerformanceManager() {
+    // Wi-Fi only. Identical to existing newManager().
+    public ConnectionManager newWifiManager() {
         return new ConnectionManager(new SocketTransport());
     }
 }
@@ -784,25 +672,24 @@ public class TauSync {
 
 ---
 
-## 7. Fallback Path — No Changes Required
+## 8. Fallback Path — No Changes Required
 
-When the app uses `newPerformanceManager()` (or the existing `newManager()` — they are identical), it creates a `ConnectionManager` with `SocketTransport`. This is the current Wi-Fi-only flow. The new SESSION_JOIN branch in the control dispatcher is only reached when `Type == "SESSION_JOIN"` — existing handshake messages have no `Type` field and fall through to the existing handler untouched.
+`new ConnectionManager(new SocketTransport())` (or the existing `newManager()`) creates a single-transport manager. No routing, no BT handshake, no `WIFI_CONNECT_REQ` protocol. Behaves exactly as today. The new control message branches are never reached because they check for `"Type"` fields that existing handshake messages do not have.
 
 ---
 
-## 8. Platform-Specific API Reference
+## 9. Platform-Specific API Reference
 
 ### Windows — Key namespaces
 
 ```
 Windows.Devices.Bluetooth                              → BluetoothAdapter (capability check)
-Windows.Devices.Bluetooth.Advertisement               → (not used — BleAdvertiser uses GATT)
-Windows.Devices.Bluetooth.GenericAttributeProfile     → GattServiceProvider, GattServiceProviderAdvertisingParameters
+Windows.Devices.Bluetooth.GenericAttributeProfile     → GattServiceProvider (BLE advertising)
 Windows.Devices.Bluetooth.Rfcomm                      → RfcommServiceProvider, RfcommServiceId
-Windows.Networking.Sockets                            → StreamSocketListener, StreamSocket (RFCOMM uses these, same as TCP)
+Windows.Networking.Sockets                            → StreamSocketListener, StreamSocket
 ```
 
-NuGet: No extra packages needed for WinRT apps. For .NET without WinRT projection, add `Microsoft.Windows.SDK.Contracts`.
+NuGet: No extra packages for WinRT apps. For .NET without WinRT projection, add `Microsoft.Windows.SDK.Contracts`.
 
 ### Android — Key classes
 
@@ -811,40 +698,71 @@ android.bluetooth.BluetoothManager           → getAdapter() (API 31+ preferred
 android.bluetooth.BluetoothAdapter           → cancelDiscovery(), getRemoteDevice()
 android.bluetooth.BluetoothDevice            → createRfcommSocketToServiceRecord(), getBondState()
 android.bluetooth.BluetoothSocket            → connect(), getInputStream(), getOutputStream()
-android.companion.CompanionDeviceManager     → associate() — triggers native OS pairing popup (API 26+)
-android.companion.AssociationRequest         → filter config
-android.companion.BluetoothLeDeviceFilter    → filter by BLE_SERVICE_UUID (use this, not BluetoothDeviceFilter)
-android.bluetooth.le.ScanFilter              → setServiceUuid() used inside BluetoothLeDeviceFilter
+android.companion.CompanionDeviceManager     → associate() — native OS pairing popup (API 26+)
+android.companion.BluetoothLeDeviceFilter    → filter by BLE_SERVICE_UUID (not BluetoothDeviceFilter)
+android.bluetooth.le.ScanFilter              → setServiceUuid() inside BluetoothLeDeviceFilter
 ```
 
-Min API for `CompanionDeviceManager`: 26. Min API for runtime BT permissions: 31. RFCOMM itself works from API 18+. If `minSdk < 26`, gate `BleDiscovery` behind a version check and fall back to manual MAC entry.
+Min API for `CompanionDeviceManager`: 26. Min API for runtime BT permissions: 31. RFCOMM works from API 18+. If `minSdk < 26`, gate `BleDiscovery` behind a version check and fall back to manual MAC entry.
 
 ---
 
-## 9. Testing Checklist
+## 10. Testing Checklist
 
 Work through these in order. Each item assumes the previous ones pass.
 
-- [ ] `BluetoothTransport` server+client connect, exchange a raw byte array, disconnect cleanly
-- [ ] `BluetoothTransport` receive loop correctly parses TPack frames (run existing `ProtocolHandler` unit tests piped through BT streams)
-- [ ] `SocketTransport.disconnect()` calls `NotifyTransportDisconnected()` and does NOT call `reset()` directly (verify in code)
-- [ ] `ConnectionContext.sessionToken` set, retrieved, and cleared by `reset()`
-- [ ] `ConnectionContext.notifyTransportConnected/Disconnected()` — connect two transports, disconnect one, verify `reset()` is NOT called; disconnect second, verify `reset()` IS called
-- [ ] BT_MAGIC exchanged on both sides, mismatch case closes connection cleanly
-- [ ] `startBtSession()` — SERVER generates token, sends SESSION_INFO, token stored in ConnectionContext
-- [ ] `joinBtSession()` — CLIENT receives SESSION_INFO, stores token, returns correct WifiHost/WifiPort
-- [ ] Wi-Fi TCP connect → SESSION_JOIN sent → SERVER verifies token → SESSION_JOIN_ACK received
-- [ ] Invalid token on SESSION_JOIN → server closes TCP immediately, no crash, no state corruption
-- [ ] SESSION_JOIN_ACK timeout → `joinSession()` throws, caller can handle gracefully
-- [ ] `HybridConnectionManager.connect()` runs the full flow end-to-end on real hardware
-- [ ] Channel opened on `EcoManager` (BT) sends and receives data
-- [ ] Channel opened on `PerformanceManager` (Wi-Fi) sends and receives data
-- [ ] Both channels open simultaneously — no cross-talk between them
-- [ ] BT disconnects mid-session — Wi-Fi channels remain alive, BT channels return EOF, `reset()` not called yet
-- [ ] Wi-Fi disconnects mid-session — BT channels remain alive, Wi-Fi channels return EOF, `reset()` not called yet
-- [ ] Both transports disconnect — `reset()` called exactly once
-- [ ] `BleAdvertiser` — Windows advertises, Android `CompanionDeviceManager` shows native popup with only TauSync PC (not all nearby devices)
-- [ ] Saved device address reused on second app launch — BLE popup does NOT appear
-- [ ] Bond lost (unpairing from system settings) — `BluetoothTransport.connect()` detects it, triggers `BleDiscovery` automatically, RFCOMM connects after re-pairing
-- [ ] BLE peripheral not supported on Windows hardware — `BleAdvertiser.StartAsync()` exits gracefully, falls back to manual MAC
-- [ ] Existing Wi-Fi-only flow (`newManager()` + manual IP) completely unaffected by all above changes
+**Phase 1 (complete):**
+- [x] `BluetoothTransport` server+client connect over RFCOMM on real hardware
+- [x] TPack frames sent both ways, data arrives intact
+- [x] `TransportKind` returned correctly by both transport types
+
+**Phase 2 (complete):**
+- [x] Unexpected socket drop → both sides reconnect automatically, same channel/stream objects
+- [x] Post-reconnect send on same instances → no re-handshake needed
+- [x] Explicit `disconnect()` → clean teardown
+- [x] `activeTransportCount` ref-counting → `reset()` only on last disconnect
+
+**Phase 3 (implemented; ✓ = covered by the in-process `Phase3.ManualTest`, ⌁ = covered by the two-endpoint hardware harness below, ☐ = not yet automated):**
+- [x] BT_MAGIC sent over BT and the server mints `sessionToken` on receipt (✓ coordinator test)
+- [x] `sessionToken` set/retrieved/cleared by `reset()` (✓)
+- [x] Session-control dispatch hook routes session frames, ignores meeting words + bad magic (✓)
+- [x] Small payload (≤ 64 KB) → routed to BT (✓)
+- [x] Large payload (server) → announces `WIFI_CONNECT_READY` with token + host/port (✓)
+- [x] BT_MAGIC carries each side's Wi-Fi IP; peer host stored + exposed via `getPeerWifiIp()` (⌁ harness **H1**)
+- [x] End-to-end large payload: `WIFI_CONNECT_REQ` → `READY` → TCP connect → `SESSION_JOIN` / `_ACK`, data over Wi-Fi (⌁ **H3**)
+- [x] Small payload stays on BT, Wi-Fi never comes up (⌁ **H2**)
+- [x] Routing boundary: exactly 64 KB on BT, 64 KB+1 on Wi-Fi, both intact (⌁ **H4**)
+- [x] One channel spans BT → Wi-Fi → BT on a single stream, no reopen (⌁ **H5**)
+- [x] 60s idle → Wi-Fi disconnects, BT alive, channel unaffected (⌁ **H6**)
+- [x] Large payload after idle → full `WIFI_CONNECT_REQ` flow again, Wi-Fi re-established (⌁ **H6**)
+- [x] Invalid SESSION_JOIN token → server rejects without crash, `_wifiActivating` reset for retry (✓ in-process test 7 added 2026-06-18)
+- [x] Both transports disconnect → `reset()` called exactly once (✓ in-process test 8 added 2026-06-18)
+- [x] BT drops mid-session → channel resumes transparently after RFCOMM reconnect (⌁ harness **H7**; semi-manual — tester disrupts BT during the 30 s DROP_WINDOW)
+- [x] Single-transport (Wi-Fi-only) mode completely unaffected (✓ covered by the existing 21-test Wi-Fi suite in "Wi-Fi Server" mode)
+
+**Phase 3 two-endpoint hardware test harness (updated 2026-06-18).** A separate hybrid suite runs on a
+paired Windows + Android pair. It does NOT touch the 21 Wi-Fi-only tests.
+- **Where:** Python server `TauSync/windows/tau_sync_tests/tests/cursor_test/android_test_server.py`
+  (`serve_all_hybrid_tests`, handlers `serve_hybrid_*`); Android client
+  `android/app/.../TestTauSyncActivity.java` (`onRunHybridTestsButtonClicked`, `runHybrid*Test`).
+- **How to run:** start the Python console and click **"Hybrid (Bluetooth) Server"** (mutually exclusive
+  with the Wi-Fi mode — the transport is a process-wide singleton). On the phone, enter the PC's
+  Bluetooth MAC, tap **"Connect (Hybrid BT)"** (the discovered Wi-Fi IP auto-fills the IP field), then
+  tap **"Run Hybrid Tests (Phase 3)"**. A single PASS/FAIL banner reports the result.
+- **Tests:** H1 IP-over-BT discovery, H2 small→BT (Wi-Fi stays down), H3 large→Wi-Fi (SHA-256 verified),
+  H4 threshold boundary, H5 single-stream BT→Wi-Fi→BT continuity, H6 60 s idle teardown + re-establish,
+  H7 BT-drop mid-session (semi-manual: disrupt BT during the 30 s DROP_WINDOW the server announces).
+  H6 is slow (~65 s). Test order is fixed: H2 before any large payload; H6 and H7 run last.
+- **Extensibility:** adding another connection-manager type later is one more mode button + one
+  `serve_all_*_tests()` on the server, and one run button + suite on the phone.
+
+**Phase 4:**
+- [ ] `BleAdvertiser` on Windows — Android `CompanionDeviceManager` shows only TauSync PC
+- [ ] Saved address reused on second launch — BLE popup does not appear
+- [ ] Bond lost → `BluetoothTransport.connect()` triggers `BleDiscovery` automatically
+- [ ] BLE peripheral not supported → `BleAdvertiser.StartAsync()` exits gracefully
+
+**Phase 5:**
+- [ ] `newHybridManager()` factory wires up hybrid `ConnectionManager` correctly
+- [ ] `newBtManager()` and `newWifiManager()` produce single-transport managers
+- [ ] Existing app code using the old `newManager()` / `connect()` API unchanged

@@ -63,13 +63,14 @@ public class ConnectionManager implements IConnectionManager {
     private final Set<String> inFlightWords = ConcurrentHashMap.newKeySet();
 
     /**
-     * The single transport each stream is pinned to. A stream chooses its transport on its first
-     * data send and keeps it for life — data and FIN all travel one link. This is what makes a hybrid
-     * transfer safe: the two transports have no mutual ordering at the receiver, so splitting one
-     * logical stream across both would let frames overtake each other and corrupt or truncate the
-     * data. One stream, one link, fully ordered. Mirrors C# {@code _pinnedTransportByStream}.
+     * The last transport each stream actually sent data over. Routing is decided per send by the
+     * caller's Wi-Fi flag, so a stream may use Bluetooth for one write and Wi-Fi for the next — but a
+     * single send is never split across both links (its frames all ride the one chosen link, staying
+     * ordered). This map lets {@link #completeStream} send the FIN over the same link as the stream's
+     * final data, so the FIN cannot overtake that data on the other transport. Mirrors C#
+     * {@code _lastTransportByStream}.
      */
-    private final ConcurrentHashMap<Integer, ITransport> pinnedTransportByStream = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, ITransport> lastTransportByStream = new ConcurrentHashMap<>();
 
     /**
      * Dedicated pool for blocking handshake operations. Avoids starving the
@@ -89,7 +90,16 @@ public class ConnectionManager implements IConnectionManager {
         protocolHandler = new ProtocolHandler();
         secondaryTransport = null;
         hybrid = null;
-        ITransport transport = ConnectionContext.getInstance().getWifiTransport();
+        // Single-transport manager — used directly in Wi-Fi-only mode and by newManager() to
+        // multiplex extra channels on the existing session. Bind to whichever transport is actually
+        // connected: in a hybrid session that is the always-on Bluetooth primary (Wi-Fi is lazy and
+        // usually down), otherwise the Wi-Fi socket. Binding to the lazy Wi-Fi link here is what made
+        // newManager().connect(word) fail with "Transport not connected" during a hybrid session.
+        ConnectionContext ctx = ConnectionContext.getInstance();
+        ITransport bluetooth = ctx.getBluetoothTransport();
+        ITransport transport = (bluetooth != null && bluetooth.isConnected())
+                ? bluetooth
+                : ctx.getWifiTransport();
         if (transport == null) {
             throw new IllegalStateException("ConnectionContext has no transport.");
         }
@@ -135,7 +145,12 @@ public class ConnectionManager implements IConnectionManager {
                     // Hybrid: connect the Bluetooth primary directly (the manager owns its
                     // transports, so the singleton's internal transport is bypassed), then run the
                     // BT_MAGIC handshake. Wi-Fi is connected lazily on the first large payload.
-                    ConnectionContext.getInstance().reset();
+                    ConnectionContext ctx = ConnectionContext.getInstance();
+                    ctx.reset();
+                    // Register the BT primary so a secondary manager from newManager() binds to this
+                    // always-on link rather than the lazy Wi-Fi socket. Done after reset() (which
+                    // clears it) and before connect so it is in place for the whole session.
+                    ctx.setBluetoothTransport(primaryTransport);
                     primaryTransport.connect(targetId, timeoutSeconds).get();
                     hybrid.startBtSession();
                 } else {
@@ -468,37 +483,31 @@ public class ConnectionManager implements IConnectionManager {
     // ── Stream Data ───────────────────────────────────────────────────
 
     /**
-     * Returns the transport a stream must use, pinning it on the first send. A stream whose first
-     * write exceeds the size threshold is pinned to Wi-Fi; everything else stays on Bluetooth. File
-     * transfers cross the threshold because the file helpers write chunks larger than it, while small
-     * writes (strings, control) stay below — so the right link is chosen automatically. Once pinned the
-     * choice never changes, except that a Wi-Fi link torn down for idle is revived (or, if it cannot
-     * be, the stream falls back to Bluetooth). Mirrors C# {@code ResolveSendTransport}.
+     * Returns the transport for a single send, routing by the explicit {@code preferWifi} flag. A
+     * Wi-Fi send brings the link up on demand (running the WIFI_CONNECT handshake, or reviving a link
+     * torn down for idle) and falls back to Bluetooth only if Wi-Fi cannot be established; a Bluetooth
+     * send always uses the primary link. The chosen link is recorded as the stream's last-used
+     * transport so its FIN follows the same socket (see {@link #completeStream}). Routing is per send
+     * by design — a stream may use Bluetooth for one write and Wi-Fi for the next — but a single send
+     * is never split across both links. Mirrors C# {@code ResolveSendTransport}.
      */
-    private ITransport resolveSendTransport(int localId, int count) {
-        if (hybrid == null) return primaryTransport;
+    private ITransport resolveSendTransport(int localId, boolean preferWifi) {
+        if (hybrid == null) return primaryTransport;  // single transport (Wi-Fi-only or Bluetooth-only)
 
-        ITransport pinned = pinnedTransportByStream.get(localId);
-        if (pinned != null) {
-            // A stream pinned to Wi-Fi whose link was idle-disconnected: revive it so the stream stays
-            // on its link. The idle teardown only happens after the link has drained, so re-establishing
-            // (or, on failure, dropping to Bluetooth) cannot reorder live data.
-            if (pinned == secondaryTransport && !pinned.isConnected()) {
-                ITransport revived = hybrid.acquireWifiOrFallback();
-                pinnedTransportByStream.put(localId, revived);
-                return revived;
-            }
-            return pinned;
-        }
-
-        boolean large = count > CoreConfig.HYBRID_SMALL_THRESHOLD_BYTES;
-        ITransport chosen = large ? hybrid.acquireWifiOrFallback() : primaryTransport;
-        pinnedTransportByStream.put(localId, chosen);
+        ITransport chosen = preferWifi ? hybrid.acquireWifiOrFallback() : primaryTransport;
+        lastTransportByStream.put(localId, chosen);
         return chosen;
     }
 
     @Override
     public void sendStreamData(int localId, byte[] buffer, int offset, int count) {
+        // No explicit hint (e.g. a raw getOutputStream() write): fall back to size — a payload at or
+        // above a full wire chunk is treated as large and routed over Wi-Fi in hybrid mode.
+        sendStreamData(localId, buffer, offset, count, count > CoreConfig.HYBRID_SMALL_THRESHOLD_BYTES);
+    }
+
+    @Override
+    public void sendStreamData(int localId, byte[] buffer, int offset, int count, boolean preferWifi) {
         if (disposed) throw new IllegalStateException("ConnectionManager is disposed.");
         if (primaryTransport == null) throw new IllegalStateException("Transport not initialized.");
         if (buffer == null) throw new IllegalArgumentException("buffer must not be null");
@@ -514,9 +523,9 @@ public class ConnectionManager implements IConnectionManager {
                             + ". Handshake may not have completed; do not write before connect(word) finishes.");
         }
 
-        // Pin the stream to one transport (Wi-Fi if large/flagged, else Bluetooth) and send every
-        // chunk over it. One stream uses one link for life, so frames stay ordered at the receiver.
-        ITransport transport = resolveSendTransport(localId, count);
+        // Route this send to one transport (Wi-Fi when flagged, else Bluetooth) and send every wire
+        // frame over it, so the send is never split across links and its frames stay ordered.
+        ITransport transport = resolveSendTransport(localId, preferWifi);
 
         int sent = 0;
         while (sent < count) {
@@ -535,6 +544,12 @@ public class ConnectionManager implements IConnectionManager {
 
     @Override
     public CompletableFuture<Void> sendStreamDataAsync(int localId, byte[] buffer, int offset, int count) {
+        return sendStreamDataAsync(localId, buffer, offset, count,
+                count > CoreConfig.HYBRID_SMALL_THRESHOLD_BYTES);
+    }
+
+    @Override
+    public CompletableFuture<Void> sendStreamDataAsync(int localId, byte[] buffer, int offset, int count, boolean preferWifi) {
         if (disposed) {
             return CompletableFuture.failedFuture(new IllegalStateException("ConnectionManager is disposed."));
         }
@@ -555,9 +570,9 @@ public class ConnectionManager implements IConnectionManager {
                     "No peer route for localId " + localId));
         }
 
-        // Pin the stream to one transport and send every chunk over it (see sendStreamData). Resolving
-        // only blocks while Wi-Fi is first being brought up; afterwards it returns immediately.
-        final ITransport transport = resolveSendTransport(localId, count);
+        // Route this send to one transport and send every chunk over it (see sendStreamData).
+        // Resolving only blocks while Wi-Fi is first being brought up; afterwards it returns immediately.
+        final ITransport transport = resolveSendTransport(localId, preferWifi);
 
         List<byte[]> frames = new ArrayList<>();
         int sent = 0;
@@ -582,18 +597,18 @@ public class ConnectionManager implements IConnectionManager {
 
         Integer peerId = ConnectionContext.getInstance().getPeerIdFor(localId);
         if (peerId != null) {
-            // Send FIN over the link this stream is pinned to so it cannot overtake in-flight data on a
-            // different transport. Falls back to primary for a stream that was never written (empty
-            // close) or whose pinned link is gone (idle-disconnected and already drained).
-            ITransport pinned = pinnedTransportByStream.get(localId);
-            ITransport finTransport = (pinned != null && pinned.isConnected()) ? pinned : primaryTransport;
+            // Send FIN over the same link the stream last sent data on, so it cannot overtake that data
+            // on the other transport. Falls back to primary for a stream that was never written (empty
+            // close) or whose last link is gone (idle-disconnected and already drained).
+            ITransport last = lastTransportByStream.get(localId);
+            ITransport finTransport = (last != null && last.isConnected()) ? last : primaryTransport;
             byte[] finFrame = protocolHandler.buildFrame(peerId, new byte[0], CoreConfig.FLAG_FIN);
             try {
                 finTransport.sendRaw(finFrame).get();
             } catch (Exception ignored) {
             }
         }
-        pinnedTransportByStream.remove(localId);
+        lastTransportByStream.remove(localId);
         ConnectionContext.getInstance().releaseId(localId);
     }
 

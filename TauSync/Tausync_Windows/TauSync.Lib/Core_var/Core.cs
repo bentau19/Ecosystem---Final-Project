@@ -82,11 +82,13 @@ namespace TauSync.Core
         public const int SessionJoinAckTimeoutMs = 10_000;
 
         /// <summary>
-        /// Hybrid routing threshold (64 KB): payloads at or below this size are sent over the
-        /// Bluetooth (primary) transport; larger payloads trigger the lazy Wi-Fi connect and are
-        /// sent over Wi-Fi. The constant exists so the cutoff can be tuned without touching logic.
+        /// Hybrid routing threshold: payloads at or below this size go over the Bluetooth (primary)
+        /// transport; larger payloads trigger the lazy Wi-Fi connect and are sent over Wi-Fi. Set to
+        /// one byte below a full wire chunk so that any payload of <see cref="StreamChunkSize"/> (64 KB)
+        /// or more — including everything previously sent at the old 64 KB default — routes over Wi-Fi,
+        /// while smaller messages (strings, control) stay on Bluetooth.
         /// </summary>
-        public const int HybridSmallThresholdBytes = 65_536;
+        public const int HybridSmallThresholdBytes = StreamChunkSize - 1;
 
         /// <summary>
         /// Default chunk size for bulk file transfers (256 KB). Deliberately larger than

@@ -375,11 +375,32 @@ class TauSyncStream:
             return 0
         raw = bytes(data)
         arr = _to_dotnet_bytes(raw)
+        # Raw byte write carries no file/string semantics — let the library route by size
+        # (small → Bluetooth, large → Wi-Fi) in hybrid mode.
         self._stream.Write(arr, 0, len(raw))
+        return len(raw)
+
+    def _write_over(self, data: bytes, prefer_wifi: bool) -> int:
+        """Write *data* over an explicitly chosen transport (hybrid mode).
+
+        ``prefer_wifi`` True routes over Wi-Fi, False over Bluetooth.  This lets each
+        high-level method pick the link by its own semantics (``write_file`` → Wi-Fi,
+        ``write_string`` → Bluetooth) rather than by payload size.  In single-transport
+        mode (Wi-Fi-only or Bluetooth-only) the flag is ignored.
+        """
+        self._check_open()
+        if not data:
+            return 0
+        raw = bytes(data)
+        arr = _to_dotnet_bytes(raw)
+        self._stream.Write(arr, 0, len(raw), prefer_wifi)
         return len(raw)
 
     def write_string(self, text: str, encoding: str = "utf-8") -> int:
         """Encode *text* and write to the stream.
+
+        Strings are control/text traffic and are always sent over Bluetooth in hybrid
+        mode (never over Wi-Fi), regardless of length.
 
         Args:
             text: String to send.
@@ -396,7 +417,7 @@ class TauSyncStream:
             raise TypeError(
                 f"write_string() argument must be str, not {type(text).__name__}"
             )
-        return self.write(text.encode(encoding))
+        return self._write_over(text.encode(encoding), prefer_wifi=False)
 
     def flush(self) -> None:
         """Flush the underlying .NET stream's write buffer.
@@ -415,12 +436,10 @@ class TauSyncStream:
         Uses a single pinned .NET buffer for the whole transfer so memory
         stays constant regardless of file size.
 
-        The default ``chunk_size`` (256 KB) is deliberately larger than the
-        hybrid small-payload threshold (64 KB), so in hybrid Bluetooth+Wi-Fi
-        mode each file chunk is routed over the high-throughput Wi-Fi link
-        rather than Bluetooth.  Mirrors ``CoreConfig.LargeTransferChunkSize``.
-        Keep it strictly above the threshold or transfers fall back to
-        Bluetooth.
+        A file is bulk data and is always sent over the high-throughput Wi-Fi
+        link in hybrid Bluetooth+Wi-Fi mode (each chunk is flagged for Wi-Fi
+        explicitly, so routing no longer depends on ``chunk_size``).  In
+        single-transport mode the one available link is used.
 
         Args:
             path: Path to the file to send.
@@ -448,7 +467,7 @@ class TauSyncStream:
                     if not piece:
                         break
                     ctypes.memmove(buf_addr, piece, len(piece))
-                    self._stream.Write(buf, 0, len(piece))
+                    self._stream.Write(buf, 0, len(piece), True)  # files → Wi-Fi
                     total += len(piece)
             self._stream.Flush()
         finally:

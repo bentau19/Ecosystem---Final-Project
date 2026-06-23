@@ -40,13 +40,13 @@ namespace TauSync.Implementations.Management
         /// </summary>
         private readonly ConcurrentDictionary<string, byte> _inFlightWords = new();
         /// <summary>
-        /// The single transport each stream is pinned to. A stream chooses its transport on its first
-        /// data send and keeps it for life — data and FIN all travel one link. This is what makes a
-        /// hybrid transfer safe: the two transports have no mutual ordering at the receiver, so
-        /// splitting one logical stream across both would let frames overtake each other and corrupt
-        /// or truncate the data. One stream, one link, fully ordered.
+        /// The last transport each stream actually sent data over. Routing is decided per send by the
+        /// caller's Wi-Fi flag, so a stream may use Bluetooth for one write and Wi-Fi for the next — but
+        /// a single send is never split across both links (its frames all ride the one chosen link,
+        /// staying ordered). This map lets <see cref="CompleteStream"/> send the FIN over the same link
+        /// as the stream's final data, so the FIN cannot overtake that data on the other transport.
         /// </summary>
-        private readonly ConcurrentDictionary<int, ITransport> _pinnedTransportByStream = new();
+        private readonly ConcurrentDictionary<int, ITransport> _lastTransportByStream = new();
         private bool _disposed;
 
         public event EventHandler<Exception>? ErrorOccurred;
@@ -66,7 +66,16 @@ namespace TauSync.Implementations.Management
             }
             else
             {
-                Initialize(ctx.GetWifiTransport());
+                // Single-transport manager — used directly in Wi-Fi-only mode and by new_manager() to
+                // multiplex extra channels on the existing session. Bind to whichever transport is
+                // actually connected: in a hybrid session that is the always-on Bluetooth primary
+                // (Wi-Fi is lazy and usually down), otherwise the Wi-Fi socket. Binding to the lazy
+                // Wi-Fi link here is what made new_manager() fail with "Transport not connected"
+                // during a hybrid session.
+                ITransport bluetooth = ctx.GetBluetoothTransport();
+                Initialize(bluetooth != null && bluetooth.IsConnected()
+                    ? bluetooth
+                    : ctx.GetWifiTransport());
             }
         }
 
@@ -431,55 +440,43 @@ namespace TauSync.Implementations.Management
         }
 
         /// <summary>
-        /// Returns the transport a stream must use, pinning it on the first send. A stream whose first
-        /// write exceeds the size threshold is pinned to Wi-Fi; everything else stays on Bluetooth.
-        /// File transfers cross the threshold because the file helpers write chunks larger than it,
-        /// while small writes (strings, control) stay below — so the right link is chosen automatically.
-        /// Once pinned the choice never changes, except that a Wi-Fi link torn down for idle is revived
-        /// (or, if it cannot be, the stream falls back to Bluetooth).
+        /// Returns the transport for a single send, routing by the explicit <paramref name="preferWifi"/>
+        /// flag. A Wi-Fi send brings the link up on demand (running the WIFI_CONNECT handshake, or
+        /// reviving a link torn down for idle) and falls back to Bluetooth only if Wi-Fi cannot be
+        /// established; a Bluetooth send always uses the primary link. The chosen link is recorded as
+        /// the stream's last-used transport so its FIN follows the same socket (see
+        /// <see cref="CompleteStream"/>). Routing is per send by design — a stream may use Bluetooth for
+        /// one write and Wi-Fi for the next — but a single send is never split across both links.
         /// </summary>
-        private ITransport ResolveSendTransport(int localId, int count) =>
-            ResolveSendTransport(localId, count, async: false).GetAwaiter().GetResult();
+        private ITransport ResolveSendTransport(int localId, bool preferWifi) =>
+            ResolveSendTransport(localId, preferWifi, async: false).GetAwaiter().GetResult();
 
-        private async Task<ITransport> ResolveSendTransportAsync(int localId, int count) =>
-            await ResolveSendTransport(localId, count, async: true).ConfigureAwait(false);
+        private async Task<ITransport> ResolveSendTransportAsync(int localId, bool preferWifi) =>
+            await ResolveSendTransport(localId, preferWifi, async: true).ConfigureAwait(false);
 
-        private async Task<ITransport> ResolveSendTransport(int localId, int count, bool async)
+        private async Task<ITransport> ResolveSendTransport(int localId, bool preferWifi, bool async)
         {
             if (_hybrid == null)
-                return _primaryTransport!;
+                return _primaryTransport!;  // single transport (Wi-Fi-only or Bluetooth-only)
 
-            if (_pinnedTransportByStream.TryGetValue(localId, out ITransport? pinned))
-            {
-                // A stream pinned to Wi-Fi whose link was idle-disconnected: revive it so the stream
-                // stays on its link. The idle teardown only happens after the link has drained, so
-                // re-establishing (or, on failure, dropping to Bluetooth) cannot reorder live data.
-                if (ReferenceEquals(pinned, _secondaryTransport) && !pinned.IsConnected())
-                {
-                    ITransport revived = async
-                        ? await _hybrid.AcquireWifiOrFallbackAsync().ConfigureAwait(false)
-                        : _hybrid.AcquireWifiOrFallback();
-                    _pinnedTransportByStream[localId] = revived;
-                    return revived;
-                }
-                return pinned;
-            }
+            ITransport chosen = preferWifi
+                ? (async ? await _hybrid.AcquireWifiOrFallbackAsync().ConfigureAwait(false)
+                         : _hybrid.AcquireWifiOrFallback())
+                : _primaryTransport!;
 
-            bool large = count > CoreConfig.HybridSmallThresholdBytes;
-            ITransport chosen;
-            if (large)
-                chosen = async
-                    ? await _hybrid.AcquireWifiOrFallbackAsync().ConfigureAwait(false)
-                    : _hybrid.AcquireWifiOrFallback();
-            else
-                chosen = _primaryTransport!;
-
-            _pinnedTransportByStream[localId] = chosen;
+            // Record the link this stream last used so its FIN follows the same socket.
+            _lastTransportByStream[localId] = chosen;
             return chosen;
         }
 
         /// <inheritdoc />
-        public void SendStreamData(int localId, byte[] buffer, int offset, int count)
+        public void SendStreamData(int localId, byte[] buffer, int offset, int count) =>
+            // No explicit hint (e.g. a raw DuplexStream write with no semantics): fall back to size —
+            // a payload at or above a full wire chunk is treated as large and routed over Wi-Fi.
+            SendStreamData(localId, buffer, offset, count, count > CoreConfig.HybridSmallThresholdBytes);
+
+        /// <inheritdoc />
+        public void SendStreamData(int localId, byte[] buffer, int offset, int count, bool preferWifi)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(ConnectionManager));
@@ -497,9 +494,9 @@ namespace TauSync.Implementations.Management
                 throw new InvalidOperationException(
                     $"No peer route for localId {localId}. Handshake may not have completed; do not write before Connect(word) finishes.");
 
-            // Pin the stream to one transport (Wi-Fi if large/flagged, else Bluetooth) and send every
-            // chunk over it. One stream uses one link for life, so frames stay ordered at the receiver.
-            ITransport transport = ResolveSendTransport(localId, count);
+            // Route this send to one transport (Wi-Fi when flagged, else Bluetooth) and send every wire
+            // frame over it, so the send is never split across links and its frames stay ordered.
+            ITransport transport = ResolveSendTransport(localId, preferWifi);
 
             int sent = 0;
             while (sent < count)
@@ -514,7 +511,12 @@ namespace TauSync.Implementations.Management
         }
 
         /// <inheritdoc />
-        public async Task SendStreamDataAsync(int localId, byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        public Task SendStreamDataAsync(int localId, byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            SendStreamDataAsync(localId, buffer, offset, count,
+                count > CoreConfig.HybridSmallThresholdBytes, cancellationToken);
+
+        /// <inheritdoc />
+        public async Task SendStreamDataAsync(int localId, byte[] buffer, int offset, int count, bool preferWifi, CancellationToken cancellationToken)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(ConnectionManager));
@@ -532,8 +534,8 @@ namespace TauSync.Implementations.Management
                 throw new InvalidOperationException(
                     $"No peer route for localId {localId}. Handshake may not have completed; do not write before Connect(word) finishes.");
 
-            // Pin the stream to one transport and send every chunk over it (see SendStreamData).
-            ITransport transport = await ResolveSendTransportAsync(localId, count).ConfigureAwait(false);
+            // Route this send to one transport and send every chunk over it (see SendStreamData).
+            ITransport transport = await ResolveSendTransportAsync(localId, preferWifi).ConfigureAwait(false);
 
             int sent = 0;
             while (sent < count)
@@ -559,16 +561,24 @@ namespace TauSync.Implementations.Management
             int? peerId = ConnectionContext.Instance.GetPeerIdFor(localId);
             if (peerId != null)
             {
-                // Send FIN over the link this stream is pinned to so it cannot overtake in-flight data
-                // on a different transport. Falls back to primary for a stream that was never written
-                // (empty close) or whose pinned link is gone (idle-disconnected and already drained).
-                ITransport finTransport = _pinnedTransportByStream.TryGetValue(localId, out ITransport? pinned) && pinned.IsConnected()
-                    ? pinned
+                // Send FIN over the same link the stream last sent data on, so it cannot overtake that
+                // data on the other transport. Falls back to primary for a stream that was never written
+                // (empty close) or whose last link is gone (idle-disconnected and already drained).
+                ITransport finTransport = _lastTransportByStream.TryGetValue(localId, out ITransport? last) && last.IsConnected()
+                    ? last
                     : _primaryTransport;
                 byte[] finFrame = _protocolHandler.BuildFrame(peerId.Value, Array.Empty<byte>(), CoreConfig.FlagFin);
-                finTransport.SendRaw(finFrame).GetAwaiter().GetResult();
+                try
+                {
+                    finTransport.SendRaw(finFrame).GetAwaiter().GetResult();
+                }
+                catch
+                {
+                    // Best-effort: close must never throw. If the FIN cannot be delivered (link
+                    // dropping mid-close), the peer tears the channel down on its own.
+                }
             }
-            _pinnedTransportByStream.TryRemove(localId, out _);
+            _lastTransportByStream.TryRemove(localId, out _);
             ConnectionContext.Instance.ReleaseId(localId);
         }
 
@@ -635,7 +645,7 @@ namespace TauSync.Implementations.Management
     /// Duplex stream: read from a backing stream (e.g. BackBufferedStream), write sends TPack with TargetID = peer for the given localId.
     /// On dispose, sends FIN and releases the local ID.
     /// </summary>
-    internal sealed class DuplexStream : Stream
+    public sealed class DuplexStream : Stream
     {
         private readonly Stream _readStream;
         private readonly int _localId;
@@ -677,17 +687,33 @@ namespace TauSync.Implementations.Management
         {
             if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
             if (_finSent || count <= 0) return;
-            // Pass the full count so SendStreamData can make a single routing decision
-            // (small → BT, large → Wi-Fi) before chunking for the wire.
-            _connectionManager.SendStreamData(_localId, buffer, offset, count);
+            // A raw stream write carries no file/string semantics — route by size: a payload at or
+            // above a full wire chunk is large → Wi-Fi, smaller → Bluetooth. The manager chunks for
+            // the wire after choosing the link.
+            _connectionManager.SendStreamData(_localId, buffer, offset, count,
+                count > CoreConfig.HybridSmallThresholdBytes);
+        }
+
+        /// <summary>
+        /// Sends over an explicitly chosen transport in hybrid mode: <paramref name="preferWifi"/>
+        /// true → Wi-Fi, false → Bluetooth. The Python SDK calls this so each high-level method routes
+        /// by its own semantics (write_file → Wi-Fi, write_string → Bluetooth) instead of by payload
+        /// size; the plain <see cref="Write(byte[],int,int)"/> stays size-based for raw byte writes.
+        /// </summary>
+        public void Write(byte[] buffer, int offset, int count, bool preferWifi)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
+            if (_finSent || count <= 0) return;
+            _connectionManager.SendStreamData(_localId, buffer, offset, count, preferWifi);
         }
 
         public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
             if (_finSent || count <= 0) return;
-            // Same rationale as Write — routing on full count, chunking inside SendStreamDataAsync.
-            await _connectionManager.SendStreamDataAsync(_localId, buffer, offset, count, cancellationToken)
+            // Same rationale as Write — route by size, chunk inside SendStreamDataAsync.
+            await _connectionManager.SendStreamDataAsync(_localId, buffer, offset, count,
+                    count > CoreConfig.HybridSmallThresholdBytes, cancellationToken)
                 .ConfigureAwait(false);
         }
 

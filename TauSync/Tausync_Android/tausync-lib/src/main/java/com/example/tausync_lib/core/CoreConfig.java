@@ -86,11 +86,13 @@ public final class CoreConfig {
     public static final int SESSION_JOIN_ACK_TIMEOUT_MS = 10_000;
 
     /**
-     * Hybrid routing threshold (64 KB): payloads at or below this size are sent over the
-     * Bluetooth (primary) transport; larger payloads trigger the lazy Wi-Fi connect and are
-     * sent over Wi-Fi. The constant exists so the cutoff can be tuned without touching logic.
+     * Hybrid routing threshold: payloads at or below this size go over the Bluetooth (primary)
+     * transport; larger payloads trigger the lazy Wi-Fi connect and are sent over Wi-Fi. Set to one
+     * byte below a full wire chunk so that any payload of {@link #STREAM_CHUNK_SIZE} (64 KB) or more —
+     * including everything previously sent at the old 64 KB default — routes over Wi-Fi, while smaller
+     * messages (strings, control) stay on Bluetooth.
      */
-    public static final int HYBRID_SMALL_THRESHOLD_BYTES = 65_536;
+    public static final int HYBRID_SMALL_THRESHOLD_BYTES = STREAM_CHUNK_SIZE - 1;
 
     /**
      * Default chunk size for bulk file transfers (256 KB). Deliberately larger than

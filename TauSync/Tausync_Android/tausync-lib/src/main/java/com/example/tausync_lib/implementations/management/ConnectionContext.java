@@ -91,6 +91,17 @@ public final class ConnectionContext {
      */
     private volatile String peerWifiHost = null;
 
+    /**
+     * The Bluetooth (primary) transport of an active hybrid session, registered by the hybrid
+     * {@link ConnectionManager} when it connects. Lets a secondary manager from {@code newManager()}
+     * bind to the always-on Bluetooth link instead of the lazy (usually disconnected) Wi-Fi socket
+     * while a hybrid session is up — without it, {@code newManager().connect(word)} fails with
+     * "Transport not connected". Unlike {@link #wifiTransport} it is not created here (the Android
+     * {@link com.example.tausync_lib.implementations.transport.BluetoothTransport} needs a Context),
+     * so it is registered after connect and cleared by {@link #reset()}.
+     */
+    private volatile ITransport bluetoothTransport = null;
+
     private ConnectionContext() {
         wifiTransport = new SocketTransport();
     }
@@ -158,6 +169,16 @@ public final class ConnectionContext {
 
     public SocketTransport getWifiTransportAsSocket() {
         return wifiTransport;
+    }
+
+    /** Registers the active hybrid session's Bluetooth transport (see {@link #bluetoothTransport}). */
+    public void setBluetoothTransport(ITransport transport) {
+        this.bluetoothTransport = transport;
+    }
+
+    /** @return the active hybrid session's Bluetooth transport, or null in Wi-Fi-only mode. */
+    public ITransport getBluetoothTransport() {
+        return bluetoothTransport;
     }
 
     /**
@@ -327,6 +348,7 @@ public final class ConnectionContext {
         pendingDiscoveryByWord.clear();
         sessionToken = null;
         peerWifiHost = null;
+        bluetoothTransport = null;
         nextCorrelationId.set(CoreConfig.MIN_ID);
     }
 
