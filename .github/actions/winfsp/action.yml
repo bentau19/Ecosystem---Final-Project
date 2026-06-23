@@ -1,0 +1,13 @@
+name: WinFSP Installer
+description: Download and install WinFSP 2.0 (Windows Filesystem Proxy)
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install WinFSP
+      shell: powershell
+      run: |
+        $url = "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi"
+        $tempPath = "$env:TEMP\winfsp.msi"
+        Invoke-WebRequest -Uri $url -OutFile $tempPath
+        Start-Process msiexec.exe -ArgumentList "/i $tempPath /quiet /norestart" -Wait

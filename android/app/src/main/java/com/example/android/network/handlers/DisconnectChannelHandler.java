@@ -37,10 +37,19 @@ public class DisconnectChannelHandler implements ChannelHandler {
     public void onPeerRequest() {
         try {
             Log.d(TAG, "[Disconnect] Attempting to read disconnect signal from PC");
-            Log.d(TAG, "[Disconnect-val] SessionChannels.DISCONNECT_FROM_PC.getValue()");
 
             String disconnectSignal = transportManager.readFromChannel(SessionChannels.DISCONNECT_FROM_PC.getValue());
             Log.d(TAG, "[Disconnect] Signal received from PC: '" + disconnectSignal + "'");
+
+            // Stop the polling executor NOW — before the PC closes the TCP socket.
+            // After this read the PC will immediately close the connection; the next
+            // polling tick would throw → handlePollingFailure() sees status==CONNECTED
+            // → attemptConnection() → spurious auto-reconnect.
+            // prepareForDisconnect() sets status=DISCONNECTING and awaits any in-flight
+            // tick (via awaitTermination) so handlePollingFailure() can no longer fire
+            // with a stale CONNECTED status.
+            transportManager.prepareForDisconnect();
+            Log.d(TAG, "[Disconnect] Polling stopped, proceeding with cleanup");
 
             // Disconnect from the repository (sets RemotePC to null)
             repository.disconnect();

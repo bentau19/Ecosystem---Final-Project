@@ -6,7 +6,11 @@ a = Analysis(
     # Adding it to pathex lets PyInstaller trace imports from classifer,
     # image_classifer, detector, file_duplicates, etc. at analysis time.
     pathex=[os.path.normpath(os.path.join(SPECPATH, '..', '..', '..', '..', 'FileDetection'))],
-    binaries=[("../../../native/windows/pipe/*.pyd", "native/windows/pipe")],
+    binaries=[
+        ("../../../native/windows/pipe/*.pyd", "native/windows/pipe"),
+        ("../../../native/windows/virtual_drive/build/Release/VirtualDrive.exe",
+         "native/windows/virtual_drive"),
+    ],
     datas=[("../../../data/", "data/"),
            ("../../../resources/", "resources/"),
            ("../../../serializers/schemas/", "serializers/schemas/"),

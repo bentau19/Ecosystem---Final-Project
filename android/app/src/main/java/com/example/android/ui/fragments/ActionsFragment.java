@@ -40,9 +40,14 @@ public class ActionsFragment extends Fragment {
     private RecyclerView toolsRecyclerView;
     private List<ToolItem> toolList;
 
+    // Placeholder PC name set by ConnectivityService until the real name arrives over TauSync.
+    private static final String PC_NAME_PLACEHOLDER = "PC";
+
     // UI Components
     private TextView deviceNameText, statusText;
     private View statusDot, btnSettings, btnDisconnect;
+    private View progressDisconnecting, tvDisconnectingLabel;
+    private View statusRow, pcInfoRow;
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
@@ -67,7 +72,14 @@ public class ActionsFragment extends Fragment {
             if (state.isConnected()) {
                 RemoteDeviceInfo pc = state.getRemotePC();
                 android.util.Log.d("ActionsFragment", "Connected! PC Name: " + pc.getPcName() + ", IP: " + pc.getPcIp());
-                deviceNameText.setText(pc.getPcName());
+
+                // While the PC name is still the placeholder, the basic info hasn't arrived
+                // over TauSync yet — show a spinner instead of the (meaningless) "PC" header.
+                boolean pcInfoLoaded = !PC_NAME_PLACEHOLDER.equals(pc.getPcName());
+                pcInfoRow.setVisibility(pcInfoLoaded ? View.GONE : View.VISIBLE);
+                statusRow.setVisibility(pcInfoLoaded ? View.VISIBLE : View.GONE);
+
+                deviceNameText.setText(pcInfoLoaded ? pc.getPcName() : "");
                 statusText.setText("Connected via " + pc.getConnectionType() + " (" + pc.getPcIp()+")");
                 statusDot.setBackgroundResource(R.drawable.green_dot);
                 updateUIState(view, true);
@@ -92,6 +104,11 @@ public class ActionsFragment extends Fragment {
             boolean disconnecting = status == ConnectionStatus.DISCONNECTING;
             btnDisconnect.setEnabled(!disconnecting);
             btnDisconnect.setAlpha(disconnecting ? 0.4f : 1.0f);
+
+            // Surface an indeterminate progress bar while the disconnect frame is in flight.
+            int progressVisibility = disconnecting ? View.VISIBLE : View.GONE;
+            progressDisconnecting.setVisibility(progressVisibility);
+            tvDisconnectingLabel.setVisibility(progressVisibility);
         });
 
         // 6. Disconnect Button: Requests termination of the active session
@@ -113,6 +130,10 @@ public class ActionsFragment extends Fragment {
         statusDot = view.findViewById(R.id.statusDot);
         btnSettings = view.findViewById(R.id.btnSettings);
         btnDisconnect = view.findViewById(R.id.btnDisconnect);
+        progressDisconnecting = view.findViewById(R.id.progressDisconnecting);
+        tvDisconnectingLabel = view.findViewById(R.id.tvDisconnectingLabel);
+        statusRow = view.findViewById(R.id.statusRow);
+        pcInfoRow = view.findViewById(R.id.pcInfoRow);
     }
 
     /**
