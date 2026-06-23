@@ -88,9 +88,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: |
-            desktop/installer/Package/bin/Release/*.msi
-            desktop/installer/Bundle/bin/Release/SyncDoseSetup.exe
+          path: desktop/installer/Bundle/bin/*/Release/SyncDoseSetup.exe
 
   # =========================
   # ANDROID BUILD
