@@ -1,5 +1,6 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v7/wxs"
-     xmlns:bal="http://wixtoolset.org/schemas/v7/wxs/bal">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <Bundle Name="SyncDose"
           Version="1.0.0.0"
@@ -12,6 +13,22 @@
         Theme="hyperlinkLicense" />
     </BootstrapperApplication>
 
+    <!-- Detects whether .NET 8 x64 Runtime is already installed -->
+    <util:DotNetCoreSearch
+        Id="DotNet8Check"
+        RuntimeType="dotnet"
+        Platform="x64"
+        MajorVersion="8"
+        Variable="DotNet8Installed" />
+
+    <!-- Detects whether WinFSP is already installed -->
+    <util:RegistrySearch
+        Id="WinFspCheck"
+        Root="HKLM"
+        Key="Software\WinFsp"
+        Value="InstallDir"
+        Variable="WinFspInstalled" />
+
     <Chain>
 
       <!-- Install .NET 8 Runtime if missing (required by TauSync C# library via pythonnet) -->
@@ -20,11 +37,13 @@
                   InstallArguments="/install /quiet /norestart"
                   RepairArguments="/repair /quiet /norestart"
                   UninstallArguments="/uninstall /quiet /norestart"
+                  DetectCondition="DotNet8Installed"
                   Vital="yes" />
 
       <!-- Install WinFSP if missing (required for Virtual Drive feature via VirtualDrive.exe) -->
       <MsiPackage Id="WinFspMsi"
                    SourceFile="winfsp-2.0.23075.msi"
+                   DetectCondition="WinFspInstalled"
                    Vital="yes" />
 
       <!-- Main SyncDose application installer -->
