@@ -8,7 +8,16 @@ a = Analysis(
     pathex=[os.path.normpath(os.path.join(SPECPATH, '..', '..'))],
     binaries=[("../../../native/windows/pipe/*.pyd", "native/windows/pipe")],
 
-    datas=[("../../../resources/", "resources/")],
+    datas=[("../../../resources/", "resources/"),
+           # Ship the native package __init__.py files ON DISK next to the
+           # pipe_module.pyd. PyInstaller would otherwise keep them only in the
+           # PYZ archive, leaving the on-disk native/windows/pipe/ folder (which
+           # holds just the .pyd) to be picked up as a *namespace package*. That
+           # shadows the real package, so __init__.py never runs and you get:
+           #   ImportError: cannot import name 'Client' ... (unknown location)
+           ("../../../native/__init__.py", "native"),
+           ("../../../native/windows/__init__.py", "native/windows"),
+           ("../../../native/windows/pipe/__init__.py", "native/windows/pipe")],
     hiddenimports=["native", "native.windows", "native.windows.pipe", "native.windows.pipe.pipe_module"],
     hookspath=[],
     hooksconfig={},

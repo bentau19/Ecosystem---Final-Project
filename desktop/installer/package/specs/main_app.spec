@@ -14,6 +14,13 @@ a = Analysis(
     datas=[("../../../data/", "data/"),
            ("../../../resources/", "resources/"),
            ("../../../serializers/schemas/", "serializers/schemas/"),
+           # See file_handler.spec: ship native/* __init__.py on disk next to
+           # pipe_module.pyd so native.windows.pipe is a real package at runtime
+           # (otherwise the on-disk dir is treated as a namespace package and
+           # `from native import Server` fails with "(unknown location)").
+           ("../../../native/__init__.py", "native"),
+           ("../../../native/windows/__init__.py", "native/windows"),
+           ("../../../native/windows/pipe/__init__.py", "native/windows/pipe"),
            ("../../../../TauSync/windows/tausync_py/dll/", "tausync_py/dll/"),
            # FileDetection — bundled so the frozen exe can find classifer,
            # image_classifer, detector, file_duplicates, etc. at runtime.

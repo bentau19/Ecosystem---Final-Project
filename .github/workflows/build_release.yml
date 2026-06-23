@@ -160,5 +160,5 @@ jobs:
           name: "SyncDose ${{ github.ref_name }}"
           generate_release_notes: true   # auto-generates changelog from commits since last tag
           files: |
-            artifacts/windows/**/*.msi
+            artifacts/windows/**/SyncDoseSetup.exe
             artifacts/android/**/*.apk
