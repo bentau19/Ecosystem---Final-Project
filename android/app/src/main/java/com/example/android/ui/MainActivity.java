@@ -190,11 +190,17 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Navigates to the Actions dashboard if not already there.
+     *
+     * Skips navigation when the back stack is non-empty: that means the user
+     * is inside a sub-screen (WebcamFragment, BackupFragment, …) that sits on
+     * top of ActionsFragment. This prevents LiveData re-delivery on rotation
+     * from wiping the sub-screen and jumping back to ActionsFragment.
      */
     public void navigateToActions() {
-        if (!(getSupportFragmentManager().findFragmentById(R.id.fragment_container) instanceof ActionsFragment)) {
-            replaceFragment(new ActionsFragment());
-        }
+        FragmentManager fm = getSupportFragmentManager();
+        if (fm.getBackStackEntryCount() > 0) return;
+        if (fm.findFragmentById(R.id.fragment_container) instanceof ActionsFragment) return;
+        replaceFragment(new ActionsFragment());
     }
 
     /**

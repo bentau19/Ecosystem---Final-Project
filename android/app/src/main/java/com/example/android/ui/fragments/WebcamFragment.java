@@ -1,6 +1,7 @@
 package com.example.android.ui.fragments;
 
 import android.Manifest;
+import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Matrix;
@@ -59,6 +60,7 @@ public class WebcamFragment extends Fragment {
     private ExecutorService cameraExecutor;
     private ActivityResultLauncher<String> requestPermissionLauncher;
     private boolean useFrontCamera = false;
+    private ImageAnalysis imageAnalysis;
 
     // Throttle outbound frames to 15 fps so the Desktop pyvirtualcam (also 15 fps)
     // never accumulates a TCP backlog that would cause latency to grow over time.
@@ -165,12 +167,13 @@ public class WebcamFragment extends Fragment {
                     new Size(640, 480),
                     ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
                 );
-                ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
+                imageAnalysis = new ImageAnalysis.Builder()
                     .setResolutionSelector(new ResolutionSelector.Builder()
                         .setResolutionStrategy(resStrategy)
                         .build())
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setTargetRotation(requireView().getDisplay().getRotation())
                     .build();
                 imageAnalysis.setAnalyzer(cameraExecutor, this::processFrame);
 
@@ -237,6 +240,14 @@ public class WebcamFragment extends Fragment {
             }
         } finally {
             imageProxy.close(); // must always be called or CameraX stalls
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(@NonNull Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (imageAnalysis != null && getView() != null) {
+            imageAnalysis.setTargetRotation(requireView().getDisplay().getRotation());
         }
     }
 
