@@ -427,6 +427,43 @@ ui/ShareReceiverActivity.java
 
 ---
 
+## Camera Mirror (Webcam Streaming)
+
+Streams the phone camera to the PC as a virtual webcam over TauSync, so the phone can act as a high-quality webcam in video calls or OBS.
+
+### Flow
+
+1. The user navigates to the Camera Mirror screen. A live preview is shown immediately via CameraX `Preview`.
+2. The user taps **Start Streaming**. `WebcamViewModel` transitions to `STREAMING` status.
+3. A `CameraX ImageAnalysis` use case captures frames in `RGBA_8888` format, capped at 640×480 to avoid OOM.
+4. Each frame is rotated to match the device's display orientation using `getRotationDegrees()`, compressed to JPEG at 70% quality, and pushed into `WebcamRepository.frameQueue`.
+5. A 15 fps throttle gate ensures the send rate matches the desktop's `pyvirtualcam` consumption rate, preventing TCP buffer buildup and latency growth.
+6. `WebcamStreamUseCase` reads frames from the queue and sends them over the `webcam_frames` TauSync channel using a 4-byte big-endian length prefix followed by the JPEG bytes.
+7. On the desktop, `WebcamService` decodes each JPEG, pads it to 640×480 preserving aspect ratio (pillarbox/letterbox), and pushes the frame to the OBS Virtual Camera via `pyvirtualcam`.
+
+### Camera Selection
+
+The **Flip Camera** button in the top-right corner of the screen toggles between the back camera (default) and the front camera without interrupting any active stream.
+
+### TauSync Channels Used
+
+| Channel enum | Wire value | Direction | Purpose |
+|---|---|---|---|
+| `WEBCAM_START` | `webcam_start` | Android → PC | Handshake — signals PC to open the virtual camera |
+| `WEBCAM_FRAMES` | `webcam_frames` | Android → PC | Continuous JPEG frame stream (length-prefixed) |
+
+### Frame Wire Format
+
+```
+[4 bytes big-endian uint32 = JPEG size][N bytes JPEG data]
+```
+
+### Prerequisites (Desktop)
+
+The PC must have the **OBS Virtual Camera** driver installed (`OBS-VirtualCam` or bundled with OBS Studio). `pyvirtualcam` uses this driver to expose the phone's feed as a system webcam.
+
+---
+
 ## Device Info Flow
 
 After a successful connection, Android sends initial device information to the desktop:
