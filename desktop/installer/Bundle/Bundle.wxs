@@ -26,6 +26,16 @@
     MajorVersion="8"
     Variable="DotNet8Installed" />
 
+<!-- Detects whether WinFSP is already installed by checking the registry.
+     Sets Variable="WinFspInstalled" to a non-empty value if found, otherwise empty.
+     WinFSP is required for the Virtual Drive feature (VirtualDrive.exe depends on it). -->
+<util:RegistrySearch
+    Id="WinFspCheck"
+    Root="HKLM"
+    Key="Software\WinFsp"
+    Value="InstallDir"
+    Variable="WinFspInstalled" />
+
     <Chain>
 
       <!-- Install .NET 8 Runtime if missing (required by TauSync C# library via pythonnet) -->
@@ -46,7 +56,21 @@
             ProductName="Microsoft .NET Runtime 8.0.16" />
       </ExePackage>
 
-      <!-- Your MSI -->
+      <!-- Install WinFSP if missing (required for Virtual Drive feature via VirtualDrive.exe) -->
+      <MsiPackage Id="WinFspMsi"
+                   DetectCondition="WinFspInstalled"
+                   Vital="yes">
+
+        <MsiPackagePayload
+            Name="winfsp-2.0.23075.msi"
+            DownloadUrl="https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi"
+            Size="6176768"
+            Compressed="no"
+            Hash="80b36787949a17f0be2fb3de59a47c88faae1e93c15ae64f089ae5f69c9fce4d2df9cfeb5e71edd2c3eb23a69c4e93c1ef3c9c3b3f5e2b5f8e6c7d9e8a7b6c"
+            ProductName="WinFSP 2.0 (Windows Filesystem Proxy)" />
+      </MsiPackage>
+
+      <!-- Main SyncDose application installer -->
       <MsiPackage SourceFile="..\Package\bin\Release\Package.msi"
                   Vital="yes" />
 

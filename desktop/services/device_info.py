@@ -238,14 +238,14 @@ class DeviceInfoService(QObject):
             )
             self._save(entity)
 
-            # Send PC name to the connected Android device on a background thread.
-            if self._is_running.is_set():
-                self._executor.submit(self._send_pc_name)
-            # device_info_ready is emitted from _save (after the DB write) — not here.
         except Exception as exc:
             self.read_error.emit(str(exc))
 
-    def _send_pc_name(self) -> None:
+    def send_pc_name(self) -> None:
+        self._executor.submit(self._send_pc_name)
+
+
+    def _send_pc_name(self):
         # Send PC name to the connected Android device.
         # Runs on a background thread so it doesn't block the main device info read.
         tau = self._connectivity.tau
@@ -253,6 +253,6 @@ class DeviceInfoService(QObject):
             return
         try:
             pc_name = utils.network.get_pc_name()
-            utils.network.write_string_to_channel(tau, DeviceInfoChannels.PC_NAME.value, pc_name)
+            utils.network.write_string_to_channel(tau, DeviceInfoChannels.PC_NAME.value, pc_name, self._CHANNEL_TIMEOUT)
         except Exception as e:
             logger.warning("Failed to send PC name to Android: %s", e)

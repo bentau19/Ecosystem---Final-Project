@@ -1,12 +1,15 @@
 from PySide6.QtCore import Slot
 from PySide6.QtGui import QHideEvent, QShowEvent
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QApplication
+    QWidget, QHBoxLayout, QVBoxLayout
 )
 
 import resources_qrc  # noqa: F401
 from app.app_state import app_state
+from app.navigation_manager import navigation_manager
+from app.theme_manager import theme_manager
 from domain.dto.device_info import DeviceInfoDTO
+from enums.screen import Screen
 from resources.spacing import Spacing
 from views.widgets.dashboard.dashboard_content import DashboardContent
 from views.widgets.divider import Divider
@@ -95,8 +98,14 @@ class DashboardScreen(QWidget):
         vm.device_disconnecting.connect(self._on_device_disconnecting)
         # device_disconnected → navigation (Topbar._move_to_login) → hideEvent
         # handles cleanup; no direct connection to overlay.stop needed here.
+        vm.device_disconnected.connect(self._move_to_login)
 
     # ── Slots ─────────────────────────────────────────────────────────────────
+
+    @Slot()
+    def _move_to_login(self) -> None:
+        # Navigate back to the login screen after the device disconnects.
+        navigation_manager.go_to_screen(Screen.LOGIN)
 
     @Slot(object)
     def _on_device_infos_updated(self, infos: list[DeviceInfoDTO]) -> None:
@@ -152,4 +161,3 @@ class DashboardScreen(QWidget):
         super().hideEvent(event)
         self._is_disconnecting = False
         self._loading_overlay.hide()
-

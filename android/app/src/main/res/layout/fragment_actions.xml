@@ -23,6 +23,33 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent" />
 
+    <!-- Disconnect progress: shown while DISCONNECTING is in flight -->
+    <TextView
+        android:id="@+id/tvDisconnectingLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:text="@string/disconnecting_label"
+        android:textColor="@color/text_muted"
+        android:textSize="12sp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/btnDisconnect"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <com.google.android.material.progressindicator.LinearProgressIndicator
+        android:id="@+id/progressDisconnecting"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="24dp"
+        android:indeterminate="true"
+        android:visibility="gone"
+        app:indicatorColor="@color/accent_cyan"
+        app:trackColor="@color/border_color"
+        app:layout_constraintBottom_toTopOf="@id/tvDisconnectingLabel"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
     <androidx.core.widget.NestedScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -69,6 +96,7 @@
                 </LinearLayout>
 
                 <LinearLayout
+                    android:id="@+id/statusRow"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
@@ -88,6 +116,34 @@
                         android:layout_height="wrap_content"
                         android:text="Connected via WiFi"
                         android:textColor="@color/status_green"
+                        android:textSize="14sp" />
+                </LinearLayout>
+
+                <!-- Shown while connected but still waiting for the PC's basic info (name). -->
+                <LinearLayout
+                    android:id="@+id/pcInfoRow"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:visibility="gone">
+
+                    <com.google.android.material.progressindicator.CircularProgressIndicator
+                        android:id="@+id/progressPcInfo"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="10dp"
+                        android:indeterminate="true"
+                        app:indicatorColor="@color/accent_cyan"
+                        app:indicatorSize="18dp"
+                        app:trackThickness="2dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/getting_pc_info_label"
+                        android:textColor="@color/text_muted"
                         android:textSize="14sp" />
                 </LinearLayout>
             </LinearLayout>

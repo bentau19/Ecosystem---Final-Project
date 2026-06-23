@@ -56,7 +56,7 @@ class DeviceViewModel(QObject):
     connection_error: Signal = Signal(str)
     """Emitted when the TCP listener crashes — forwarded from ConnectivityService.connection_error."""
 
-    _TEN_MINUTES: int = 10 * 60 * 1000
+    _ONE_MINUTES: int = 60 * 1000
 
     def __init__(
             self,
@@ -79,13 +79,13 @@ class DeviceViewModel(QObject):
         self._device_info_service: DeviceInfoService = device_info_service
 
         self._connectivity_service.device_connected.connect(self._on_device_connected)
-        self._connectivity_service.device_disconnecting.connect(self.device_disconnecting.emit)
+        self._connectivity_service.device_disconnecting.connect(self.device_disconnecting)
         self._connectivity_service.device_disconnected.connect(self._on_device_disconnected)
-        self._connectivity_service.connection_error.connect(self.connection_error.emit)
+        self._connectivity_service.connection_error.connect(self.connection_error)
         self._device_info_service.device_info_ready.connect(self._on_device_info_ready)
         self._device_info_service.device_fetched.connect(self._on_device_fetched)
         self._device_info_service.all_devices_fetched.connect(self._on_all_devices_fetched)
-        self._device_info_service.read_error.connect(self.device_info_error.emit)
+        self._device_info_service.read_error.connect(self.device_info_error)
 
         # Start connectivity immediately so it listens before any device connects.
         # DeviceInfoService also starts at launch — its DB read methods
@@ -100,7 +100,7 @@ class DeviceViewModel(QObject):
 
         self._refresh_timer: QTimer = QTimer(self)
         self._refresh_timer.timeout.connect(self._request_device_info_refresh)
-        self._refresh_timer.start(self._TEN_MINUTES)
+        self._refresh_timer.start(self._ONE_MINUTES)
 
         self._current_device_connected_id: str = ""
 
@@ -222,8 +222,9 @@ class DeviceViewModel(QObject):
         # connectivity.start() is safe here: ConnectivityService emits
         # device_disconnected only after its own executor is fully drained,
         # so this restart can never race the previous shutdown.
-        self._device_info_service.restart()
+        # self._device_info_service.stop()
         self._connectivity_service.start()
+        # self._device_info_service.start()
         self.device_disconnected.emit()
 
     # ── Conversion ────────────────────────────────────────────────────────────
