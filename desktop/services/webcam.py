@@ -10,9 +10,9 @@ from PySide6.QtCore import QObject, Signal
 from domain.enums.webcam_channels import WebcamChannels
 from services.connectivity import ConnectivityService
 
-_WIDTH = 640
-_HEIGHT = 480
-_FPS = 15
+_WIDTH = 1280
+_HEIGHT = 720
+_FPS = 24
 
 
 class WebcamService(QObject):

@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -53,6 +54,7 @@ import java.util.concurrent.Executors;
 public class WebcamFragment extends Fragment {
 
     private WebcamViewModel webcamViewModel;
+    private FrameLayout rootContainer;   // host whose child layout is swapped on rotation
     private PreviewView previewView;
     private AppCompatButton btnStream;
     private TextView tvStatus;
@@ -62,9 +64,9 @@ public class WebcamFragment extends Fragment {
     private boolean useFrontCamera = false;
     private ImageAnalysis imageAnalysis;
 
-    // Throttle outbound frames to 15 fps so the Desktop pyvirtualcam (also 15 fps)
+    // Throttle outbound frames to 24 fps so the Desktop pyvirtualcam (also 24 fps)
     // never accumulates a TCP backlog that would cause latency to grow over time.
-    private static final long FRAME_INTERVAL_MS = 1000L / 15; // 66 ms
+    private static final long FRAME_INTERVAL_MS = 1000L / 24; // ~42 ms
     private long lastQueuedFrameMs = 0;
 
     @Override
@@ -90,17 +92,51 @@ public class WebcamFragment extends Fragment {
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container,
                              Bundle savedInstanceState) {
-        View view = inflater.inflate(R.layout.fragment_webcam, container, false);
-
         webcamViewModel = new ViewModelProvider(requireActivity()).get(WebcamViewModel.class);
-        previewView   = view.findViewById(R.id.previewView);
-        btnStream     = view.findViewById(R.id.btnStream);
-        tvStatus      = view.findViewById(R.id.tvStatus);
 
-        view.findViewById(R.id.btnBack).setOnClickListener(v ->
+        // The fragment's view is a stable container; its child is the orientation-
+        // specific layout, re-inflated on rotation by onConfigurationChanged. The
+        // container itself never changes, so the camera lifecycle owner is preserved.
+        rootContainer = new FrameLayout(requireContext());
+        rootContainer.setLayoutParams(new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        bindLayout();
+
+        webcamViewModel.getStatus().observe(getViewLifecycleOwner(), this::updateUi);
+
+        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED) {
+            startCamera();
+        } else {
+            requestPermissionLauncher.launch(Manifest.permission.CAMERA);
+        }
+
+        return rootContainer;
+    }
+
+    /**
+     * Inflates the layout for the current orientation into {@link #rootContainer},
+     * re-binds the view references and click listeners, and syncs the controls with
+     * the current streaming state.
+     *
+     * <p>Resolved via {@code R.layout.fragment_webcam}, so Android automatically
+     * picks {@code layout/} (portrait) or {@code layout-land/} (landscape) based on
+     * the live configuration — including after a configChanges-handled rotation.
+     */
+    private void bindLayout() {
+        LayoutInflater inflater = LayoutInflater.from(requireContext());
+        rootContainer.removeAllViews();
+        View content = inflater.inflate(R.layout.fragment_webcam, rootContainer, false);
+        rootContainer.addView(content);
+
+        previewView = content.findViewById(R.id.previewView);
+        btnStream   = content.findViewById(R.id.btnStream);
+        tvStatus    = content.findViewById(R.id.tvStatus);
+
+        content.findViewById(R.id.btnBack).setOnClickListener(v ->
             requireActivity().onBackPressed());
 
-        view.findViewById(R.id.btnFlipCamera).setOnClickListener(v -> {
+        content.findViewById(R.id.btnFlipCamera).setOnClickListener(v -> {
             useFrontCamera = !useFrontCamera;
             startCamera();
         });
@@ -114,21 +150,15 @@ public class WebcamFragment extends Fragment {
             }
         });
 
-        webcamViewModel.getStatus().observe(getViewLifecycleOwner(), this::updateUi);
-
-        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.CAMERA)
-                == PackageManager.PERMISSION_GRANTED) {
-            startCamera();
-        } else {
-            requestPermissionLauncher.launch(Manifest.permission.CAMERA);
-        }
-
-        return view;
+        // LiveData won't re-deliver to the existing observer just because the views
+        // were swapped, so sync the freshly-inflated controls with the current state.
+        updateUi(webcamViewModel.getStatus().getValue());
     }
 
     // ── UI state ───────────────────────────────────────────────────────────────
 
     private void updateUi(WebcamStatus status) {
+        if (btnStream == null || tvStatus == null) return; // views not bound yet
         if (status == WebcamStatus.STREAMING) {
             btnStream.setText("Stop Streaming");
             btnStream.setBackgroundTintList(
@@ -162,9 +192,10 @@ public class WebcamFragment extends Fragment {
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
                 // Use case 2: frame analysis — RGBA_8888 avoids manual YUV conversion.
-                // Cap at 640×480 to avoid OOM from 4K bitmaps (50 MB each).
+                // Cap at 1280×720 (HD) to balance sharpness against bandwidth/OOM —
+                // full-sensor 4K bitmaps are ~50 MB each and would stall the stream.
                 ResolutionStrategy resStrategy = new ResolutionStrategy(
-                    new Size(640, 480),
+                    new Size(1280, 720),
                     ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
                 );
                 imageAnalysis = new ImageAnalysis.Builder()
@@ -203,7 +234,7 @@ public class WebcamFragment extends Fragment {
             WebcamStatus status = webcamViewModel.getStatus().getValue();
             if (status != WebcamStatus.STREAMING) return;
 
-            // Throttle to 15 fps — drops frames that arrive sooner than 66 ms after
+            // Throttle to 24 fps — drops frames that arrive sooner than ~42 ms after
             // the last queued frame, keeping TCP send rate equal to Desktop consume rate.
             long now = System.currentTimeMillis();
             if (now - lastQueuedFrameMs < FRAME_INTERVAL_MS) return;
@@ -246,9 +277,14 @@ public class WebcamFragment extends Fragment {
     @Override
     public void onConfigurationChanged(@NonNull Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        if (imageAnalysis != null && getView() != null) {
-            imageAnalysis.setTargetRotation(requireView().getDisplay().getRotation());
-        }
+        if (!isAdded() || rootContainer == null) return;
+
+        // Swap in the orientation-appropriate layout (portrait ↔ landscape) without
+        // recreating the Activity, so the stream keeps running.  startCamera() then
+        // rebinds the preview to the freshly-inflated PreviewView and refreshes the
+        // ImageAnalysis target rotation so the PC keeps receiving upright frames.
+        bindLayout();
+        startCamera();
     }
 
     @Override
