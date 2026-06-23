@@ -47,6 +47,14 @@ namespace TauSync.Implementations.Management
         /// as the stream's final data, so the FIN cannot overtake that data on the other transport.
         /// </summary>
         private readonly ConcurrentDictionary<int, ITransport> _lastTransportByStream = new();
+
+        /// <summary>
+        /// Pending transport-switch barriers, keyed by local channel id. When a stream switches the link
+        /// it sends on, the sender parks a <see cref="TaskCompletionSource"/> here and waits for the
+        /// peer's BARRIER_ACK before sending on the new link, so the new (faster) link's data cannot
+        /// overtake the old link's still-in-flight data at the receiver.
+        /// </summary>
+        private readonly ConcurrentDictionary<int, TaskCompletionSource> _pendingBarriers = new();
         private bool _disposed;
 
         public event EventHandler<Exception>? ErrorOccurred;
@@ -63,6 +71,7 @@ namespace TauSync.Implementations.Management
                 _secondaryTransport = wifi;
                 _hybrid = new HybridSessionCoordinator(bt, wifi, _protocolHandler);
                 ctx.RegisterSessionControlListener(_hybrid.OnSessionControl);
+                ctx.RegisterChannelControlListener(OnChannelControl);
             }
             else
             {
@@ -464,9 +473,72 @@ namespace TauSync.Implementations.Management
                          : _hybrid.AcquireWifiOrFallback())
                 : _primaryTransport!;
 
+            // If this stream is switching the link it sends on, drain the old link first so its
+            // in-flight data cannot be overtaken by the new (faster) link at the receiver.
+            if (_lastTransportByStream.TryGetValue(localId, out ITransport? last)
+                && !ReferenceEquals(last, chosen) && last.IsConnected())
+            {
+                await BarrierBeforeSwitchAsync(localId, last).ConfigureAwait(false);
+            }
+
             // Record the link this stream last used so its FIN follows the same socket.
             _lastTransportByStream[localId] = chosen;
             return chosen;
+        }
+
+        /// <summary>
+        /// Drains the channel's <paramref name="oldTransport"/> before the stream starts sending on a
+        /// different link: emits a BARRIER on the old link (so it is ordered after that link's data) and
+        /// waits for the peer's BARRIER_ACK. Best-effort — a missing ACK times out
+        /// (<see cref="CoreConfig.BarrierAckTimeoutMs"/>) and the send proceeds rather than hanging.
+        /// </summary>
+        private async Task BarrierBeforeSwitchAsync(int localId, ITransport oldTransport)
+        {
+            int? peerId = ConnectionContext.Instance.GetPeerIdFor(localId);
+            if (peerId == null)
+                return;
+
+            var ack = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pendingBarriers[localId] = ack;
+            try
+            {
+                byte[] frame = _protocolHandler.BuildFrame(peerId.Value, Array.Empty<byte>(), CoreConfig.FlagBarrier);
+                await oldTransport.SendRaw(frame).ConfigureAwait(false);
+                await ack.Task.WaitAsync(TimeSpan.FromMilliseconds(CoreConfig.BarrierAckTimeoutMs)).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Timeout or send failure — proceed anyway (degrade to unordered, never hang).
+            }
+            finally
+            {
+                _pendingBarriers.TryRemove(localId, out _);
+            }
+        }
+
+        /// <summary>
+        /// Handles an inbound transport-switch barrier frame (dispatched out-of-band by
+        /// <see cref="ConnectionContext"/>). A BARRIER asks us to confirm we have drained this channel's
+        /// data on the link it arrived over: we reply BARRIER_ACK over the always-on Bluetooth primary
+        /// (the ACK only needs to arrive — its ordering versus data is irrelevant). A BARRIER_ACK
+        /// completes the sender's pending switch.
+        /// </summary>
+        private void OnChannelControl(int targetId, byte flags)
+        {
+            if ((flags & CoreConfig.FlagBarrierAck) != 0)
+            {
+                if (_pendingBarriers.TryGetValue(targetId, out TaskCompletionSource? ack))
+                    ack.TrySetResult();
+                return;
+            }
+            if ((flags & CoreConfig.FlagBarrier) != 0)
+            {
+                int? peerId = ConnectionContext.Instance.GetPeerIdFor(targetId);
+                if (peerId == null)
+                    return;
+                byte[] frame = _protocolHandler.BuildFrame(peerId.Value, Array.Empty<byte>(), CoreConfig.FlagBarrierAck);
+                _ = _primaryTransport?.SendRaw(frame);  // fire-and-forget; never block the receive loop
+            }
         }
 
         /// <inheritdoc />
@@ -634,6 +706,7 @@ namespace TauSync.Implementations.Management
             if (_hybrid != null)
             {
                 ConnectionContext.Instance.UnregisterSessionControlListener();
+                ConnectionContext.Instance.UnregisterChannelControlListener();
                 _hybrid.Dispose();
             }
             _secondaryTransport?.Dispose();

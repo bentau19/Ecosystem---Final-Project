@@ -26,6 +26,17 @@ public final class CoreConfig {
     /** Bit 1 — payload is a TransferRequest JSON (signaling). */
     public static final byte FLAG_CONTROL = 0x02;
 
+    /**
+     * Bit 2 — BARRIER: an empty channel frame the sender emits on the link it is leaving when a stream
+     * switches transports. It asks the peer to confirm (via {@link #FLAG_BARRIER_ACK}) that it has
+     * drained this channel's data on that link, so the new (faster) link's data cannot overtake the old
+     * link's data at the receiver.
+     */
+    public static final byte FLAG_BARRIER = 0x04;
+
+    /** Bit 3 — BARRIER_ACK: the peer's reply to a {@link #FLAG_BARRIER} frame. */
+    public static final byte FLAG_BARRIER_ACK = 0x08;
+
     /** Recommended max payload per data frame (64 KB). */
     public static final int STREAM_CHUNK_SIZE = 64 * 1024;
 
@@ -84,6 +95,13 @@ public final class CoreConfig {
 
     /** Max time the Wi-Fi client waits for SESSION_JOIN_ACK after joining. */
     public static final int SESSION_JOIN_ACK_TIMEOUT_MS = 10_000;
+
+    /**
+     * Max time a transport switch waits for the peer's BARRIER_ACK before proceeding anyway. On
+     * timeout the send continues (degrading to the unordered cross-transport behaviour) rather than
+     * hanging — a lost ACK must never deadlock a write.
+     */
+    public static final int BARRIER_ACK_TIMEOUT_MS = 5_000;
 
     /**
      * Hybrid routing threshold: payloads at or below this size go over the Bluetooth (primary)

@@ -307,6 +307,14 @@ namespace TauSync.Implementations.Management
 
         private bool DispatchToExistingChannel(int targetId, byte[] payload, byte flags)
         {
+            // Transport-switch barrier frames (BARRIER / BARRIER_ACK) are handled out-of-band by the
+            // hybrid manager — they carry no channel data and must not trigger FIN cleanup.
+            if ((flags & (CoreConfig.FlagBarrier | CoreConfig.FlagBarrierAck)) != 0)
+            {
+                _channelControlListener?.Invoke(targetId, flags);
+                return true;
+            }
+
             if (!_routingMap.TryGetValue(targetId, out var handler))
                 return false;
 
@@ -440,6 +448,23 @@ namespace TauSync.Implementations.Management
 
         /// <summary>Clears the hybrid session-control callback (e.g. on manager dispose).</summary>
         public void UnregisterSessionControlListener() => _sessionControlListener = null;
+
+        /// <summary>
+        /// Channel-control callback for transport-switch barrier frames (BARRIER / BARRIER_ACK) arriving
+        /// on a channel TargetID. Registered by the hybrid <see cref="ConnectionManager"/>; receives
+        /// (channelTargetId, flags). Lets the manager answer the barrier and complete pending switches
+        /// without the frame being treated as channel data.
+        /// </summary>
+        private Action<int, byte>? _channelControlListener;
+
+        /// <summary>Registers the channel-control (barrier) callback (see <see cref="_channelControlListener"/>).</summary>
+        public void RegisterChannelControlListener(Action<int, byte> listener)
+        {
+            _channelControlListener = listener ?? throw new ArgumentNullException(nameof(listener));
+        }
+
+        /// <summary>Clears the channel-control (barrier) callback (e.g. on manager dispose).</summary>
+        public void UnregisterChannelControlListener() => _channelControlListener = null;
 
         /// <summary>
         /// Routes a recognised session-control frame to the registered listener. Returns false (so

@@ -33,6 +33,17 @@ namespace TauSync.Core
         /// <summary>CONTROL flag: bit 1 = 0x02. Payload is TransferRequest JSON when set.</summary>
         public const byte FlagControl = 0x02;
 
+        /// <summary>
+        /// BARRIER flag: bit 2 = 0x04. An empty channel frame the sender emits on the link it is
+        /// leaving when a stream switches transports; it asks the peer to confirm (via
+        /// <see cref="FlagBarrierAck"/>) that it has drained this channel's data on that link, so the
+        /// new (faster) link's data cannot overtake the old link's data at the receiver.
+        /// </summary>
+        public const byte FlagBarrier = 0x04;
+
+        /// <summary>BARRIER_ACK flag: bit 3 = 0x08. The peer's reply to a <see cref="FlagBarrier"/> frame.</summary>
+        public const byte FlagBarrierAck = 0x08;
+
         /// <summary>Stream chunk size for send/receive (64 KB).</summary>
         public const int StreamChunkSize = 64 * 1024;
 
@@ -80,6 +91,13 @@ namespace TauSync.Core
 
         /// <summary>Max time the Wi-Fi client waits for SESSION_JOIN_ACK after joining.</summary>
         public const int SessionJoinAckTimeoutMs = 10_000;
+
+        /// <summary>
+        /// Max time a transport switch waits for the peer's BARRIER_ACK before proceeding anyway.
+        /// On timeout the send continues (degrading to the unordered cross-transport behaviour)
+        /// rather than hanging — a lost ACK must never deadlock a write.
+        /// </summary>
+        public const int BarrierAckTimeoutMs = 5_000;
 
         /// <summary>
         /// Hybrid routing threshold: payloads at or below this size go over the Bluetooth (primary)

@@ -73,6 +73,14 @@ public class ConnectionManager implements IConnectionManager {
     private final ConcurrentHashMap<Integer, ITransport> lastTransportByStream = new ConcurrentHashMap<>();
 
     /**
+     * Pending transport-switch barriers, keyed by local channel id. When a stream switches the link it
+     * sends on, the sender parks a future here and waits for the peer's BARRIER_ACK before sending on
+     * the new link, so the new (faster) link's data cannot overtake the old link's still-in-flight data
+     * at the receiver. Mirrors C# {@code _pendingBarriers}.
+     */
+    private final ConcurrentHashMap<Integer, CompletableFuture<Void>> pendingBarriers = new ConcurrentHashMap<>();
+
+    /**
      * Dedicated pool for blocking handshake operations. Avoids starving the
      * default ForkJoinPool.commonPool() on Android devices with few cores.
      */
@@ -123,6 +131,7 @@ public class ConnectionManager implements IConnectionManager {
         secondaryTransport = secondary;
         hybrid = new HybridSessionCoordinator(primary, (SocketTransport) secondary, protocolHandler);
         ConnectionContext.getInstance().registerSessionControlListener(hybrid::onSessionControl);
+        ConnectionContext.getInstance().registerChannelControlListener(this::onChannelControl);
     }
 
     @Override
@@ -495,8 +504,60 @@ public class ConnectionManager implements IConnectionManager {
         if (hybrid == null) return primaryTransport;  // single transport (Wi-Fi-only or Bluetooth-only)
 
         ITransport chosen = preferWifi ? hybrid.acquireWifiOrFallback() : primaryTransport;
+
+        // If this stream is switching the link it sends on, drain the old link first so its in-flight
+        // data cannot be overtaken by the new (faster) link at the receiver.
+        ITransport last = lastTransportByStream.get(localId);
+        if (last != null && last != chosen && last.isConnected()) {
+            barrierBeforeSwitch(localId, last);
+        }
+
         lastTransportByStream.put(localId, chosen);
         return chosen;
+    }
+
+    /**
+     * Drains the channel's {@code oldTransport} before the stream starts sending on a different link:
+     * emits a BARRIER on the old link (so it is ordered after that link's data) and waits for the peer's
+     * BARRIER_ACK. Best-effort — a missing ACK times out ({@link CoreConfig#BARRIER_ACK_TIMEOUT_MS}) and
+     * the send proceeds rather than hanging.
+     */
+    private void barrierBeforeSwitch(int localId, ITransport oldTransport) {
+        Integer peerId = ConnectionContext.getInstance().getPeerIdFor(localId);
+        if (peerId == null) return;
+
+        CompletableFuture<Void> ack = new CompletableFuture<>();
+        pendingBarriers.put(localId, ack);
+        try {
+            byte[] frame = protocolHandler.buildFrame(peerId, new byte[0], CoreConfig.FLAG_BARRIER);
+            oldTransport.sendRaw(frame).get();
+            ack.get(CoreConfig.BARRIER_ACK_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        } catch (Exception ignored) {
+            // Timeout or send failure — proceed anyway (degrade to unordered, never hang).
+        } finally {
+            pendingBarriers.remove(localId);
+        }
+    }
+
+    /**
+     * Handles an inbound transport-switch barrier frame (dispatched out-of-band by
+     * {@link ConnectionContext}). A BARRIER asks us to confirm we have drained this channel's data on
+     * the link it arrived over: we reply BARRIER_ACK over the always-on Bluetooth primary (the ACK only
+     * needs to arrive — its ordering versus data is irrelevant). A BARRIER_ACK completes the sender's
+     * pending switch.
+     */
+    private void onChannelControl(int targetId, byte flags) {
+        if ((flags & CoreConfig.FLAG_BARRIER_ACK) != 0) {
+            CompletableFuture<Void> ack = pendingBarriers.get(targetId);
+            if (ack != null) ack.complete(null);
+            return;
+        }
+        if ((flags & CoreConfig.FLAG_BARRIER) != 0) {
+            Integer peerId = ConnectionContext.getInstance().getPeerIdFor(targetId);
+            if (peerId == null) return;
+            byte[] frame = protocolHandler.buildFrame(peerId, new byte[0], CoreConfig.FLAG_BARRIER_ACK);
+            primaryTransport.sendRaw(frame);  // fire-and-forget; never block the receive loop
+        }
     }
 
     @Override
@@ -628,6 +689,7 @@ public class ConnectionManager implements IConnectionManager {
             // Hybrid: the manager owns its transports, so end the whole session here. Disconnecting
             // both decrements the ref-count to zero, which aborts channels and resets shared state.
             ConnectionContext.getInstance().unregisterSessionControlListener();
+            ConnectionContext.getInstance().unregisterChannelControlListener();
             hybrid.dispose();
             try { secondaryTransport.close(); } catch (Exception ignored) {}
             try { primaryTransport.close(); } catch (Exception ignored) {}

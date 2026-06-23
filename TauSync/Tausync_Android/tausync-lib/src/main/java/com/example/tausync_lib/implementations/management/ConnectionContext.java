@@ -371,6 +371,14 @@ public final class ConnectionContext {
     }
 
     private boolean dispatchToExistingChannel(int targetId, byte[] payload, byte flags) {
+        // Transport-switch barrier frames (BARRIER / BARRIER_ACK) are handled out-of-band by the hybrid
+        // manager — they carry no channel data and must not trigger FIN cleanup.
+        if ((flags & (CoreConfig.FLAG_BARRIER | CoreConfig.FLAG_BARRIER_ACK)) != 0) {
+            BiConsumer<Integer, Byte> listener = channelControlListener;
+            if (listener != null) listener.accept(targetId, flags);
+            return true;
+        }
+
         BiConsumer<byte[], Byte> handler = routingMap.get(targetId);
         if (handler == null) return false;
 
@@ -590,6 +598,25 @@ public final class ConnectionContext {
     /** Clears the hybrid session-control callback (e.g. on manager close). */
     public void unregisterSessionControlListener() {
         this.sessionControlListener = null;
+    }
+
+    /**
+     * Channel-control callback for transport-switch barrier frames (BARRIER / BARRIER_ACK) arriving on
+     * a channel TargetID. Registered by the hybrid {@link ConnectionManager}; receives
+     * (channelTargetId, flags). Lets the manager answer the barrier and complete pending switches
+     * without the frame being treated as channel data.
+     */
+    private volatile BiConsumer<Integer, Byte> channelControlListener;
+
+    /** Registers the channel-control (barrier) callback (see {@link #channelControlListener}). */
+    public void registerChannelControlListener(BiConsumer<Integer, Byte> listener) {
+        if (listener == null) throw new IllegalArgumentException("listener must not be null");
+        this.channelControlListener = listener;
+    }
+
+    /** Clears the channel-control (barrier) callback (e.g. on manager close). */
+    public void unregisterChannelControlListener() {
+        this.channelControlListener = null;
     }
 
     /**
