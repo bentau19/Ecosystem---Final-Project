@@ -834,9 +834,9 @@ Receives a live camera stream from Android and feeds it into a virtual webcam vi
 
 Flow:
 1. `PhoneRequestService` detects Android waiting on `webcam_start` and calls `receive_start()`.
-2. A daemon thread connects to `WEBCAM_START` (reads the handshake), then opens `pyvirtualcam.Camera` at 640×480 @ 15 fps.
+2. A daemon thread connects to `WEBCAM_START` (reads the handshake), then opens `pyvirtualcam.Camera` at 1280×720 @ 24 fps.
 3. The thread connects to `WEBCAM_FRAMES` and reads length-prefixed JPEG frames in a loop.
-4. Each JPEG is decoded with Pillow, padded to 640×480 preserving aspect ratio (`ImageOps.pad`), converted to a numpy array, and pushed to the virtual camera via `cam.send()`.
+4. Each JPEG is decoded with Pillow, padded to 1280×720 preserving aspect ratio (`ImageOps.pad`), converted to a numpy array, and pushed to the virtual camera via `cam.send()`.
 5. When Android closes the channel, `webcam_stopped` is emitted and the virtual camera is released.
 
 | Signal | Payload | When |
