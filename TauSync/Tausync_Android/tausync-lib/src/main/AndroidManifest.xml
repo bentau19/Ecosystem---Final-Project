@@ -23,4 +23,10 @@
         android:name="android.hardware.bluetooth"
         android:required="false" />
 
+    <!-- BLE is optional too — used only for first-time discovery/pairing (CompanionDeviceManager
+         scans for the PC's BLE beacon). Devices without BLE fall back to manual MAC entry. -->
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="false" />
+
 </manifest>

@@ -68,6 +68,46 @@ on the console to run the whole suite again.
 
 ---
 
+## Hybrid (Bluetooth) Mode — Pairing over Bluetooth (Phase 4)
+
+Hybrid mode connects over **Bluetooth** first (always-on link for control + small payloads) and
+brings **Wi-Fi** up lazily only for large payloads. The Wi-Fi IP is discovered over Bluetooth, so you
+never type it. Phase 4 also removes the need to type the PC's Bluetooth MAC — the phone finds the PC
+through the OS pairing chooser.
+
+### PC side
+1. Start the test console and click **"Hybrid (Bluetooth) Server"** (mutually exclusive with
+   "Wi-Fi Server" — the transport is a process-wide singleton).
+2. Selecting this mode automatically starts a **BLE beacon** advertising the TauSync service UUID, so a
+   first-time phone can discover this PC. Advertising stops once the phone connects. (No-op on PCs
+   whose Bluetooth radio lacks BLE peripheral support — see the fallback below.)
+
+### Android side — first launch (no saved device)
+1. Leave the **Bluetooth MAC** field **blank**.
+2. Tap **"Connect (Hybrid BT)"**. The OS-native chooser appears showing **only the TauSync PC**
+   (filtered by the service UUID), not every nearby Bluetooth device.
+3. Tap the PC → confirm the system pairing prompt. The app **bonds** the device, **saves** its MAC,
+   then connects. The discovered Wi-Fi IP auto-fills the IP field.
+
+### Android side — later launches
+- The saved device is reused automatically — **no chooser appears**. Just tap **"Connect (Hybrid BT)"**.
+
+### Bond lost / re-pairing
+- If you unpair the PC from Android's system Bluetooth settings, the next connect detects the missing
+  bond, clears the saved address, and **re-opens the chooser automatically** so you can re-pair.
+
+### Manual override / fallback
+- Type the PC's Bluetooth MAC (`AA:BB:CC:DD:EE:FF`) into the field to **skip discovery** and connect
+  directly. This is the fallback when the PC's radio has no BLE peripheral support (the chooser would
+  show nothing), or for explicit control.
+
+### Running the hybrid tests
+Once connected, tap **"Run Hybrid Tests (Phase 3)"** to run the H1–H7 suite over the paired link
+(BLE pairing is the precondition for this run). H6 is slow (~65 s); H7 is semi-manual (disrupt
+Bluetooth during the announced 30 s drop window).
+
+---
+
 ## Running the Automated Tests
 
 Tap **Run All Tests**. The app runs all 21 tests sequentially and logs

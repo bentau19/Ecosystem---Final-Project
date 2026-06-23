@@ -83,6 +83,24 @@ namespace TauSync.Core
         /// <summary>BLE service UUID advertised by Windows for first-time discovery/pairing.</summary>
         public static readonly Guid BleServiceUuid = new Guid("12345678-1234-5678-1234-56789abcde01");
 
+        /// <summary>
+        /// BLE discovery beacon, advertised by Windows as manufacturer-specific data and matched by
+        /// Android's scan filter. Manufacturer data is used instead of a 128-bit service UUID because
+        /// WinRT legacy advertising rejects 128-bit service UUIDs (E_INVALIDARG on Start), and
+        /// extended advertising is not seen by Android's CompanionDeviceManager scan.
+        /// 0xFFFF is the reserved "internal/interoperability test" company ID; payload "TAUS" is the
+        /// TauSync magic. Must match Android <c>BLE_BEACON_COMPANY_ID</c> / <c>BLE_BEACON_PAYLOAD</c>.
+        /// </summary>
+        public const ushort BleBeaconCompanyId = 0xFFFF;
+        public static readonly byte[] BleBeaconPayload = { 0x54, 0x41, 0x55, 0x53 }; // "TAUS"
+
+        /// <summary>
+        /// Max bytes of the PC name appended to the beacon (after the magic + 6-byte MAC), so the
+        /// phone can show which PC it found. Capped to stay within the 31-byte BLE legacy
+        /// advertisement budget: 3 (flags) + 4 (header+company) + 4 (magic) + 6 (MAC) + name.
+        /// </summary>
+        public const int BleBeaconMaxNameBytes = 14;
+
         /// <summary>RFCOMM service UUID both platforms use for SDP lookup of the data channel.</summary>
         public static readonly Guid RfcommServiceUuid = new Guid("12345678-1234-5678-1234-56789abcde02");
 

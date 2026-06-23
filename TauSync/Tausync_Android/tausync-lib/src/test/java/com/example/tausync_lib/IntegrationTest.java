@@ -748,7 +748,10 @@ public class IntegrationTest {
     public void tauSyncStream_concurrentClose_completeStreamCalledExactlyOnce() throws Exception {
         AtomicInteger completeStreamCalls = new AtomicInteger(0);
 
-        IConnectionManager noopManager = new IConnectionManager() {
+        IConnectionManager noopManager = new IConnectionManager()
+
+
+        {
             @Override public void initialize(ITransport t) {}
             @Override public CompletableFuture<Void> connectTransport(String id) { return CompletableFuture.completedFuture(null); }
             @Override public boolean isConnected() { return true; }

@@ -30,6 +30,7 @@ _GCHandleType = None
 _ConnectionManagerCls = None
 _SocketTransportCls = None
 _ConnectionContextCls = None
+_BleAdvertiserCls = None
 
 _DEFAULT_DLL_RELATIVE = os.path.join(
     "TauSync", "Tausync_Windows", "TauSync.Lib",
@@ -69,7 +70,7 @@ def _find_dll() -> str:
 def _ensure_clr(dll_path: Optional[str] = None) -> None:
     """Load CoreCLR + TauSync.Lib.dll exactly once (thread-safe)."""
     global _clr_ready, _Array, _Byte, _GCHandle, _GCHandleType, _ConnectionManagerCls
-    global _SocketTransportCls, _ConnectionContextCls
+    global _SocketTransportCls, _ConnectionContextCls, _BleAdvertiserCls
 
     if _clr_ready:
         return
@@ -96,6 +97,7 @@ def _ensure_clr(dll_path: Optional[str] = None) -> None:
         from TauSync.Implementations.Management import ConnectionManager as _CM  # pyright: ignore[reportMissingImports]
         from TauSync.Implementations.Management import ConnectionContext as _CTX  # pyright: ignore[reportMissingImports]
         from TauSync.Implementations.Transport import SocketTransport as _ST  # pyright: ignore[reportMissingImports]
+        from TauSync.Implementations.Discovery import BleAdvertiser as _BLE  # pyright: ignore[reportMissingImports]
         from System import Nullable, Int32, TimeoutException
 
         _Array = Array
@@ -105,6 +107,7 @@ def _ensure_clr(dll_path: Optional[str] = None) -> None:
         _ConnectionManagerCls = _CM
         _ConnectionContextCls = _CTX
         _SocketTransportCls = _ST
+        _BleAdvertiserCls = _BLE
         _clr_ready = True
 
 
@@ -600,6 +603,7 @@ class TauSync:
         _ensure_clr(dll_path)
         self._manager = _ConnectionManagerCls(False)
         self._disposed = False
+        self._ble_advertiser = None
 
     def get_peer_waiting_words(self) -> list[str]:
         """Get a snapshot of the peer's pending discovery words.
@@ -770,22 +774,45 @@ class TauSync:
             TauSync._global_target = "bt:0.0.0.0 (listening)"
 
         try:
+            # Advertise a BLE beacon (UUID only) so a first-time Android client can discover this PC
+            # without anyone typing a MAC. It runs during the listen window and is stopped once a
+            # client connects. No-op on hardware without BLE peripheral support — the phone then
+            # falls back to manual MAC entry.
+            self._ble_advertiser = _BleAdvertiserCls()
+            try:
+                self._ble_advertiser.StartAsync().GetAwaiter().GetResult()
+            except Exception:
+                pass  # BLE peripheral unsupported — manual MAC entry still works
+
             # Bluetooth is the primary (RFCOMM server) link; the singleton's Wi-Fi
             # SocketTransport is the lazy secondary. The hybrid ConnectionManager starts the
             # BT listener itself and runs the BT_MAGIC handshake (where the peer's Wi-Fi IP
             # is discovered).
             self._manager = _ConnectionManagerCls()
             self._manager.ConnectTransport("", timeout_seconds).GetAwaiter().GetResult()
+            self._stop_ble_advertiser()  # client connected — no need to keep advertising
         except TimeoutException as exc:
+            self._stop_ble_advertiser()
             with TauSync._global_role_lock:
                 TauSync._global_role = _ROLE_NONE
                 TauSync._global_target = None
             raise TimeoutError(str(exc))
         except Exception:
+            self._stop_ble_advertiser()
             with TauSync._global_role_lock:
                 TauSync._global_role = _ROLE_NONE
                 TauSync._global_target = None
             raise
+
+    def _stop_ble_advertiser(self) -> None:
+        """Stop BLE advertising if it is running. Safe to call repeatedly / on non-hybrid instances."""
+        advertiser = getattr(self, "_ble_advertiser", None)
+        if advertiser is not None:
+            try:
+                advertiser.Stop()
+            except Exception:
+                pass
+            self._ble_advertiser = None
 
     @property
     def peer_wifi_ip(self) -> Optional[str]:
@@ -895,6 +922,7 @@ class TauSync:
         if self._disposed:
             return
         self._disposed = True
+        self._stop_ble_advertiser()
         try:
             self._manager.Dispose()
             TauSync._global_role = _ROLE_NONE
@@ -913,6 +941,7 @@ class TauSync:
             RuntimeError: If this instance has been disposed.
         """
         self._check_not_disposed()
+        self._stop_ble_advertiser()
         if not self.is_connected:
             return
         self._manager.Disconnect()

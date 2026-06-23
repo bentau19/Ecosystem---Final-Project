@@ -1,7 +1,9 @@
 package com.example.android.testing;
 
 import android.Manifest;
+import android.bluetooth.BluetoothDevice;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Typeface;
 import android.net.wifi.WifiManager;
@@ -18,11 +20,14 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
+import com.example.tausync_lib.implementations.discovery.BleDiscovery;
 import com.example.tausync_lib.implementations.management.TauSyncStream;
+import com.example.tausync_lib.implementations.transport.BluetoothTransport;
 import com.example.tausync_lib.sdk.TauSync;
 
 import java.io.ByteArrayOutputStream;
@@ -124,7 +129,52 @@ public class TestTauSyncActivity extends AppCompatActivity {
     private static final int COLOR_NEUTRAL = 0xFF555555;
 
     private TauSync tauSync;
+    private final BleDiscovery bleDiscovery = new BleDiscovery();
     private final ExecutorService backgroundExecutor = Executors.newCachedThreadPool();
+
+    /**
+     * Completes a BLE pairing: once {@link BleDiscovery} has bonded and saved the chosen PC,
+     * connect to it; on failure, surface the reason and reset the UI.
+     */
+    private final BleDiscovery.PairingCallback pairingCallback = new BleDiscovery.PairingCallback() {
+        @Override
+        public void onDevicePaired(BluetoothDevice device) {
+            runOnUiThread(() -> {
+                String mac = device.getAddress();
+                appendLog("Paired + bonded with " + mac + " — connecting...");
+                connectHybrid(mac);
+            });
+        }
+
+        @Override
+        public void onPairingFailed(String reason) {
+            runOnUiThread(() -> {
+                appendLog("BLE pairing failed: " + reason);
+                updateStatus("Pairing failed: " + reason);
+                setDisconnectedState();
+            });
+        }
+    };
+
+    /**
+     * Handles the BLE scan outcome: on finding the PC, ask the user (with the PC's name) whether to
+     * connect; on failure, surface the reason and reset the UI. Delivered off the main thread.
+     */
+    private final BleDiscovery.DiscoveryCallback discoveryCallback = new BleDiscovery.DiscoveryCallback() {
+        @Override
+        public void onPcFound(String pcName, BluetoothDevice classicDevice) {
+            runOnUiThread(() -> showConnectDialog(pcName, classicDevice));
+        }
+
+        @Override
+        public void onDiscoveryFailed(String reason) {
+            runOnUiThread(() -> {
+                appendLog("Bluetooth discovery failed: " + reason);
+                updateStatus("Discovery failed: " + reason);
+                setDisconnectedState();
+            });
+        }
+    };
     private final Map<String, ManualChannel> manualChannels = new ConcurrentHashMap<>();
     private final Map<String, Boolean> testResults = new LinkedHashMap<>();
     private final Map<String, Boolean> hybridTestResults = new LinkedHashMap<>();
@@ -154,6 +204,7 @@ public class TestTauSyncActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        bleDiscovery.stopScan();
         backgroundExecutor.shutdownNow();
         closeAllManualChannels();
         disposeTauSyncQuietly();
@@ -200,12 +251,14 @@ public class TestTauSyncActivity extends AppCompatActivity {
         parent.addView(connectButton);
 
         TextView hybridHelp = new TextView(this);
-        hybridHelp.setText("Hybrid mode: connect over Bluetooth (Phase 3). The server's Wi-Fi IP is "
-                + "discovered automatically and fills the field above — no manual IP needed.");
+        hybridHelp.setText("Hybrid mode: connect over Bluetooth. Leave the MAC field blank and tap "
+                + "'Connect (Hybrid BT)' to pick the PC from the OS Bluetooth chooser the first time, "
+                + "or reuse the saved device after that. Type a MAC only to override the chooser. The "
+                + "server's Wi-Fi IP is discovered automatically and fills the IP field above.");
         hybridHelp.setTextSize(12);
         parent.addView(hybridHelp);
 
-        bluetoothMacInput = newEditText("Server Bluetooth MAC (AA:BB:CC:DD:EE:FF)", "");
+        bluetoothMacInput = newEditText("Server Bluetooth MAC (blank = pair via BLE chooser)", "");
         parent.addView(bluetoothMacInput);
 
         connectHybridButton = new Button(this);
@@ -327,16 +380,70 @@ public class TestTauSyncActivity extends AppCompatActivity {
             disconnect();
             return;
         }
-        String mac = bluetoothMacInput.getText().toString().trim();
-        if (mac.isEmpty()) {
-            appendLog("Enter the server's Bluetooth MAC first");
-            return;
-        }
         if (!ensureBluetoothPermissions()) {
             appendLog("Requested Bluetooth permission — grant it, then tap 'Connect (Hybrid BT)' again");
             return;
         }
-        connectHybrid(mac);
+        startHybridConnect();
+    }
+
+    /**
+     * One smart entry point for hybrid Bluetooth connect — resolution order:
+     * <ol>
+     *   <li><b>Manual override</b> — a MAC typed into the field is used directly (for a PC without
+     *       BLE peripheral support, or for explicit control).</li>
+     *   <li><b>Saved device</b> — a device paired on a previous run is reused, skipping the chooser.</li>
+     *   <li><b>First pairing</b> — launch the OS BLE chooser (shows only the TauSync PC), bond it,
+     *       save its MAC, then connect.</li>
+     * </ol>
+     * If a later connect fails because the bond was lost (unpaired in system settings), the saved
+     * address is cleared and the chooser is shown again automatically — see {@link #connectHybrid}.
+     */
+    private void startHybridConnect() {
+        String typedMac = bluetoothMacInput.getText().toString().trim();
+        if (!typedMac.isEmpty()) {
+            connectHybrid(typedMac);
+            return;
+        }
+        String savedMac = BleDiscovery.getSavedAddress(this);
+        if (savedMac != null && !savedMac.isEmpty()) {
+            appendLog("Using saved paired device " + savedMac);
+            connectHybrid(savedMac);
+            return;
+        }
+        launchBlePairing();
+    }
+
+    /**
+     * Scans for the TauSync PC's BLE beacon. When found, {@link #discoveryCallback} shows a confirm
+     * dialog with the PC's name; on confirm we bond + connect via {@link #pairingCallback}.
+     */
+    private void launchBlePairing() {
+        appendLog("No saved device — scanning for the TauSync PC over Bluetooth...");
+        updateStatus("Scanning for PC over Bluetooth...");
+        bleDiscovery.startScan(this, discoveryCallback);
+    }
+
+    /**
+     * Asks the user whether to connect to the PC found over BLE. On confirm, bonds the PC's Bluetooth
+     * Classic device (carried in the beacon) and connects; on cancel, resets the UI.
+     */
+    private void showConnectDialog(String pcName, BluetoothDevice classicDevice) {
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("TauSync PC found")
+                .setMessage("Found \"" + pcName + "\"\n" + classicDevice.getAddress()
+                        + "\n\nConnect over Bluetooth?")
+                .setPositiveButton("Connect", (dialog, which) -> {
+                    appendLog("Pairing with " + pcName + " (" + classicDevice.getAddress() + ")...");
+                    updateStatus("Pairing with " + pcName + "...");
+                    bleDiscovery.bond(this, classicDevice, pairingCallback);
+                })
+                .setNegativeButton("Cancel", (dialog, which) -> {
+                    appendLog("Connect cancelled.");
+                    setDisconnectedState();
+                })
+                .setOnCancelListener(dialog -> setDisconnectedState())
+                .show();
     }
 
     private void connectHybrid(String bluetoothMac) {
@@ -364,6 +471,10 @@ public class TestTauSyncActivity extends AppCompatActivity {
                     setConnectedState(true);
                 });
             } catch (Exception exception) {
+                if (isBondLost(exception)) {
+                    runOnUiThread(this::handleBondLost);
+                    return;
+                }
                 String rootCauseMessage = extractRootCauseMessage(exception);
                 runOnUiThread(() -> {
                     updateStatus("Hybrid failed: " + rootCauseMessage);
@@ -372,6 +483,28 @@ public class TestTauSyncActivity extends AppCompatActivity {
                 });
             }
         });
+    }
+
+    /**
+     * Recovery when the device bond was removed (e.g. unpaired from system settings): forget the
+     * saved address and re-run BLE discovery so the user can re-pair from scratch.
+     */
+    private void handleBondLost() {
+        appendLog("Bond lost — clearing the saved device and re-pairing...");
+        BleDiscovery.clearSavedAddress(this);
+        bluetoothMacInput.setText("");
+        setDisconnectedState();
+        launchBlePairing();
+    }
+
+    /** True if any cause in the chain is a {@link BluetoothTransport.BondLostException}. */
+    private static boolean isBondLost(Throwable throwable) {
+        for (Throwable t = throwable; t != null; t = t.getCause()) {
+            if (t instanceof BluetoothTransport.BondLostException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

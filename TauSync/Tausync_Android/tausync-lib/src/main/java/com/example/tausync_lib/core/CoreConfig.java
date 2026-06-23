@@ -87,6 +87,15 @@ public final class CoreConfig {
     /** BLE service UUID advertised by Windows for first-time discovery/pairing. */
     public static final String BLE_SERVICE_UUID = "12345678-1234-5678-1234-56789abcde01";
 
+    /**
+     * BLE discovery beacon — Windows advertises this as manufacturer-specific data and Android filters
+     * on it (instead of a 128-bit service UUID, which WinRT legacy advertising cannot carry). 0xFFFF is
+     * the reserved internal/interoperability-test company ID; payload "TAUS" is the TauSync magic.
+     * Must match Windows {@code BleBeaconCompanyId} / {@code BleBeaconPayload}.
+     */
+    public static final int BLE_BEACON_COMPANY_ID = 0xFFFF;
+    public static final byte[] BLE_BEACON_PAYLOAD = { 0x54, 0x41, 0x55, 0x53 }; // "TAUS"
+
     /** RFCOMM service UUID both platforms use for SDP lookup of the data channel. */
     public static final String RFCOMM_SERVICE_UUID = "12345678-1234-5678-1234-56789abcde02";
 
