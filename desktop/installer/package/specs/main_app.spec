@@ -26,6 +26,8 @@ a = Analysis(
         "native", "native.windows", "native.windows.pipe", "native.windows.pipe.pipe_module",
         # FileDetection runtime dependencies (C extensions PyInstaller may miss)
         "xxhash",
+        "torch", "torch.nn", "torch.utils.data", "torch.optim",
+        "torchvision", "torchvision.models", "torchvision.transforms",
     ],
     hookspath=[],
     hooksconfig={},
