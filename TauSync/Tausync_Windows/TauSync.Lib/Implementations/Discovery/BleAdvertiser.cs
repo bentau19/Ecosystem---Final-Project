@@ -34,6 +34,17 @@ namespace TauSync.Implementations.Discovery
         private BluetoothLEAdvertisementPublisher? _publisher;
         private bool _advertising;
         private bool _disposed;
+        private readonly string? _deviceName;
+
+        /// <summary>
+        /// Creates the advertiser. <paramref name="deviceName"/> is the name the phone shows in its
+        /// "connect to this PC?" dialog; if null/blank the Windows computer name is used. It is
+        /// truncated to <see cref="CoreConfig.BleBeaconMaxNameBytes"/> bytes to fit the BLE packet.
+        /// </summary>
+        public BleAdvertiser(string? deviceName = null)
+        {
+            _deviceName = deviceName;
+        }
 
         /// <summary>True while BLE advertising is active (cleared if the radio aborts it).</summary>
         public bool IsAdvertising => _advertising && !_disposed;
@@ -76,7 +87,7 @@ namespace TauSync.Implementations.Discovery
         /// privacy address that cannot be used for RFCOMM — and shows the name in its confirm dialog.
         /// On failure the MAC bytes stay zero and the phone falls back.
         /// </summary>
-        private static async Task<byte[]> BuildBeaconPayloadAsync()
+        private async Task<byte[]> BuildBeaconPayloadAsync()
         {
             byte[] magic = CoreConfig.BleBeaconPayload;
             byte[] mac = new byte[6];
@@ -92,7 +103,10 @@ namespace TauSync.Implementations.Discovery
             }
             catch { /* leave MAC zero — phone falls back to manual entry */ }
 
-            byte[] nameBytes = Encoding.UTF8.GetBytes(Environment.MachineName ?? "PC");
+            string name = string.IsNullOrWhiteSpace(_deviceName)
+                ? (Environment.MachineName ?? "PC")
+                : _deviceName.Trim();
+            byte[] nameBytes = Encoding.UTF8.GetBytes(name);
             int nameLen = Math.Min(nameBytes.Length, CoreConfig.BleBeaconMaxNameBytes);
 
             byte[] payload = new byte[magic.Length + mac.Length + nameLen];

@@ -895,6 +895,8 @@ class TauSyncTestConsole(tk.Tk):
 
         self.status_var = tk.StringVar(value="Choose a server mode to start…")
         self.word_var = tk.StringVar(value="main")
+        # Name the phone shows in its "connect to this PC?" dialog during BLE discovery (hybrid mode).
+        self.device_name_var = tk.StringVar(value=(os.environ.get("COMPUTERNAME") or "TauSync PC"))
 
         self._build_ui()
         self.after(80, self._drain_ui_queue)
@@ -934,6 +936,11 @@ class TauSyncTestConsole(tk.Tk):
                                           command=self._on_start_hybrid)
         self.hybrid_mode_btn.pack(side="left", padx=4)
 
+        name_row = ttk.Frame(self)
+        name_row.pack(fill="x", padx=8, pady=(2, 0))
+        ttk.Label(name_row, text="Device name shown on phone:").pack(side="left")
+        ttk.Entry(name_row, textvariable=self.device_name_var, width=24).pack(side="left", padx=4)
+
         controls = ttk.Frame(self)
         controls.pack(fill="x", padx=8, pady=4)
         ttk.Label(controls, text="Manual channel word:").pack(side="left")
@@ -957,8 +964,10 @@ class TauSyncTestConsole(tk.Tk):
         )
 
     def _on_start_hybrid(self):
+        device_name = self.device_name_var.get().strip() or None
+
         def connect_hybrid():
-            self.tau.connect_hybrid()
+            self.tau.connect_hybrid(device_name=device_name)
             ip = self.tau.peer_wifi_ip
             self.post(lambda: self._log_system(
                 f"Bluetooth handshake done. Phone's Wi-Fi IP discovered over BT: {ip or '(none)'}"))

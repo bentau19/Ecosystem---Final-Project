@@ -739,7 +739,9 @@ class TauSync:
                 TauSync._global_target = None
             raise
 
-    def connect_hybrid(self, timeout_seconds: int | None = None) -> None:
+    def connect_hybrid(
+        self, timeout_seconds: int | None = None, device_name: str | None = None
+    ) -> None:
         """Start a hybrid Bluetooth + Wi-Fi session as the server (Windows side).
 
         Windows is always the Bluetooth RFCOMM **server** (and the Wi-Fi server). This
@@ -753,6 +755,9 @@ class TauSync:
         Args:
             timeout_seconds: Max seconds to wait for the Bluetooth client to connect.
                 ``None`` (default) waits forever.
+            device_name: Name shown to the phone in its "connect to this PC?" dialog
+                during first-time BLE discovery. ``None``/blank uses the Windows computer
+                name. Truncated to fit the BLE advertisement (~14 bytes).
 
         Raises:
             TimeoutError: If no Bluetooth client connected within *timeout_seconds*.
@@ -778,7 +783,7 @@ class TauSync:
             # without anyone typing a MAC. It runs during the listen window and is stopped once a
             # client connects. No-op on hardware without BLE peripheral support — the phone then
             # falls back to manual MAC entry.
-            self._ble_advertiser = _BleAdvertiserCls()
+            self._ble_advertiser = _BleAdvertiserCls(device_name)
             try:
                 self._ble_advertiser.StartAsync().GetAwaiter().GetResult()
             except Exception:
