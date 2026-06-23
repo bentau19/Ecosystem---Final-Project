@@ -1,6 +1,5 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
-      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+<Wix xmlns="http://wixtoolset.org/schemas/v7/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v7/wxs/bal">
 
   <Bundle Name="SyncDose"
           Version="1.0.0.0"
@@ -13,62 +12,20 @@
         Theme="hyperlinkLicense" />
     </BootstrapperApplication>
 
-
-
-
-<!-- Detects whether .NET 8 x64 Runtime is already installed.
-     Sets Variable="DotNet8Installed" to the found version string (e.g. "8.0.16")
-     or leaves it empty if not found. ExePackage DetectCondition treats non-empty as true. -->
-<util:DotNetCoreSearch
-    Id="DotNet8Check"
-    RuntimeType="dotnet"
-    Platform="x64"
-    MajorVersion="8"
-    Variable="DotNet8Installed" />
-
-<!-- Detects whether WinFSP is already installed by checking the registry.
-     Sets Variable="WinFspInstalled" to a non-empty value if found, otherwise empty.
-     WinFSP is required for the Virtual Drive feature (VirtualDrive.exe depends on it). -->
-<util:RegistrySearch
-    Id="WinFspCheck"
-    Root="HKLM"
-    Key="Software\WinFsp"
-    Value="InstallDir"
-    Variable="WinFspInstalled" />
-
     <Chain>
 
       <!-- Install .NET 8 Runtime if missing (required by TauSync C# library via pythonnet) -->
       <ExePackage Id="DotNet8Runtime"
+                  SourceFile="dotnet-runtime-8.0.16-win-x64.exe"
                   InstallArguments="/install /quiet /norestart"
                   RepairArguments="/repair /quiet /norestart"
                   UninstallArguments="/uninstall /quiet /norestart"
-                  DetectCondition="DotNet8Installed"
-                  Vital="yes">
-
-        <ExePackagePayload
-            Name="dotnet-runtime-8.0.16-win-x64.exe"
-            DownloadUrl="https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.16/dotnet-runtime-8.0.16-win-x64.exe"
-            Size="29032704"
-            Compressed="no"
-            Hash="8c61220263b0d5640cb5c5499652fff5a99bbe9930d95d42943eb336cff80ecc7e00a7f6304d992da8016f5e8bacaac5323ecab92aa2e2cdf214c4e8425aef4f"
-            Version="8.0.16"
-            ProductName="Microsoft .NET Runtime 8.0.16" />
-      </ExePackage>
+                  Vital="yes" />
 
       <!-- Install WinFSP if missing (required for Virtual Drive feature via VirtualDrive.exe) -->
       <MsiPackage Id="WinFspMsi"
-                   DetectCondition="WinFspInstalled"
-                   Vital="yes">
-
-        <MsiPackagePayload
-            Name="winfsp-2.0.23075.msi"
-            DownloadUrl="https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi"
-            Size="6176768"
-            Compressed="no"
-            Hash="80b36787949a17f0be2fb3de59a47c88faae1e93c15ae64f089ae5f69c9fce4d2df9cfeb5e71edd2c3eb23a69c4e93c1ef3c9c3b3f5e2b5f8e6c7d9e8a7b6c"
-            ProductName="WinFSP 2.0 (Windows Filesystem Proxy)" />
-      </MsiPackage>
+                   SourceFile="winfsp-2.0.23075.msi"
+                   Vital="yes" />
 
       <!-- Main SyncDose application installer -->
       <MsiPackage SourceFile="..\Package\bin\Release\Package.msi"
