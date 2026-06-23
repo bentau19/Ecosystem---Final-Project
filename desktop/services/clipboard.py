@@ -133,11 +133,10 @@ class ClipboardService(QObject):
             content: str = payload.get("content", "")
 
             if content_type == "text":
-                # Set the hash BEFORE emitting so that when MainWindow's slot
-                # calls QClipboard.setText(), the resulting dataChanged →
-                # on_clipboard_changed() finds the hash already matching and
-                # silently skips the echo send back to Android.
-                self._last_synced_hash = hashlib.sha256(content.encode()).hexdigest()
+                incoming_hash = hashlib.sha256(content.encode()).hexdigest()
+                if incoming_hash == self._last_synced_hash:
+                    return
+                self._last_synced_hash = incoming_hash
                 self.clipboard_text_received.emit(content)
             # Future: elif content_type == "image": handle base64 image
 
