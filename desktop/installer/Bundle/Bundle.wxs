@@ -1,6 +1,5 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
-     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
 
   <Bundle Name="SyncDose"
           Version="1.0.0.0"
@@ -13,40 +12,37 @@
         Theme="hyperlinkLicense" />
     </BootstrapperApplication>
 
-    <!-- Detects whether .NET 8 x64 Runtime is already installed -->
-    <util:DotNetCoreSearch
-        Id="DotNet8Check"
-        RuntimeType="dotnet"
-        Platform="x64"
-        MajorVersion="8"
-        Variable="DotNet8Installed" />
+    <!--
+      OFFLINE INSTALLER.
+      Every package below uses a local SourceFile and NO DownloadUrl, so WiX
+      embeds the payload directly inside SyncDoseSetup.exe. The end user gets a
+      single self-contained .exe that installs with no internet connection.
 
-    <!-- Detects whether WinFSP is already installed -->
-    <util:RegistrySearch
-        Id="WinFspCheck"
-        Root="HKLM"
-        Key="Software\WinFsp"
-        Value="InstallDir"
-        Variable="WinFspInstalled" />
-
+      The two prerequisite files (.NET runtime + WinFSP) are not in the repo;
+      the CI "Download bundle prerequisites" step fetches them into this folder
+      before `dotnet build` so they can be embedded.
+    -->
     <Chain>
 
-      <!-- Install .NET 8 Runtime if missing (required by TauSync C# library via pythonnet) -->
+      <!-- .NET 8 x64 Runtime (required by the TauSync C# library via pythonnet).
+           Permanent + no UninstallArguments => Burn never removes the shared
+           runtime on uninstall (other apps may depend on it), so WiX does not
+           require a DetectCondition. The .NET installer is idempotent: running
+           it on a machine that already has the runtime is a fast no-op. -->
       <ExePackage Id="DotNet8Runtime"
                   SourceFile="dotnet-runtime-8.0.16-win-x64.exe"
                   InstallArguments="/install /quiet /norestart"
-                  RepairArguments="/repair /quiet /norestart"
-                  UninstallArguments="/uninstall /quiet /norestart"
-                  DetectCondition="DotNet8Installed"
+                  Permanent="yes"
                   Vital="yes" />
 
-      <!-- Install WinFSP if missing (required for Virtual Drive feature via VirtualDrive.exe) -->
+      <!-- WinFSP (required for the Virtual Drive feature via VirtualDrive.exe).
+           MsiPackage auto-detects via the MSI ProductCode captured at build
+           time, so it is skipped automatically if already installed. -->
       <MsiPackage Id="WinFspMsi"
-                   SourceFile="winfsp-2.0.23075.msi"
-                   DetectCondition="WinFspInstalled"
-                   Vital="yes" />
+                  SourceFile="winfsp-2.0.23075.msi"
+                  Vital="yes" />
 
-      <!-- Main SyncDose application installer -->
+      <!-- Main SyncDose application installer (Package.msi, built earlier in CI). -->
       <MsiPackage SourceFile="..\Package\bin\Release\Package.msi"
                   Vital="yes" />
 
