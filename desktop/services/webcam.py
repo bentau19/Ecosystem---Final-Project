@@ -4,7 +4,7 @@ import threading
 
 import numpy as np
 import pyvirtualcam
-from PIL import Image
+from PIL import Image, ImageOps
 from PySide6.QtCore import QObject, Signal
 
 from domain.enums.webcam_channels import WebcamChannels
@@ -74,7 +74,7 @@ class WebcamService(QObject):
                         if not jpeg_bytes:
                             break
                         img = Image.open(io.BytesIO(jpeg_bytes)).convert("RGB")
-                        img = img.resize((_WIDTH, _HEIGHT))
+                        img = ImageOps.pad(img, (_WIDTH, _HEIGHT), color=(0, 0, 0))
                         cam.send(np.array(img))
                         cam.sleep_until_next_frame()
 

@@ -58,6 +58,7 @@ public class WebcamFragment extends Fragment {
 
     private ExecutorService cameraExecutor;
     private ActivityResultLauncher<String> requestPermissionLauncher;
+    private boolean useFrontCamera = false;
 
     // Throttle outbound frames to 15 fps so the Desktop pyvirtualcam (also 15 fps)
     // never accumulates a TCP backlog that would cause latency to grow over time.
@@ -96,6 +97,11 @@ public class WebcamFragment extends Fragment {
 
         view.findViewById(R.id.btnBack).setOnClickListener(v ->
             requireActivity().onBackPressed());
+
+        view.findViewById(R.id.btnFlipCamera).setOnClickListener(v -> {
+            useFrontCamera = !useFrontCamera;
+            startCamera();
+        });
 
         btnStream.setOnClickListener(v -> {
             WebcamStatus status = webcamViewModel.getStatus().getValue();
@@ -168,10 +174,14 @@ public class WebcamFragment extends Fragment {
                     .build();
                 imageAnalysis.setAnalyzer(cameraExecutor, this::processFrame);
 
+                CameraSelector cameraSelector = useFrontCamera
+                    ? CameraSelector.DEFAULT_FRONT_CAMERA
+                    : CameraSelector.DEFAULT_BACK_CAMERA;
+
                 cameraProvider.unbindAll();
                 cameraProvider.bindToLifecycle(
                     getViewLifecycleOwner(),
-                    CameraSelector.DEFAULT_FRONT_CAMERA,
+                    cameraSelector,
                     preview,
                     imageAnalysis
                 );
