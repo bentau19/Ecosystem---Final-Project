@@ -1,4 +1,4 @@
-# TauSync v3.0 — C# Implementation Plan
+# TauSync v3.0→v3.1 — C# Implementation Plan (HISTORICAL)
 
 > **Status: HISTORICAL** — This document was a planning artifact for the migration from the
 > old CorrelationID-based protocol to the TargetID + Meeting Word model described in
@@ -173,15 +173,15 @@ The Stream returned by `Connect(word)` must support **CopyToAsync**-style consum
 
 ## 9. Cleanup Checklist
 
-- [ ] TransferRequest: SenderID only; remove CorrelationID, ParentID, FileSize, Payload; Status REQ/OK/REJECT.
-- [ ] CoreConfig: add FlagControl.
-- [ ] ConnectionContext: _targetMap; _serviceRegistry; Dispatch logic (TargetID first: 0 → require CONTROL+MagicBytes; >0 → pass to handler, handler decides DATA vs CONTROL); FIN cleanup from both _routingMap and _targetMap (§0.2); remove _peerToLocalMap, _incomingPushHandlersByType.
-- [ ] ConnectionContext/Stream: stream returned by Connect and used in Listen must be **queue-based** (Dispatch pushes, Stream pulls) for CopyToAsync support (§0.3).
-- [ ] ConnectionManager: implement Listen(word, onConnect) and Connect(word)→Stream; remove/deprecate SmartSend, GetStream, RegisterIncomingPushHandler, SetIncomingClipboardHandler; keep transport init/connect if needed.
-- [ ] ProtocolHandler: handshake uses SenderID and TargetID; set CONTROL flag for signaling frames.
-- [ ] IConnectionManager: new surface Listen + Connect(word).
-- [ ] SocketTransport: use TargetID naming; pass flags through to Dispatch.
-- [ ] Python: update server.py / client.py to use Listen("CLIPBOARD", ...) and Connect("CLIPBOARD") (or equivalent) once C# API is in place.
+- [x] TransferRequest: SenderID only; remove CorrelationID, ParentID, FileSize, Payload; Status REQ/OK/REJECT.
+- [x] CoreConfig: add FlagControl.
+- [x] ConnectionContext: _targetMap; _serviceRegistry; Dispatch logic (TargetID first: 0 → require CONTROL+MagicBytes; >0 → pass to handler, handler decides DATA vs CONTROL); FIN cleanup from both _routingMap and _targetMap (§0.2); remove _peerToLocalMap, _incomingPushHandlersByType.
+- [x] ConnectionContext/Stream: stream returned by Connect and used in Listen must be **queue-based** (Dispatch pushes, Stream pulls) for CopyToAsync support (§0.3).
+- [x] ConnectionManager: implement Listen(word, onConnect) and Connect(word)→Stream; remove/deprecate SmartSend, GetStream, RegisterIncomingPushHandler, SetIncomingClipboardHandler; keep transport init/connect if needed.
+- [x] ProtocolHandler: handshake uses SenderID and TargetID; set CONTROL flag for signaling frames.
+- [x] IConnectionManager: new surface Listen + Connect(word).
+- [x] SocketTransport: use TargetID naming; pass flags through to Dispatch.
+- [x] Python: update server.py / client.py to use Listen("CLIPBOARD", ...) and Connect("CLIPBOARD") (or equivalent) once C# API is in place.
 
 ---
 

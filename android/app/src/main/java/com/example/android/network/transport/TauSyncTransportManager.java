@@ -35,11 +35,16 @@ public class TauSyncTransportManager implements TransportManager {
     private static final int INITIAL_RETRY_DELAY_MS = 1000;      // 1 second
     private static final int MAX_RETRY_DELAY_MS = 30000;         // 30 seconds
     private static final int MAX_RETRY_ATTEMPTS = 2;
-    private static final int POLLING_INTERVAL_MS = 2000;         // 2 seconds
+    private static final int POLLING_INTERVAL_MS = 20;           // 20 ms — avg discovery latency
+    // 10 ms instead of 50 ms; 5×
+    // faster virtual-drive op pickup
 
     // State management
     private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
-    private TransportStatus status = TransportStatus.IDLE;
+    // volatile: written on sendDisconnectToPC / PeerRequestHandler threads, read on the
+    // polling executor thread. Without volatile the polling thread can see a stale CONNECTED
+    // value after prepareForDisconnect() sets DISCONNECTING, causing a spurious reconnect.
+    private volatile TransportStatus status = TransportStatus.IDLE;
     private TransportListener listener;
     private TauSync tauSync;
     private RemoteDeviceInfo currentRemoteDevice;
@@ -53,6 +58,15 @@ public class TauSyncTransportManager implements TransportManager {
 
     private ScheduledExecutorService pollingExecutor;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    // Stable Runnable identity for mainHandler.postDelayed / removeCallbacks.
+    // In Java, `this::attemptConnection` creates a NEW object on every evaluation,
+    // so two separate `this::attemptConnection` expressions are never == to each
+    // other.  Handler.removeCallbacks(r) matches by reference (==), meaning
+    // removeCallbacks(this::attemptConnection) would silently fail to remove a
+    // previously posted this::attemptConnection callback.  Storing the reference
+    // once guarantees postDelayed and removeCallbacks see the same object.
+    private final Runnable retryConnectionRunnable = this::attemptConnection;
 
     // Reconnection tracking
     private int currentRetryAttempt = 0;
@@ -91,14 +105,31 @@ public class TauSyncTransportManager implements TransportManager {
                     mainHandler.post(() -> listener.onReconnectAttempt(currentRetryAttempt, MAX_RETRY_ATTEMPTS));
                 }
 
+                // Disconnect any TauSync instance left over from a prior timed-out
+                // attempt.  connectTo() below spawns an inner thread that can outlive
+                // the outer Future.get() timeout; without this cleanup that orphaned
+                // thread can connect to the PC's freshly restarted listener after a
+                // phone-initiated disconnect, producing a spurious second "d" on the PC.
+                TauSync previousTauSync = tauSync;
+                tauSync = null;
+                if (previousTauSync != null) {
+                    try {
+                        previousTauSync.disconnect();
+                    } catch (Exception ignored) {
+                    }
+                }
+
                 tauSync = new TauSync();
                 Log.d(TAG, "🔵 TauSync created, calling connectTo...");
 
-                // connect to PC with tauSync
-                // 5 sec timeout
+                // connect to PC with tauSync.
+                // Inner TauSync timeout (4 s) is intentionally shorter than the outer
+                // Java Future timeout (5 s) so the inner thread always exits before
+                // Future.get() times out.  This prevents an orphaned native thread from
+                // lingering and later connecting to the PC's next listener session.
                 java.util.concurrent.Future<?> connectFuture = java.util.concurrent.Executors
                         .newSingleThreadExecutor()
-                        .submit(() -> tauSync.connectTo(currentRemoteDevice.getPcIp()));
+                        .submit(() -> tauSync.connectTo(currentRemoteDevice.getPcIp(), 4));
 
                 try {
                     connectFuture.get(5, java.util.concurrent.TimeUnit.SECONDS);
@@ -118,8 +149,6 @@ public class TauSyncTransportManager implements TransportManager {
 
             } catch (Exception e) {
                 Log.e(TAG, "🔴 CAUGHT exception: " + e.getClass().getName() + " - " + e.getMessage());
-
-//              TODO: error even after failure still connect regulatory.
                 handleConnectionFailure(e);
             } catch (Throwable t) {
                 Log.e(TAG, "🔴 CAUGHT throwable: " + t.getClass().getName() + " - " + t.getMessage());
@@ -152,7 +181,7 @@ public class TauSyncTransportManager implements TransportManager {
             Log.i(TAG, "Scheduling retry #" + currentRetryAttempt + " in " + delayWithJitter + "ms");
 
             mainHandler.postDelayed(
-                    this::attemptConnection,
+                    retryConnectionRunnable,
                     delayWithJitter
             );
 
@@ -183,7 +212,9 @@ public class TauSyncTransportManager implements TransportManager {
         }
 
         pollingExecutor.scheduleWithFixedDelay(() -> {
-            if (isShuttingDown.get() || status != TransportStatus.CONNECTED) {
+            // tauSync may be null during the reconnect window (handlePollingFailure
+            // has already cleared it before attemptConnection creates the new instance).
+            if (isShuttingDown.get() || status != TransportStatus.CONNECTED || tauSync == null) {
                 return;
             }
 
@@ -209,23 +240,37 @@ public class TauSyncTransportManager implements TransportManager {
     private void handlePollingFailure(Exception error) {
         Log.w(TAG, "Connection lost during polling. Initiating reconnection sequence.");
 
-        // Clean up TauSync
+        // Close the dead TauSync socket.
+        // Use disconnect() — NOT dispose().  dispose() permanently poisons the C# singleton
+        // globalRole, preventing any future TauSync() instance from connecting.  disconnect()
+        // cleanly closes the TCP socket while leaving globalRole intact for the reconnect.
         if (tauSync != null) {
             try {
-                tauSync.dispose();
+                tauSync.disconnect();
             } catch (Exception e) {
-                Log.d(TAG, "Error disposing TauSync: " + e.getMessage());
+                Log.d(TAG, "Error closing TauSync during polling failure: " + e.getMessage());
             }
             tauSync = null;
         }
 
-        // Stop polling
-        stopPolling();
-
-        // Reconnect if we were actively connected
-        if (status == TransportStatus.CONNECTED) {
-            attemptConnection();
+        // Do NOT call stopPolling() here.  stopPolling() calls
+        // pollingExecutor.awaitTermination() which self-deadlocks when invoked from within
+        // a polling-executor task (the task waits for itself to finish — 5-second timeout).
+        // shutdownNow() marks the executor for shutdown without blocking; the current task
+        // completes normally and no further tasks are scheduled.  startPollingForPeerRequests()
+        // detects isShutdown() == true and creates a fresh executor on the next connect.
+        if (pollingExecutor != null && !pollingExecutor.isShutdown()) {
+            pollingExecutor.shutdownNow();
         }
+
+        // Reconnect only if we were actively connected AND a deliberate shutdown is not
+        // already in progress. isShuttingDown is set at the top of shutdown() (called by
+        // cleanup() from DisconnectChannelHandler / sendDisconnectToPC). Without this guard
+        // a polling failure that races with cleanup causes an unwanted reconnect attempt —
+        // the "auto send connect_to_pc" bug.
+//        if (status == TransportStatus.CONNECTED && !isShuttingDown.get()) {
+//            attemptConnection();
+//        }
     }
 
     /**
@@ -253,21 +298,59 @@ public class TauSyncTransportManager implements TransportManager {
     private static final int DEFAULT_WRITE_CONNECT_TIMEOUT_S = 30;
 
     /**
+     * Stops the polling loop and transitions the transport to
+     * {@link TransportStatus#DISCONNECTING}, <em>without</em> closing the underlying
+     * socket or resetting the retry / device state.
+     *
+     * <p>Call this from {@code sendDisconnectToPC()} before calling
+     * {@link #writeToChannel} so the 20 ms polling tick can no longer race with
+     * the outbound {@code tauSync.connect()} call.  Without this guard the poll
+     * occasionally fails → {@code handlePollingFailure} → socket disposed →
+     * desktop never joins the {@code disconnect_phone} word → Android stalls for
+     * up to 30 s waiting for the connect timeout.
+     *
+     * <p>This method blocks briefly (up to 5 s via {@link #stopPolling}) waiting
+     * for any in-flight polling task to finish.  Always call from a background
+     * thread — never from the main thread.
+     */
+    @Override
+    public void prepareForDisconnect() {
+        if (isShuttingDown.get()) {
+            Log.d(TAG, "prepareForDisconnect: already shutting down, skipping");
+            return;
+        }
+        mainHandler.removeCallbacks(retryConnectionRunnable);
+        updateStatus(TransportStatus.DISCONNECTING);
+        stopPolling();  // blocks until any in-flight getPeerWaitingWords() completes
+        Log.d(TAG, "prepareForDisconnect: polling stopped, ready to send disconnect signal");
+    }
+
+    /**
      * Writes a UTF-8 string to a TauSync channel.
      *
      * <p><b>Unlike {@link NetworkHandler#writeToChannel}</b>, this method does NOT
      * swallow exceptions — any failure propagates to the caller so that upstream code
      * (e.g. {@code BackupTransferUseCase}) can correctly distinguish a failed send
      * from a successful one and set {@code metaSent} accordingly.
+     *
+     * <p>Allowed in both {@link TransportStatus#CONNECTED} and
+     * {@link TransportStatus#DISCONNECTING} states so that
+     * {@code sendDisconnectToPC()} can write the farewell channel after
+     * {@link #prepareForDisconnect()} has already set the status.
      */
     @Override
     public void writeToChannel(String channel, String data) throws Exception {
-        if (tauSync == null || status != TransportStatus.CONNECTED) {
+        writeToChannel(channel, data, DEFAULT_WRITE_CONNECT_TIMEOUT_S);
+    }
+
+    @Override
+    public void writeToChannel(String channel, String data, int timeoutSec) throws Exception {
+        if (tauSync == null || (status != TransportStatus.CONNECTED && status != TransportStatus.DISCONNECTING)) {
             throw new IllegalStateException(
                     "Cannot write to channel [" + channel + "]: Not connected");
         }
         try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
-                     tauSync.connect(channel, DEFAULT_WRITE_CONNECT_TIMEOUT_S)) {
+                     tauSync.connect(channel, timeoutSec)) {
             stream.writeString(data);
         }
         Log.v(TAG, "Written to channel [" + channel + "]: " + data);
@@ -432,9 +515,183 @@ public class TauSyncTransportManager implements TransportManager {
     }
 
     @Override
+    public void serveJsonExchange(String channel, JsonExchangeHandler handler) throws Exception {
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException(
+                    "Cannot serve channel [" + channel + "]: Not connected");
+        }
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
+                     tauSync.connect(channel)) {
+            Log.d(TAG, "serveJsonExchange: connected");
+            // Read the newline-terminated JSON request the peer wrote.
+            // readLine() returns at '\n' without waiting for the peer to close the stream,
+            // which avoids the mutual-readAll deadlock (both sides waiting for the other's FIN).
+            String request = stream.readLine();
+            if (request == null) {
+                throw new java.io.EOFException(
+                        "serveJsonExchange: peer closed without sending request on [" + channel + "]");
+            }
+            Log.d(TAG, "serveJsonExchange: request:-----    " + request + " -------");
+            // Compute the response (may spawn background threads for data-phase ops).
+            // The full JSON request is forwarded — every handler parses the fields
+            // it needs (path, offset, length, uuid, from, to, ...) from it.
+            String response = handler.respond(request);
+
+            Log.d(TAG, "serveJsonExchange: response= " + response);
+            // Write the response back on the same stream before it closes.
+            stream.writeString(response);
+            Log.v(TAG, "serveJsonExchange [" + channel + "]: req=" + request
+                    + " resp=" + response);
+        }
+    }
+
+    /**
+     * Opens a single TauSync channel, reads one newline-terminated JSON request from the
+     * peer, calls {@code handler} to obtain a source {@link java.io.InputStream}, and
+     * streams all bytes from that stream back to the peer before closing the channel.
+     *
+     * <p>Used by the virtual-drive {@code read} op: the desktop opens
+     * {@code virtual_drive_read_{uuid8}}, writes {@code {path, offset, length}\n}, and
+     * reads the file bytes back.  The handler's {@code InputStream} is closed by this
+     * method via try-with-resources; the outer {@code TauSyncStream} is closed immediately
+     * after, sending FIN to the peer so {@code read_all()} on the desktop unblocks.
+     */
+    @Override
+    public void serveJsonThenStreamOut(String channel, JsonToInputStreamHandler handler) throws Exception {
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException(
+                    "Cannot serve channel [" + channel + "]: Not connected");
+        }
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
+                     tauSync.connect(channel, DEFAULT_WRITE_CONNECT_TIMEOUT_S)) {
+            String request = stream.readLine();
+            if (request == null) {
+                throw new java.io.EOFException(
+                        "serveJsonThenStreamOut: peer closed without sending request on ["
+                                + channel + "]");
+            }
+            Log.d(TAG, "serveJsonThenStreamOut [" + channel + "]: req=" + request);
+            try (java.io.InputStream in = handler.openInputStream(request)) {
+                java.io.OutputStream out = stream.getOutputStream();
+                byte[] buf = new byte[FILE_CHUNK_SIZE];
+                int n;
+                long totalBytes = 0;
+                int chunkCount = 0;
+                while ((n = in.read(buf, 0, buf.length)) > 0) {
+                    out.write(buf, 0, n);
+                    totalBytes += n;
+                    chunkCount++;
+                }
+                out.flush();
+                Log.d(TAG, "serveJsonThenStreamOut [" + channel + "]: streamed "
+                        + totalBytes + "B in " + chunkCount + " chunks");
+            }
+        }
+    }
+
+    @Override
+    public void serveReadRequest(String channel, JsonToReadResultHandler handler) throws Exception {
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException(
+                    "Cannot serve channel [" + channel + "]: Not connected");
+        }
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
+                     tauSync.connect(channel, DEFAULT_WRITE_CONNECT_TIMEOUT_S)) {
+            String request = stream.readLine();
+            if (request == null) {
+                throw new java.io.EOFException(
+                        "serveReadRequest: peer closed without sending request on ["
+                                + channel + "]");
+            }
+            Log.d(TAG, "serveReadRequest [" + channel + "]: req=" + request);
+
+            ReadResult result;
+            try {
+                result = handler.openRead(request);
+            } catch (Exception e) {
+                // The handler is expected to map failures to error codes; an escape
+                // here is unexpected — report it as io_error rather than streaming
+                // nothing (which the peer could not distinguish from a clean EOF).
+                Log.w(TAG, "serveReadRequest [" + channel + "]: handler threw", e);
+                result = ReadResult.error("io_error");
+            }
+
+            if (!result.ok) {
+                // Header only: the peer reads this line and surfaces the error.
+                stream.writeString("{\"ok\":false,\"error\":\"" + result.error + "\"}\n");
+                Log.d(TAG, "serveReadRequest [" + channel + "]: error=" + result.error);
+                return;
+            }
+
+            // Success: declare the exact byte count, then stream exactly that many.
+            stream.writeString("{\"ok\":true,\"length\":" + result.length + "}\n");
+            try (java.io.InputStream in = result.stream) {
+                java.io.OutputStream out = stream.getOutputStream();
+                byte[] buf = new byte[FILE_CHUNK_SIZE];
+                long remaining = result.length;
+                while (remaining > 0) {
+                    int want = (int) Math.min(buf.length, remaining);
+                    int n = in.read(buf, 0, want);
+                    if (n <= 0) break;  // file shrank under us → peer detects truncation
+                    out.write(buf, 0, n);
+                    remaining -= n;
+                }
+                out.flush();
+                Log.d(TAG, "serveReadRequest [" + channel + "]: streamed "
+                        + (result.length - remaining) + "/" + result.length + "B");
+            }
+        }
+    }
+
+    /**
+     * Opens a single TauSync channel, reads one newline-terminated JSON header from the
+     * peer, calls {@code handler} to obtain a destination {@link java.io.OutputStream},
+     * and pipes all remaining bytes from the channel into that stream until the peer closes
+     * it (EOF / FIN).  The handler's {@code OutputStream} is closed by this method via
+     * try-with-resources; after this method returns the destination is fully written and
+     * the caller should finalize (e.g. rename temp file).
+     *
+     * <p>Used by the virtual-drive {@code write} op: the desktop opens
+     * {@code virtual_drive_write_{uuid8}}, writes {@code {path}\n} then pushes the file
+     * bytes via internal {@code write} pipe ops, and finally closes on {@code write_close}.
+     */
+    @Override
+    public void serveJsonHeaderThenStreamIn(String channel, JsonHeaderThenStreamInHandler handler) throws Exception {
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException(
+                    "Cannot serve channel [" + channel + "]: Not connected");
+        }
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
+                     tauSync.connect(channel, DEFAULT_WRITE_CONNECT_TIMEOUT_S)) {
+            String header = stream.readLine();
+            if (header == null) {
+                throw new java.io.EOFException(
+                        "serveJsonHeaderThenStreamIn: peer closed without sending header on ["
+                                + channel + "]");
+            }
+            Log.d(TAG, "serveJsonHeaderThenStreamIn [" + channel + "]: header=" + header);
+            try (java.io.OutputStream dest = handler.openOutputStream(header)) {
+                java.io.InputStream in = stream.getInputStream();
+                byte[] buf = new byte[FILE_CHUNK_SIZE];
+                int n;
+                long totalBytes = 0;
+                int chunkCount = 0;
+                while ((n = in.read(buf, 0, buf.length)) > 0) {
+                    dest.write(buf, 0, n);
+                    totalBytes += n;
+                    chunkCount++;
+                }
+                dest.flush();
+                Log.d(TAG, "serveJsonHeaderThenStreamIn [" + channel + "]: received "
+                        + totalBytes + "B in " + chunkCount + " chunks");
+            }
+        }
+    }
+
+    @Override
     public void disconnect() {
         Log.d(TAG, "Disconnect requested");
-        mainHandler.removeCallbacks(this::attemptConnection);
+        mainHandler.removeCallbacks(retryConnectionRunnable);
 
         updateStatus(TransportStatus.DISCONNECTING);
 
@@ -480,7 +737,11 @@ public class TauSyncTransportManager implements TransportManager {
 
         try {
             connectionExecutor.shutdown();
-            if (!connectionExecutor.awaitTermination(20, TimeUnit.SECONDS)) {
+            // 5-second cap matches the connectTo() internal timeout — any in-flight
+            // attemptConnection() task finishes within 5 s.  The previous 20-second
+            // wait could block onDestroy() (which runs on the main thread) for far
+            // longer than necessary.
+            if (!connectionExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
                 Log.w(TAG, "Connection executor did not terminate gracefully, forcing shutdown");
                 connectionExecutor.shutdownNow();
             }

@@ -117,17 +117,28 @@ pytest desktop/tests/repositories/test_tool.py -v
 
 ### Production build
 
-Two PyInstaller executables are produced and packaged together as a single MSI:
+Three executables are produced and packaged into a single bootstrapper installer
+(`SyncDoseSetup.exe`):
 
 ```powershell
-pyinstaller desktop/installer/specs/main_app.spec      # SyncDose.exe
-pyinstaller desktop/installer/specs/file_handler.spec  # FileHandler.exe
-dotnet build desktop/installer/ -c Release             # → .msi
+# Build PyInstaller executables (run from repo root)
+pyinstaller desktop/installer/Package/specs/main_app.spec      # → SyncDose.exe
+pyinstaller desktop/installer/Package/specs/file_handler.spec  # → FileHandler.exe
+# VirtualDrive.exe is pre-built — no build step needed
+
+# Package as MSI + Bundle bootstrapper
+dotnet build desktop/installer/ -c Release             # → SyncDoseSetup.exe
 ```
 
-`SyncDose.exe` runs as a named-pipe server on `\\.\pipe\FileSend`. `FileHandler.exe` is
-registered as the Windows shell "Send with SyncDose" context-menu handler — it writes the
-target file path to the pipe and exits.
+`SyncDose.exe` is the main dashboard, acting as a named-pipe server on both
+`\\.\pipe\FileSend` and `\\.\pipe\SyncDoseVDrive`. `FileHandler.exe` is registered as the
+Windows shell "Send with SyncDose" context-menu handler — it writes the target file path
+to `\\.\pipe\FileSend` and exits. `VirtualDrive.exe` is a native C++ WinFsp filesystem that
+mounts the connected phone as a Windows drive letter, forwarding every Explorer op to
+`SyncDose.exe` via `\\.\pipe\SyncDoseVDrive`.
+
+`SyncDoseSetup.exe` (the WiX Bundle) auto-installs **.NET 8 Runtime** and **WinFSP 2.0** if
+they are missing before running the MSI — end users only need this one file.
 
 ---
 
@@ -163,4 +174,4 @@ role as a deterministic tiebreaker.
 GitHub Actions (`.github/workflows/desktop.yml`) runs on every push:
 
 1. **test** — builds TauSync DLL → builds native pipe module (MSVC) → `pip install` → `pytest desktop/`
-2. **build** — builds both PyInstaller executables → `dotnet build` MSI → uploads `.msi` artifact
+2. **build** — builds both PyInstaller executables (SyncDose + FileHandler) → `dotnet build` Bundle → uploads `SyncDoseSetup.exe` artifact
