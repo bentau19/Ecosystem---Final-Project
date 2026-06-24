@@ -26,14 +26,15 @@
 
       <!-- .NET 8 x64 Runtime (required by the TauSync C# library via pythonnet).
            Permanent + no UninstallArguments => Burn never removes the shared
-           runtime on uninstall (other apps may depend on it), so WiX does not
-           require a DetectCondition. The .NET installer is idempotent: running
-           it on a machine that already has the runtime is a fast no-op. -->
+           runtime on uninstall (other apps may depend on it). DetectCondition
+           skips installation if already present. The .NET installer is idempotent,
+           but this improves UX by avoiding unnecessary reinstalls. -->
       <ExePackage Id="DotNet8Runtime"
                   SourceFile="dotnet-runtime-8.0.16-win-x64.exe"
                   InstallArguments="/install /quiet /norestart"
                   Permanent="yes"
-                  Vital="yes" />
+                  Vital="yes"
+                  DetectCondition="HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft .NET Runtime 8.0 x64" />
 
       <!-- WinFSP (required for the Virtual Drive feature via VirtualDrive.exe).
            MsiPackage auto-detects via the MSI ProductCode captured at build
@@ -43,13 +44,15 @@
                   Vital="yes" />
 
       <!-- OBS Studio with Virtual Camera plugin (required for phone camera streaming).
-           Silent install with auto-detection. Permanent so it's not removed when SyncDose uninstalls.
-           Vital="no" allows SyncDose to install even if OBS fails (user can fix manually). -->
+           DetectCondition skips install if already present. Permanent so it's not
+           removed when SyncDose uninstalls. Vital="no" allows SyncDose to install
+           even if OBS fails (user can fix manually). -->
       <ExePackage Id="ObsStudio"
                   SourceFile="OBS-Studio-32.1.2-Windows-x64-Installer.exe"
                   InstallArguments="/S /D=C:\Program Files\obs-studio"
                   Permanent="yes"
-                  Vital="no" />
+                  Vital="no"
+                  DetectCondition="HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OBS-Studio_is1" />
 
       <!-- Main SyncDose application installer (Package.msi, built earlier in CI). -->
       <MsiPackage SourceFile="..\Package\bin\Release\Package.msi"
