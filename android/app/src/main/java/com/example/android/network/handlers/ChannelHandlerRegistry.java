@@ -8,7 +8,7 @@ import java.util.Map;
 
 /**
  * ChannelHandlerRegistry manages all channel handlers.
- *
+ * <p>
  * This registry enables a plugin-like architecture where:
  * - New handlers can be registered without modifying ConnectivityService
  * - Handlers can be swapped/updated dynamically
@@ -88,12 +88,23 @@ public class ChannelHandlerRegistry {
         if (handler == null) {
             // Prefix fallback — supports handlers registered with a channel prefix
             // (e.g. "backup_file_result_") that handle channels with dynamic suffixes.
+            //
+            // Uses LONGEST-prefix match to handle overlapping prefixes correctly.
+            // Example: both "virtual_drive_list_" and "virtual_drive_list_page_" are
+            // registered; a channel like "virtual_drive_list_page_a1b2c3d4" must route
+            // to the longer key, not whichever HashMap iteration surfaces first.
+            String         longestKey     = null;
+            ChannelHandler longestHandler = null;
             for (Map.Entry<String, ChannelHandler> entry : handlers.entrySet()) {
-                if (channel.startsWith(entry.getKey())) {
-                    handler = entry.getValue();
-                    break;
+                String key = entry.getKey();
+                if (channel.startsWith(key)) {
+                    if (longestKey == null || key.length() > longestKey.length()) {
+                        longestKey     = key;
+                        longestHandler = entry.getValue();
+                    }
                 }
             }
+            handler = longestHandler;
         }
 
         if (handler != null) {

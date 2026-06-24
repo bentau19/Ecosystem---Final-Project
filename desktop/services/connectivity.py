@@ -142,17 +142,25 @@ class ConnectivityService(QObject):
     def _stop(self) -> None:
         # Strictly ordered teardown — see stop() docstring.
         #
+        # Only the running-state flip and the tau/executor capture happen inside
+        # the lock; the teardown and lifecycle signals run *outside* it.  Holding
+        # the lock across the (up to 10 s) phone-notify handshake and the
+        # executor join would stall a queued start() — which also takes this lock
+        # — leaving the PC not yet re-listening when the peer retries.
+        #
         # The executor reference is captured *inside* the lock: once
         # device_disconnected is emitted, a slot may call start(), which swaps
         # self._executor for a fresh pool.  Shutting down the captured (old)
         # reference guarantees we can never cancel the new listener's work.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
+                logger.debug("_stop: already stopped — no-op")
                 return
             self._is_running.clear()
-            executor = self._executor
             tau = self._tau
+            executor = self._executor
 
+        logger.debug("_stop: tearing down transport and draining workers")
         self.device_disconnecting.emit()
 
         # Network teardown runs outside the lock so a queued start() is never
@@ -168,6 +176,7 @@ class ConnectivityService(QObject):
         executor.shutdown(wait=True, cancel_futures=True)
 
         self.device_disconnected.emit()
+        logger.debug("_stop: teardown complete — device_disconnected emitted")
 
     def _teardown_transport(self, tau: TauSync) -> None:
         # Notify the peer (best-effort) and close the transport.  Emits no
@@ -217,21 +226,50 @@ class ConnectivityService(QObject):
         # TODO: connect via Bluetooth using the previously stored device ID.
         pass
 
+    def _reset_transport(self) -> None:
+        # Clear a stale/stuck transport role so the next listen() re-arms a real accept.
+        # tau.disconnect() always resets the process-wide role to NONE (and only touches
+        # the socket when it is actually live), so this is safe on a phantom/dead transport.
+        try:
+            self._tau.disconnect()
+        except Exception as exc:
+            logger.debug("_listen: reset/disconnect failed: %s", exc)
+
     def _listen(self) -> None:
         # Retries on timeout; surfaces unexpected exceptions via connection_error.
         while self._is_running.is_set() and not self.connected:
+            logger.debug(
+                "_listen: waiting for connection (running=%s, connected=%s)",
+                self._is_running.is_set(),
+                self.connected,
+            )
             try:
                 self._tau.listen(timeout_seconds=10)
+                # listen() returning does NOT guarantee a live peer: a stale transport can
+                # return instantly with is_connected still False (the "phantom connect").
+                # Never emit a phantom device_connected — reset the role so the next
+                # listen() re-arms a real accept, then back off and retry.
+                if not self.connected:
+                    logger.warning("_listen: listen() returned with no live peer — resetting")
+                    self._reset_transport()
+                    time.sleep(1)
+                    continue
+                logger.info("_listen: device connected")
                 self.device_connected.emit()
             except TimeoutError:
-                continue
+                logger.debug("_listen: listen timed out — retrying")
+                time.sleep(1)
             except Exception as exc:
                 # A deliberate stop() aborts the blocking listen() via
                 # tau.disconnect() — that is normal teardown, not an error.
                 if not self._is_running.is_set():
+                    logger.debug("_listen: listen aborted by stop() — exiting")
                     return
                 logger.error("Connection listener error: %s", exc)
                 self.connection_error.emit(str(exc))
+                # Clear any stuck role (e.g. a surfaced "already connected" RuntimeError)
+                # so the next attempt can re-arm a real listen.
+                self._reset_transport()
                 # Brief backoff so a persistent failure (e.g. port in use)
                 # never hot-spins the listener thread.
                 time.sleep(1)

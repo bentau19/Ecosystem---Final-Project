@@ -1,0 +1,17 @@
+{
+  "name": "ClipboardChannels",
+  "description": "TauSync meeting-word identifiers for the clipboard sync protocol. Both PC and Android must call tau.connect() with the exact same string — define it here once and generate both sides.",
+  "type": "string",
+  "members": [
+    {
+      "name": "CLIPBOARD_ANDROID_TO_PC",
+      "value": "clipboard_android_to_pc",
+      "description": "Android sends clipboard content to PC."
+    },
+    {
+      "name": "CLIPBOARD_PC_TO_ANDROID",
+      "value": "clipboard_pc_to_android",
+      "description": "PC sends clipboard content to Android."
+    }
+  ]
+}

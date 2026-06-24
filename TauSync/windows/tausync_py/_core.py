@@ -655,8 +655,12 @@ class TauSync:
                     f"client mode (to {TauSync._global_target!r}). "
                     "The transport is a singleton; you cannot switch roles."
                 )
-            if TauSync._global_role == _ROLE_SERVER:
-                return  # already listening, idempotent
+            if TauSync._global_role == _ROLE_SERVER and self.is_connected:
+                return  # already listening with a live peer — idempotent
+            # role is NONE, or SERVER-but-stale (a prior listen returned with no live
+            # socket — the "phantom connect"). Re-arm a fresh listen instead of
+            # returning success; otherwise the caller's accept loop spins forever on a
+            # role that says SERVER while is_connected stays False.
             TauSync._global_role = _ROLE_SERVER
             TauSync._global_target = "0.0.0.0 (listening)"
         try:
@@ -953,19 +957,27 @@ class TauSync:
         After this call ``is_connected`` returns ``False`` and ``listen()`` /
         ``connect_to()`` may be called again on the same instance.
 
-        Safe to call on an already-disconnected transport (no-op).
+        Safe to call on an already-disconnected transport (no-op for the socket,
+        but the process-wide role is always reset).
 
         Raises:
             RuntimeError: If this instance has been disposed.
         """
         self._check_not_disposed()
         self._stop_ble_advertiser()
-        if not self.is_connected:
-            return
-        self._manager.Disconnect()
-        with TauSync._global_role_lock:
-            TauSync._global_role = _ROLE_NONE
-            TauSync._global_target = None
+        # Always reset the process-wide role/target, even when the socket is
+        # already down.  A peer-initiated drop makes _manager.IsConnected()
+        # False before we get here; leaving _global_role == _ROLE_SERVER would
+        # make the next listen() a no-op that returns instantly (idempotent
+        # "already listening"), hot-looping the caller's accept loop.  Only the
+        # actual Disconnect() is guarded so we never poke a dead transport.
+        try:
+            if self._manager.IsConnected():
+                self._manager.Disconnect()
+        finally:
+            with TauSync._global_role_lock:
+                TauSync._global_role = _ROLE_NONE
+                TauSync._global_target = None
 
     def new_manager(self) -> "TauSync":
         """Create another ``TauSync`` instance sharing the same singleton socket.

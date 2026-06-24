@@ -24,6 +24,7 @@ import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.services.AppNotificationManager;
 import com.example.android.ui.fragments.ActionsFragment;
 import com.example.android.ui.fragments.BackupFragment;
+import com.example.android.ui.fragments.WebcamFragment;
 import com.example.android.ui.fragments.ConnectFragment;
 import com.example.android.viewmodel.FileTransferViewModel;
 import com.example.android.viewmodel.MainViewModel;
@@ -113,6 +114,7 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Processes raw QR data scanned from the PC client.
+     *
      * @param qrData The string content extracted from the QR code.
      */
     public void processScannedData(String qrData) {
@@ -176,6 +178,12 @@ public class MainActivity extends AppCompatActivity {
      * {@code DISCONNECTED} before the frame is sent, causing the UI to navigate away
      * and the transport to be abandoned mid-flight.
      */
+    public void sendClipboard() {
+        Intent intent = new Intent(this, ConnectivityService.class);
+        intent.setAction("com.example.android.ACTION_SEND_CLIPBOARD");
+        startService(intent);
+    }
+
     public void disconnect() {
         Log.d("TauSyncFlow", "Requesting clean disconnect from service...");
         Intent intent = new Intent(this, ConnectivityService.class);
@@ -189,11 +197,17 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Navigates to the Actions dashboard if not already there.
+     *
+     * Skips navigation when the back stack is non-empty: that means the user
+     * is inside a sub-screen (WebcamFragment, BackupFragment, …) that sits on
+     * top of ActionsFragment. This prevents LiveData re-delivery on rotation
+     * from wiping the sub-screen and jumping back to ActionsFragment.
      */
     public void navigateToActions() {
-        if (!(getSupportFragmentManager().findFragmentById(R.id.fragment_container) instanceof ActionsFragment)) {
-            replaceFragment(new ActionsFragment());
-        }
+        FragmentManager fm = getSupportFragmentManager();
+        if (fm.getBackStackEntryCount() > 0) return;
+        if (fm.findFragmentById(R.id.fragment_container) instanceof ActionsFragment) return;
+        replaceFragment(new ActionsFragment());
     }
 
     /**
@@ -212,6 +226,19 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
+     * Navigates to the Webcam viewfinder screen.
+     *
+     * <p>Uses addToBackStack so the back button returns to ActionsFragment.
+     */
+    public void navigateToWebcam() {
+        getSupportFragmentManager().beginTransaction()
+                .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out)
+                .replace(R.id.fragment_container, new WebcamFragment())
+                .addToBackStack(null)
+                .commitAllowingStateLoss();
+    }
+
+    /**
      * Navigates to the Connection setup screen if not already there.
      */
     public void navigateToConnect() {
@@ -222,6 +249,7 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Helper method to replace the current fragment with a new one.
+     *
      * @param fragment The fragment to display.
      */
     private void replaceFragment(Fragment fragment) {
@@ -249,13 +277,13 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Observes FileTransferViewModel LiveData.
-     *
+     * <p>
      * PENDING_APPROVAL:
-     *   - Foreground → AlertDialog with Accept / Reject buttons
-     *   - Background → heads-up notification with action buttons
-     *
+     * - Foreground → AlertDialog with Accept / Reject buttons
+     * - Background → heads-up notification with action buttons
+     * <p>
      * COMPLETED / REJECTED / FAILED:
-     *   - Dismiss notification (if shown), display Toast, reset state
+     * - Dismiss notification (if shown), display Toast, reset state
      */
     private void observeFileTransfer() {
 
@@ -317,7 +345,6 @@ public class MainActivity extends AppCompatActivity {
                 .setCancelable(false)
                 .show();
     }
-
 
 
     // --- UI Configurations ---

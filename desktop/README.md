@@ -24,6 +24,13 @@ bidirectional file transfer via Windows shell integration, and a configurable to
 14. [Theming System](#theming-system)
 15. [Design Tokens](#design-tokens)
 16. [Services](#services)
+    - [ConnectivityService](#connectivityservice)
+    - [DeviceInfoService](#deviceinfoservice)
+    - [FileTransferService](#filetransferservice)
+    - [BackupService](#backupservice)
+    - [VirtualDriveService](#virtualdriveservice)
+    - [PhoneRequestService](#phonerequestservice)
+    - [ToolService](#toolservice)
 17. [ViewModels](#viewmodels)
 18. [Repositories](#repositories)
 19. [Serializers](#serializers)
@@ -47,8 +54,18 @@ bidirectional file transfer via Windows shell integration, and a configurable to
 - **Dark / Light Theme** — Tracks the Windows system color scheme (via the registry) and
   re-themes all widgets dynamically without a restart
 - **System Tray** — Minimize-to-tray on close; restore via double-click or right-click menu
+- **Virtual Drive** — Mounts the connected phone as a Windows drive letter using WinFSP.
+  `VirtualDrive.exe` forwards every Explorer filesystem operation (`list`, `stat`, `read`,
+  `write`, `create`, `delete`, `rename`) to Android via TauSync, so the phone's storage
+  appears and behaves like a local disk
 - **Sidebar Navigation** — Icon-based sidebar with logo; `NavigationManager` drives all
   screen transitions without coupling widgets to `MainWindow`
+- **Clipboard Sync** — Two-directional clipboard sync over TauSync. Android → PC: user taps
+  "Send Clipboard to PC"; PC → Android: automatic push on every local clipboard change.
+  SHA-256 hash guard prevents echo loops in both directions
+- **Camera Mirror** — Receives a live JPEG frame stream from the Android app and feeds it
+  into a virtual webcam via `pyvirtualcam` + OBS Virtual Camera driver. Portrait frames are
+  pillarboxed to preserve aspect ratio. Requires OBS Virtual Camera to be installed on the PC
 
 ---
 
@@ -82,6 +99,7 @@ by pip during setup — only the tools below need manual installation.
 | **CMake** | ≥ 3.20 | Configure & build the pipe module | Bundled with the C++ workload above; or [cmake.org](https://cmake.org/download/) (add to PATH) |
 | **.NET 8 SDK** | 8.x | Package the MSI installer; WiX toolset | [dotnet.microsoft.com/download/dotnet/8.0](https://dotnet.microsoft.com/download/dotnet/8.0) |
 | **WiX Toolset** | ≥ 4.x | Create the `.msi` production package | `dotnet tool install --global wix` (requires .NET SDK above) |
+| **OBS Studio** (with Virtual Camera) | ≥ 29.x | Camera Mirror feature — `pyvirtualcam` uses the OBS Virtual Camera driver as its backend | [obsproject.com/download](https://obsproject.com/download) — the driver is installed automatically with OBS |
 
 ### Installing the prerequisites
 
@@ -190,6 +208,21 @@ wix --version   # prints: 4.x.x
 
 > If `wix` is not found after install, close and reopen your terminal so the PATH is refreshed.
 
+#### 8. OBS Studio (Virtual Camera driver)
+
+`pyvirtualcam` requires a virtual camera driver. The easiest way to get it on Windows is to install
+OBS Studio — the **OBS Virtual Camera** driver is bundled and registered automatically during setup.
+
+1. Download OBS Studio from [obsproject.com/download](https://obsproject.com/download).
+2. Run the installer with default options (no additional components need to be ticked).
+3. After installation you do **not** need to launch OBS — the driver is registered system-wide and
+   `pyvirtualcam` will find it automatically at runtime.
+4. Verify the driver is present by opening **Device Manager → Cameras**: you should see
+   **OBS Virtual Camera** listed.
+
+> **Camera Mirror only.** The OBS driver is only needed when using the Camera Mirror feature.
+> All other SyncDose features (file transfer, backup, device info, clipboard) work without it.
+
 ---
 
 ## Development Setup
@@ -277,6 +310,8 @@ pyside6-rcc resources/syncdose.qrc -o resources_qrc.py
 | `FileNotFoundError: TauSync.Lib.dll not found` | DLL not built | Complete step 3 |
 | `0xC0000409` fatal crash | TauSync called from a `QThread` | Never use `QThread` for TauSync I/O — use `threading.Thread` |
 | Qt window blank / unstyled | `resources_qrc.py` stale | Delete and recompile |
+| Phone drive not appearing / VirtualDrive.exe exits immediately | WinFSP not installed | Install WinFSP 2.0 from [winfsp.dev](https://winfsp.dev) — check `HKLM\Software\WinFsp` |
+| `VirtualDrive.exe not found` logged at startup | Binary missing from build output | The pre-built binary must be at `native/windows/virtual_drive/build/Release/VirtualDrive.exe`; do not rebuild from source (missing headers) |
 
 ---
 
@@ -330,26 +365,67 @@ The `pytest-qt` plugin provides the `qtapp` fixture automatically.
 
 ## Production Build
 
-The production install is two separate PyInstaller executables bundled into a single MSI:
+The production install ships three executables packaged into a single bootstrapper installer
+(`SyncDoseSetup.exe`):
+
+| Executable | How it is built | Purpose |
+|---|---|---|
+| `SyncDose.exe` | PyInstaller | Main dashboard app |
+| `FileHandler.exe` | PyInstaller | Windows shell "Send with SyncDose" helper |
+| `VirtualDrive.exe` | Pre-built C++ binary | WinFsp filesystem that mounts the phone as a drive letter |
+
+### Step 1 — Build the PyInstaller executables
+
+Resources must already be compiled (`pyside6-rcc`) before running PyInstaller.
 
 ```powershell
-# Build both executables (resources must already be compiled)
-pyinstaller desktop/installer/specs/main_app.spec      # → SyncDose.exe
-pyinstaller desktop/installer/specs/file_handler.spec  # → FileHandler.exe
+# Run from the repo root (Ecosystem/)
+pyinstaller desktop/installer/Package/specs/main_app.spec      # → dist/SyncDose/SyncDose.exe
+pyinstaller desktop/installer/Package/specs/file_handler.spec  # → dist/FileHandler/FileHandler.exe
+```
 
-# Package as MSI using WiX
+> **VirtualDrive.exe is pre-built** — the compiled binary lives at
+> `desktop/native/windows/virtual_drive/build/Release/VirtualDrive.exe` and is bundled
+> automatically by `main_app.spec` via its `binaries=[…VirtualDrive.exe…]` entry.
+> **Do not attempt to rebuild it from source** — `ClientNamedPipe.h` and `PipeException.h`
+> are missing from `src/`, so CMake will fail. The existing binary is fully functional.
+
+### Step 2 — Package as MSI + Bundle
+
+```powershell
+# Produces desktop/installer/Bundle/bin/Release/SyncDoseSetup.exe
 dotnet build desktop/installer/ -c Release
 ```
 
-The MSI is uploaded as an artifact by CI (`desktop.yml` → `build` job). See the
-[CI/CD section in the root README](../README.md#cicd) for the full pipeline.
+`dotnet build` invokes WiX to produce two outputs:
 
-**Why two executables?**
+- **`Package.msi`** — harvests `dist/SyncDose/` and `dist/FileHandler/` recursively, registers
+  the shell context-menu verb (`HKCR\*\shell\SendWithSyncDose`), and creates Start Menu / Desktop
+  shortcuts.
+- **`SyncDoseSetup.exe`** (Bundle) — wraps `Package.msi` and silently downloads and installs
+  any missing prerequisites at runtime:
+  - **.NET 8 x64 Runtime** — required by `pythonnet` / TauSync CLR bridge
+  - **WinFSP 2.0** — required by `VirtualDrive.exe`
 
-`SyncDose.exe` runs as the main dashboard. `FileHandler.exe` is a tiny helper registered as the
-Windows shell "Send with SyncDose" right-click handler — it receives the target file path via the
-OS, writes it to a named pipe (`\\.\pipe\FileSend`), and exits. `SyncDose.exe` reads that path
-from the pipe and initiates the file send to the connected phone. See [File Transfer & IPC](#file-transfer--ipc).
+`SyncDoseSetup.exe` is the only file end users need. The MSI is uploaded as an artifact by CI
+(`desktop.yml` → `build` job). See the [CI/CD section in the root README](../README.md#cicd)
+for the full pipeline.
+
+### Why three executables?
+
+`SyncDose.exe` is the main dashboard and acts as a named-pipe server on both
+`\\.\pipe\FileSend` and `\\.\pipe\SyncDoseVDrive`.
+
+`FileHandler.exe` (`core/file_handler.py`) is registered as the Windows shell "Send with SyncDose"
+right-click handler. When invoked by the OS it connects to `\\.\pipe\FileSend`, writes the
+target file path, and exits. `SyncDose.exe` reads the path and initiates the file send to the
+phone. See [File Transfer & IPC](#file-transfer--ipc).
+
+`VirtualDrive.exe` is a native C++ WinFsp filesystem. It mounts the phone as a Windows drive
+letter and forwards every Explorer operation (list, stat, read, write, create, delete, rename)
+to `SyncDose.exe` over `\\.\pipe\SyncDoseVDrive`. `SyncDose.exe` translates each op into a
+TauSync round-trip to the Android app. `VirtualDriveService` launches and supervises the
+process; it is started on device connect and stopped on device disconnect.
 
 ---
 
@@ -369,7 +445,7 @@ desktop/
 │   └── theme_manager.py            # ThemeManager singleton — tracks Windows dark/light scheme
 │
 ├── core/
-│   └── pipe_client.py              # Entry point for FileHandler.exe — writes path to named pipe
+│   └── file_handler.py             # Entry point for FileHandler.exe — writes path to named pipe
 │
 ├── domain/
 │   ├── dto/                        # Data Transfer Objects — lightweight, view-facing dataclasses
@@ -391,11 +467,14 @@ desktop/
 │       ├── session_channels.py     # SessionChannels — DISCONNECT_FROM_PHONE, DISCONNECT_FROM_PC
 │       ├── backup_channels.py      # BackupChannels — control + per-file result channel names
 │       ├── backup_file_result.py   # BackupFileResult (ACCEPTED, REJECTED, NEEDS_REVIEW, …)
-│       └── backup_status.py        # BackupStatus — overall backup session state machine
+│       ├── backup_status.py        # BackupStatus — overall backup session state machine
+│       ├── virtual_drive_channels.py  # VirtualDriveChannels — list / stat / read / write / … op names
+│       └── clipboard_channels.py   # ClipboardChannels — CLIPBOARD_ANDROID_TO_PC / CLIPBOARD_PC_TO_ANDROID
 │
 ├── native/
 │   └── windows/
-│       └── pipe/                   # C++ pybind11 named-pipe module (Server / Client classes)
+│       ├── pipe/                   # C++ pybind11 named-pipe module (Server / Client classes)
+│       └── virtual_drive/          # C++ WinFsp filesystem (VirtualDrive.exe) — pre-built binary
 │
 ├── repositories/                   # Data-access layer — SQLite via sqlite3
 │   ├── repository.py               # IRepository[T, K] abstract base (get_by_id, get_all, save, delete)
@@ -425,7 +504,9 @@ desktop/
 │   ├── file_transfer.py            # FileTransferService — send/receive files + named-pipe listener
 │   ├── phone_request.py            # PhoneRequestService — polls peer waiting channels, dispatches
 │   ├── tool.py                     # ToolService — wraps ToolRepository, re-emits its signals
-│   └── backup.py                   # BackupService — receives backup files, runs FileDetection pipeline
+│   ├── backup.py                   # BackupService — receives backup files, runs FileDetection pipeline
+│   ├── virtual_drive.py            # VirtualDriveService — bridges VirtualDrive.exe ↔ Android via TauSync
+│   └── clipboard.py                # ClipboardService — two-directional clipboard sync; SHA-256 anti-loop guard
 │
 ├── utils/                          # Shared utilities (no singletons here)
 │   ├── meta.py                     # ABCQObjectMeta — metaclass bridging ABC and QObject
@@ -500,8 +581,10 @@ desktop/
     │   └── test_serializer_tool.py
     ├── services/
     │   ├── test_connectivity.py
+    │   ├── test_clipboard.py
     │   ├── test_file_transfer.py
-    │   └── test_phone_request.py
+    │   ├── test_phone_request.py
+    │   └── test_webcam.py
     ├── utils/
     │   ├── test_network.py
     │   └── test_styles.py
@@ -558,6 +641,7 @@ class AppState:
         self.file_transfer_service  = FileTransferService(connectivity)
         self.tool_service           = ToolService(tools_repository)
         self.backup_service         = BackupService(connectivity)
+        self.clipboard_service      = ClipboardService(connectivity)
 
         # ViewModels
         self.device_viewmodel        = DeviceViewModel(connectivity_service, device_info_service)
@@ -565,8 +649,19 @@ class AppState:
         self.tool_viewmodel          = ToolViewModel(tool_service)
         self.backup_viewmodel        = BackupViewModel(backup_service, connectivity_service)
 
+        # VirtualDriveService bridges VirtualDrive.exe ↔ Android; depends on device_info_service
+        self.virtual_drive_service  = VirtualDriveService(connectivity, device_info_service)
+
         # PhoneRequestService depends on backup_service — constructed after viewmodels
         self.phone_request_service  = PhoneRequestService(connectivity, file_transfer_service, backup_service)
+
+        # Lifecycle wiring: start/stop services on device connection events
+        self.device_viewmodel.device_connected.connect(self.backup_service.start)
+        self.device_viewmodel.device_connected.connect(self.phone_request_service.start)
+        self.device_viewmodel.device_connected.connect(self.virtual_drive_service.start)
+        self.device_viewmodel.device_disconnected.connect(self.backup_service.stop)
+        self.device_viewmodel.device_disconnected.connect(self.phone_request_service.stop)
+        self.device_viewmodel.device_disconnected.connect(self.virtual_drive_service.stop)
 
 app_state: Final[AppState] = AppState()
 ```
@@ -795,6 +890,41 @@ For every incoming file the service:
 | `backup_session_complete` | — | All files in the session processed |
 | `backup_error` | `str` | Unrecoverable error in the session |
 
+### `VirtualDriveService`
+
+Bridges `VirtualDrive.exe` (a WinFsp native filesystem) to the connected Android device via
+TauSync. SyncDose.exe listens on `\\.\pipe\SyncDoseVDrive` (byte-stream mode); VirtualDrive.exe
+connects and sends framed requests using a `[4B jsonLen][4B payloadLen][json][payload]` protocol.
+
+For every incoming filesystem op the service opens a **unique `{op}_{uuid8}` TauSync meeting word**
+(e.g. `virtual_drive_stat_a1b2c3d4`) so that concurrent Explorer requests never collide on the same
+channel — both TauSync's `_inFlightWords` guard and Android's `inProgressChannels` guard reject a
+second simultaneous `connect()` on the same word.
+
+**Op routing:**
+
+| Op | TauSync channel | Notes |
+|---|---|---|
+| `list` | `VirtualDriveChannels.VIRTUAL_DRIVE_LIST` | JSON request/response — directory listing |
+| `list_page` | `VirtualDriveChannels.VIRTUAL_DRIVE_LIST_FULL` | Paginated listing (cursor-based) |
+| `stat` | `VirtualDriveChannels.VIRTUAL_DRIVE_STAT` | File/directory metadata |
+| `volume` | *(local)* | Answered from cached `DeviceEntity.storage_*` — no TauSync round-trip |
+| `read` | `VirtualDriveChannels.VIRTUAL_DRIVE_READ` | Write JSON header, read file bytes back |
+| `create` | `VirtualDriveChannels.VIRTUAL_DRIVE_CREATE` | Create file or directory |
+| `write_open` | `VirtualDriveChannels.VIRTUAL_DRIVE_WRITE` | Open write session; stream holds open until `write_close` |
+| `write` / `write_close` | *(held open stream)* | Chunks forwarded; EOF on close signals Android to rename temp → final |
+| `rename` | `VirtualDriveChannels.VIRTUAL_DRIVE_RENAME` | Move / rename |
+| `truncate` | `VirtualDriveChannels.VIRTUAL_DRIVE_TRUNCATE` | Resize file |
+| `delete` | `VirtualDriveChannels.VIRTUAL_DRIVE_DELETE` | Remove file or directory |
+
+Started on `device_viewmodel.device_connected`; stopped (and `VirtualDrive.exe` terminated) on
+`device_viewmodel.device_disconnected`. A watchdog thread restarts `VirtualDrive.exe` if it
+crashes. A second watchdog closes write sessions open longer than 5 minutes.
+
+| Signal | Payload | When |
+|---|---|---|
+| `drive_error` | `str` | Pipe-level error or VirtualDrive.exe crash |
+
 ### `PhoneRequestService`
 
 Polls `tau.get_peer_waiting_words()` to detect channels the phone has opened before `SyncDose`
@@ -807,6 +937,52 @@ Default handler map (registered in `AppState`):
 | `FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC` | `FileTransferService.receive_metadata` |
 | `SessionChannels.DISCONNECT_FROM_PHONE` | `ConnectivityService.disconnect_device` |
 | `BackupChannels.*` | `BackupService` (backup session control channel) |
+
+### `ClipboardService`
+
+Two-directional clipboard sync between the PC and Android over TauSync.
+
+**Android → PC (manual):** `PhoneRequestService` detects Android waiting on `CLIPBOARD_ANDROID_TO_PC`
+and calls `receive()`. A daemon thread reads the JSON payload, checks the SHA-256 hash to skip
+duplicates, and emits `clipboard_text_received` so the main-thread slot in `MainWindow` calls
+`QClipboard.setText()`.
+
+**PC → Android (automatic):** `MainWindow` wires `QClipboard.dataChanged` to
+`on_clipboard_changed()`. The method hashes the new content, skips if unchanged, updates
+`_last_synced_hash`, and spawns a daemon thread that writes the JSON payload to
+`CLIPBOARD_PC_TO_ANDROID`.
+
+**Anti-loop guard:** `_last_synced_hash` (SHA-256) is set in `_receive()` *before* emitting the
+signal, so the clipboard change that results from `setText()` is silently dropped by
+`on_clipboard_changed`.
+
+| Signal | Payload | When |
+|---|---|---|
+| `clipboard_text_received` | `str` | Text received from Android; connect to main-thread `QClipboard.setText()` |
+
+| Channel | Wire value | Direction | Purpose |
+|---|---|---|---|
+| `CLIPBOARD_ANDROID_TO_PC` | `clipboard_android_to_pc` | Android → PC | User-initiated push |
+| `CLIPBOARD_PC_TO_ANDROID` | `clipboard_pc_to_android` | PC → Android | Automatic push on PC clipboard change |
+
+### `WebcamService`
+
+Receives a live camera stream from Android and feeds it into a virtual webcam via `pyvirtualcam`.
+
+Flow:
+1. `PhoneRequestService` detects Android waiting on `webcam_start` and calls `receive_start()`.
+2. A daemon thread connects to `WEBCAM_START` (reads the handshake), then opens `pyvirtualcam.Camera` at 1280×720 @ 24 fps.
+3. The thread connects to `WEBCAM_FRAMES` and reads length-prefixed JPEG frames in a loop.
+4. Each JPEG is decoded with Pillow, padded to 1280×720 preserving aspect ratio (`ImageOps.pad`), converted to a numpy array, and pushed to the virtual camera via `cam.send()`.
+5. When Android closes the channel, `webcam_stopped` is emitted and the virtual camera is released.
+
+| Signal | Payload | When |
+|---|---|---|
+| `webcam_started` | — | Virtual camera opened and streaming |
+| `webcam_stopped` | — | Stream ended (normal or disconnected) |
+| `webcam_error` | `str` | Unrecoverable exception in the stream loop |
+
+**Prerequisite:** OBS Virtual Camera driver must be installed on the PC (`pyvirtualcam` uses it as its backend).
 
 ### `ToolService`
 
@@ -1018,7 +1194,7 @@ File transfer involves two independent flows:
 `FileHandler.exe` is registered in the Windows shell as a context-menu handler for
 "Send with SyncDose". When the user right-clicks a file and selects it:
 
-1. The OS launches `FileHandler.exe` (`core/pipe_client.py`) with the file path as an argument.
+1. The OS launches `FileHandler.exe` (`core/file_handler.py`) with the file path as an argument.
 2. `FileHandler.exe` connects to the named pipe `\\.\pipe\FileSend` (served by `SyncDose.exe`)
    and writes the file path, then exits.
 3. `SyncDose.exe` reads the path from the pipe inside `FileTransferService._listen_for_file_to_send()`

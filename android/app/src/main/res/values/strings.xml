@@ -3,6 +3,14 @@
     <string name="connect_to_pc">Connect to PC</string>
     <string name="disconnected_to_pc">Disconnected</string>
 
+    <!-- Connection lifecycle progress indicators -->
+    <string name="connecting_label">Connecting…</string>
+    <string name="reconnecting_label">Reconnecting…</string>
+    <string name="getting_pc_info_label">Getting PC info…</string>
+    <string name="disconnecting_label">Disconnecting…</string>
+    <string name="connection_failed_error">Connection failed. Check your Wi‑Fi and try again.</string>
+    <string name="connection_timeout_error">Connection timed out. Please try again.</string>
+
     <!-- Backup screen -->
     <string name="backup_title">File Backup</string>
     <string name="backup_section_type">SELECT BACKUP TYPE</string>

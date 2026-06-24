@@ -29,6 +29,10 @@ namespace TauSync.Implementations.Transport
         private Task? _acceptTask;
         private TaskCompletionSource? _connectionTcs;
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
+        // Guards the listener/connection-signal fields (_tcpListener, _connectionTcs,
+        // _isConnected) so teardown and a concurrent server-mode Connect() cannot
+        // interleave and leave a stale completed TCS reachable (the "phantom connect").
+        private readonly object _stateLock = new object();
         private readonly IProtocolHandler _protocolHandler;
 
         /// <summary>True only while an explicit <see cref="Disconnect"/> is tearing the transport down. Distinguishes a deliberate close (ends the session) from an unexpected drop (triggers reconnect).</summary>
@@ -227,27 +231,36 @@ namespace TauSync.Implementations.Transport
         /// </summary>
         private void StartListeningInternal(int? timeoutSeconds = null)
         {
-            if (_tcpListener != null)
-                return;
-
-            _connectionTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            _tcpListener = new TcpListener(System.Net.IPAddress.Any, Port);
-            _tcpListener.Start();
-
-            _receiveCts = new CancellationTokenSource();
-
-            _timeoutCts?.Dispose();
-            _timeoutCts = new CancellationTokenSource(GetTimeout(timeoutSeconds));
-
-            var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_receiveCts.Token, _timeoutCts.Token);
-            _acceptTask = Task.Run(async () =>
+            lock (_stateLock)
             {
-                // Own the linked CTS for the lifetime of the accept loop so it is always disposed.
-                using (linkedCts)
+                // Reuse the listener only when a listen is genuinely still in progress
+                // (TCS not yet completed). A non-null listener with an *already-completed*
+                // TCS is stale state from a prior accept; awaiting it would return
+                // instantly with no live socket (the "phantom connect"). Re-arm instead.
+                if (_tcpListener != null && _connectionTcs != null && !_connectionTcs.Task.IsCompleted)
+                    return;
+
+                _tcpListener?.Stop();
+
+                _connectionTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _tcpListener = new TcpListener(System.Net.IPAddress.Any, Port);
+                _tcpListener.Start();
+
+                _receiveCts = new CancellationTokenSource();
+
+                _timeoutCts?.Dispose();
+                _timeoutCts = new CancellationTokenSource(GetTimeout(timeoutSeconds));
+
+                var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_receiveCts.Token, _timeoutCts.Token);
+                _acceptTask = Task.Run(async () =>
                 {
-                    await AcceptLoopAsync(linkedCts.Token).ConfigureAwait(false);
-                }
-            });
+                    // Own the linked CTS for the lifetime of the accept loop so it is always disposed.
+                    using (linkedCts)
+                    {
+                        await AcceptLoopAsync(linkedCts.Token).ConfigureAwait(false);
+                    }
+                });
+            }
         }
 
         /// <summary>
@@ -315,21 +328,62 @@ namespace TauSync.Implementations.Transport
         /// </summary>
         public void Disconnect()
         {
+            // Explicit close ends the session (an unexpected drop reconnects instead). Guard on
+            // _intentionalClose so a second call — or one racing a mid-reconnect window where
+            // _isConnected is already false — is a no-op yet still cancels the reconnect loop.
             if (_intentionalClose) return;
             _intentionalClose = true;
-            _isConnected = false;
 
-            _reconnectCts?.Cancel();
-            _receiveCts?.Cancel();
+            // Capture every disposable into locals and null the fields up front, atomically under
+            // _stateLock, so a concurrent server-mode Connect() can never observe a stale completed
+            // _connectionTcs / still-bound _tcpListener from the previous accept (the "phantom
+            // connect"). The slow drains then run on the locals, outside the lock.
+            TcpClient? client;
+            TcpListener? listener;
+            Stream? stream;
+            CancellationTokenSource? receiveCts;
+            CancellationTokenSource? timeoutCts;
+            CancellationTokenSource? reconnectCts;
+            Task? receiveTask;
+            Task? acceptTask;
+            lock (_stateLock)
+            {
+                _isConnected = false;
+                client = _tcpClient;
+                listener = _tcpListener;
+                stream = _stream;
+                receiveCts = _receiveCts;
+                timeoutCts = _timeoutCts;
+                reconnectCts = _reconnectCts;
+                receiveTask = _receiveTask;
+                acceptTask = _acceptTask;
+                _tcpClient = null;
+                _tcpListener = null;
+                _stream = null;
+                _receiveCts = null;
+                _timeoutCts = null;
+                _reconnectCts = null;
+                _receiveTask = null;
+                _acceptTask = null;
+                _connectionTcs = null;
+
+                // Cancel reconnect + receive and free the port INSIDE the lock (non-blocking ops
+                // only) so a re-arm (StartListeningInternal, same lock) can never bind port 8888
+                // while this listener still holds it (WSAEADDRINUSE / 10048).
+                reconnectCts?.Cancel();
+                receiveCts?.Cancel();
+                listener?.Stop();
+            }
 
             // Release any sender parked on the gate; it will see _isConnected == false and throw.
             _sendGate.TrySetResult();
 
-            try { _receiveTask?.Wait(TimeSpan.FromSeconds(2)); } catch { }
-            try { _acceptTask?.Wait(TimeSpan.FromSeconds(1)); } catch { }
-            _tcpListener?.Stop();
-            _stream?.Close();
-            _tcpClient?.Close();
+            // Slow drains run on the captured locals, OUTSIDE the lock — never block while holding
+            // it, or a listen() parked waiting for a peer would deadlock disconnect().
+            try { receiveTask?.Wait(TimeSpan.FromSeconds(2)); } catch { }
+            try { acceptTask?.Wait(TimeSpan.FromSeconds(1)); } catch { }
+            stream?.Close();
+            client?.Close();
 
             // Decrement the transport count exactly once. Channels are aborted (synthetic FIN
             // so blocked Read() calls return EOF) and state reset only when the count hits zero.
@@ -339,18 +393,9 @@ namespace TauSync.Implementations.Transport
                 ConnectionContext.Instance.NotifyTransportDisconnected();
             }
 
-            _tcpListener = null;
-            _stream = null;
-            _tcpClient = null;
-            _receiveCts?.Dispose();
-            _receiveCts = null;
-            _timeoutCts?.Dispose();
-            _timeoutCts = null;
-            _reconnectCts?.Dispose();
-            _reconnectCts = null;
-            _receiveTask = null;
-            _acceptTask = null;
-            _connectionTcs = null;
+            receiveCts?.Dispose();
+            timeoutCts?.Dispose();
+            reconnectCts?.Dispose();
         }
 
         /// <summary>

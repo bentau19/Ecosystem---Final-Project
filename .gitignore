@@ -61,6 +61,10 @@ graphify-out
 .graphify_python
 .graphify_uncached.txt
 
-
 tausync_bugfix_plan.txt
 tausync_structural_review.txt
+
+# Runtime data — databases and logs are generated at runtime, never committed
+desktop/data/*.db
+desktop/data/*.log
+desktop/data/*.log.*

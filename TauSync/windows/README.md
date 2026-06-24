@@ -221,6 +221,28 @@ Returns a `TauSyncStream`.
 stream = tau.connect("upload_channel")
 ```
 
+##### `tau.GetPeerWaitingWords() -> list[str]`
+
+Snapshot of meeting words the **peer** has fired REQ frames for, but which we
+have not paired with locally. Use this for diagnostics — e.g. to surface
+"someone is trying to connect on `X` and nobody is listening" in a UI, or to
+verify cross-platform pairing in tests.
+
+A word appears in the list when:
+1. The peer called `connect(word)` (sending a REQ over the wire).
+2. We have **not** yet called `connect(word)` ourselves on the same word.
+
+Once we call `connect(word)` and pair, the entry drops out of the list.
+
+```python
+waiting = tau.GetPeerWaitingWords()
+print(f"Peer is waiting on: {waiting}")
+# Peer is waiting on: ['alpha', 'beta']
+```
+
+> Meeting words are **case-sensitive** — `"alpha"` and `"Alpha"` are different
+> channels. The list reflects exactly what the peer sent on the wire.
+
 ##### `tau.new_manager() -> TauSync`
 
 Create another `TauSync` instance sharing the **same singleton socket**.

@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Photos and videos on API 24–32 -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <!-- Photos on API 33+ (Android 13+) -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
@@ -19,16 +21,20 @@
     <!-- Full filesystem access (API 30+) required to read app-private external directories
          such as Android/data/com.whatsapp/…/Private/ that MediaStore never indexes.
          Play Store requires a policy declaration for this permission — see publish notes. -->
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- Resolve friendly app labels for the virtual-drive per-app folders. On API 30+
+         PackageManager.getApplicationInfo() throws NameNotFoundException for third-party
+         packages without this; Play Store requires a declared justification (like
+         MANAGE_EXTERNAL_STORAGE above) — see publish notes. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <uses-feature
         android:name="android.hardware.camera"
         android:required="false" />
     <application
-        android:usesCleartextTraffic="true"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -36,7 +42,8 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Android">
+        android:theme="@style/Theme.Android"
+        android:usesCleartextTraffic="true">
 
         <service
             android:name=".services.ConnectivityService"
@@ -57,28 +64,26 @@
             android:name=".testing.TestTauSyncActivity"
             android:exported="true"
             android:label="TauSync Test"
-            android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
-        </activity>
+            android:theme="@style/Theme.AppCompat.Light.DarkActionBar"></activity>
 
         <activity
             android:name=".testing.getpeerwaitingwords.PeerWaitingServerActivity"
             android:exported="true"
             android:label="PeerWaiting Server"
-            android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
-        </activity>
+            android:theme="@style/Theme.AppCompat.Light.DarkActionBar"></activity>
 
         <activity
             android:name=".testing.getpeerwaitingwords.PeerWaitingClientActivity"
             android:exported="true"
             android:label="PeerWaiting Client"
-            android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
-        </activity>
+            android:theme="@style/Theme.AppCompat.Light.DarkActionBar"></activity>
 
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
             android:label="@string/app_name"
             android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:theme="@style/Theme.Android">
 
             <!-- Launcher entry point -->
@@ -95,8 +100,8 @@
              MainActivity is never brought to the foreground. -->
         <activity
             android:name=".ui.ShareReceiverActivity"
-            android:exported="true"
             android:excludeFromRecents="true"
+            android:exported="true"
             android:theme="@style/Theme.Transparent">
 
             <intent-filter>
@@ -109,9 +114,8 @@
         <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"
             android:screenOrientation="portrait"
-            tools:replace="android:screenOrientation"
-            android:stateNotNeeded="true">
-        </activity>
+            android:stateNotNeeded="true"
+            tools:replace="android:screenOrientation"></activity>
     </application>
 
 </manifest>

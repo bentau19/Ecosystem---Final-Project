@@ -48,6 +48,8 @@ public class ToolsAdapter extends RecyclerView.Adapter<ToolsAdapter.ToolViewHold
         // Update button text and icon based on the tool data
         holder.toolButton.setText(tool.getTitle());
         holder.toolButton.setIconResource(tool.getIconRes());
+        holder.toolButton.setEnabled(tool.isEnabled());
+        holder.toolButton.setAlpha(tool.isEnabled() ? 1.0f : 0.5f);
 
         // Set click listener on the MaterialButton component
         holder.toolButton.setOnClickListener(v -> listener.onToolClick(tool));
@@ -55,6 +57,17 @@ public class ToolsAdapter extends RecyclerView.Adapter<ToolsAdapter.ToolViewHold
 
     @Override
     public int getItemCount() { return tools.size(); }
+
+    /** Updates the label of the tool with the given id and refreshes its card. */
+    public void updateLabel(String toolId, String newLabel) {
+        for (int i = 0; i < tools.size(); i++) {
+            if (tools.get(i).getId().equals(toolId)) {
+                tools.get(i).setTitle(newLabel);
+                notifyItemChanged(i);
+                return;
+            }
+        }
+    }
 
     /**
      * ViewHolder class that holds the reference to the MaterialButton in the layout.

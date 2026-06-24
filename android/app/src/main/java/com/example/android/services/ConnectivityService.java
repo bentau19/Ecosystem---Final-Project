@@ -15,6 +15,7 @@ import androidx.lifecycle.ProcessLifecycleOwner;
 
 import com.example.android.data.datasource.BackupDataSource;
 import com.example.android.data.datasource.SystemDataSource;
+import com.example.android.repositories.VirtualDriveRepository;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.BackupTransferStatus;
 import com.example.android.domain.enums.ConnectionStatus;
@@ -24,15 +25,22 @@ import com.example.android.enums.DeviceInfoChannels;
 import com.example.android.enums.FileTransferChannels;
 import com.example.android.enums.SessionChannels;
 import com.example.android.enums.BackupChannels;
+import com.example.android.enums.VirtualDriveChannels;
 import com.example.android.network.handlers.BackupControlChannelHandler;
+import com.example.android.network.handlers.VirtualDriveChannelHandler;
 import com.example.android.network.handlers.ChannelHandlerRegistry;
 import com.example.android.network.handlers.DeviceInfoChannelHandler;
 import com.example.android.domain.usecases.BackupTransferUseCase;
+import com.example.android.domain.usecases.ClipboardSyncUseCase;
 import com.example.android.domain.usecases.ReceiveFileUseCase;
 import com.example.android.domain.usecases.RespondToFileTransferUseCase;
 import com.example.android.domain.usecases.SendFileUseCase;
+import com.example.android.domain.usecases.VirtualDriveUseCase;
+import com.example.android.domain.usecases.WebcamStreamUseCase;
 import com.example.android.repositories.BackupRepository;
 import com.example.android.repositories.SendFileRepository;
+import com.example.android.network.handlers.ClipboardFromPCHandler;
+import com.example.android.repositories.WebcamRepository;
 import com.example.android.network.handlers.FileDataChannelHandler;
 import com.example.android.network.handlers.FileMetadataChannelHandler;
 import com.example.android.network.handlers.PCNameChannelHandler;
@@ -45,6 +53,13 @@ import com.example.android.repositories.DeviceRepository;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * ConnectivityService - Thin Orchestrator for managing remote PC connections.
@@ -69,6 +84,17 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     private SendFileUseCase sendFileUseCase;
     private BackupTransferUseCase backupTransferUseCase;
 
+    // Virtual drive UseCase — serves all WinFsp filesystem ops forwarded by the desktop
+    private VirtualDriveUseCase virtualDriveUseCase;
+
+    // PC-name handler. Driven proactively from onStatusChanged(CONNECTED) — Android pulls the
+    // PC name (the desktop only answers on request), so this is NOT registered for reactive
+    // peer-request dispatch. Kept as a field so the connect-time request can reuse its
+    // read+apply logic.
+    private PCNameChannelHandler pcNameHandler;
+    private ClipboardSyncUseCase clipboardSyncUseCase;
+    private WebcamStreamUseCase webcamStreamUseCase;
+
     // Observer for outgoing file transfer notifications — kept so we can remove it in onDestroy
     private Observer<SendFileStatus> sendFileStatusObserver;
 
@@ -87,6 +113,44 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     // poll loop from spawning a second handler for the same channel while a prior
     // writeToChannel() call is still blocking inside tauSync.connect().
     private final Set<String> inProgressChannels = ConcurrentHashMap.newKeySet();
+
+    // Upper bound on peer-request handler threads. Must be >= the desktop's pipe
+    // pool (8) so that many concurrent reads (e.g. a video's parallel prefetch
+    // windows) are not throttled, with headroom for device-info / metadata ops.
+    private static final int PEER_REQUEST_MAX_THREADS = 12;
+
+    // Bounded pool that runs peer-request handlers, replacing an unbounded
+    // new-Thread-per-channel spawn. A SynchronousQueue + AbortPolicy means that
+    // when all threads are busy a new dispatch is rejected (not queued); the
+    // caller releases the channel claim and the 2 s poll re-dispatches it once a
+    // worker frees. Threads are daemons so they never block process exit. Never
+    // use CallerRunsPolicy here: the caller is the UI main thread.
+    private final ExecutorService peerRequestExecutor = new ThreadPoolExecutor(
+            2, PEER_REQUEST_MAX_THREADS, 30L, TimeUnit.SECONDS,
+            new SynchronousQueue<>(),
+            new ThreadFactory() {
+                private final AtomicInteger counter = new AtomicInteger();
+
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "VDPeerRequest-" + counter.incrementAndGet());
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
+
+    // Set to true at the very start of cleanup() so that any onStatusChanged(CONNECTED)
+    // callbacks still sitting in the main-handler queue are silently discarded rather
+    // than overwriting the DISCONNECTED postValue that cleanup() emits last.
+    //
+    // Scenario this guards against: a reconnect attempt queued by handlePollingFailure
+    // (before the user tapped Disconnect) completes while cleanup() is blocking the
+    // main thread inside transportManager.shutdown() → awaitTermination(). The
+    // resulting onStatusChanged(CONNECTED) arrives in the queue AFTER
+    // deviceRepository.disconnect() posts DISCONNECTED — but MutableLiveData.postValue
+    // coalesces and delivers only the last value (CONNECTED), causing a spurious
+    // auto-reconnect to ActionsFragment.
+    private volatile boolean isCleaningUp = false;
 
     @Override
     public void onCreate() {
@@ -121,6 +185,13 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         sendFileUseCase = new SendFileUseCase(transportManager, SendFileRepository.getInstance(), this);
         backupTransferUseCase = new BackupTransferUseCase(
                 transportManager, BackupRepository.getInstance(), this, new BackupDataSource());
+        clipboardSyncUseCase = new ClipboardSyncUseCase(transportManager, this);
+
+        webcamStreamUseCase = new WebcamStreamUseCase(transportManager, WebcamRepository.getInstance());
+
+        // Virtual drive — on-demand request→response; the DataSource answers each WinFsp op
+        // directly from the filesystem (no background scan, no persistent index).
+        virtualDriveUseCase = new VirtualDriveUseCase(transportManager, VirtualDriveRepository.getInstance());
 
         registerChannelHandlers();
         registerFileTransferActionListener();
@@ -131,6 +202,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         registerBackupTransferProgressObserver();
         registerBackupScanStatusObserver();
         registerBackupControlActionListener();
+        registerWebcamActionListener();
 
         Log.d(TAG, "Service initialization complete");
     }
@@ -141,11 +213,11 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     private void registerChannelHandlers() {
         Log.d(TAG, "Registering channel handlers using generic DeviceInfoChannelHandler...");
 
-        // PC_NAME uses a specialized class because it acts as a Setter (receives data and modifies local state)
-        handlerRegistry.registerHandler(
-                DeviceInfoChannels.PC_NAME.getValue(),
-                new PCNameChannelHandler(deviceRepository, transportManager)
-        );
+        // PC_NAME is a Setter (receives data and modifies local state). Android pulls it
+        // proactively on connect — see requestPcName() — so it is intentionally NOT registered
+        // for reactive peer-request dispatch: the desktop never opens this channel itself, it
+        // only responds once Android opens it.
+        pcNameHandler = new PCNameChannelHandler(deviceRepository, transportManager);
 
         // DISCONNECT_FROM_PC uses a specialized class to handle PC-initiated disconnects
         handlerRegistry.registerHandler(
@@ -172,6 +244,25 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         handlerRegistry.registerHandler(
                 BackupChannels.BACKUP_CONTROL_FROM_PC.getValue(),
                 new BackupControlChannelHandler(transportManager, backupTransferUseCase)
+        );
+
+        // Virtual drive — one handler instance per op-type, registered under the prefix key
+        // (base + "_", e.g. "virtual_drive_list_"). The ChannelHandlerRegistry prefix-fallback
+        // routes each UUID-suffixed incoming channel (e.g. "virtual_drive_list_a1b2c3d4") to
+        // the matching handler without any changes to the registry logic.
+        for (VirtualDriveChannels vdCh : VirtualDriveChannels.values()) {
+            handlerRegistry.registerHandler(
+                    vdCh.getValue() + "_",                        // prefix key
+                    new VirtualDriveChannelHandler(vdCh.getValue(), virtualDriveUseCase)
+            );
+        }
+
+        // CLIPBOARD_PC_TO_ANDROID receives clipboard text pushed automatically by the Desktop
+        // whenever its QClipboard changes.  Writing to ClipboardManager is always allowed on
+        // Android — no foreground restriction — so this works even when the app is in the background.
+        handlerRegistry.registerHandler(
+                com.example.android.enums.ClipboardChannels.CLIPBOARD_PC_TO_ANDROID.getValue(),
+                new ClipboardFromPCHandler(transportManager, this)
         );
 
         // All other device telemetry data types are registered inline as Getters using generic Lambda functional interfaces
@@ -204,6 +295,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // Check if this is a disconnect request action
         if (intent != null && "com.example.android.ACTION_SEND_DISCONNECT".equals(intent.getAction())) {
             Log.d(TAG, "Received disconnect action, sending disconnect notification to PC");
+            // Arm the cleanup guard on the main thread BEFORE spawning the background
+            // disconnect thread. Any onStatusChanged(CONNECTED) posted by a racing
+            // reconnect attempt (handlePollingFailure → connectTo()) lands in the
+            // main-thread queue AFTER this frame returns — so isCleaningUp is already
+            // true when that callback is processed and it is silently discarded.
+            // Setting it here (vs. inside cleanup()) closes the window between
+            // stopSelf() and onDestroy() where the flag would otherwise still be false.
+            isCleaningUp = true;
             // Post DISCONNECTING immediately so the UI disables the button before the
             // background thread fires. The final DISCONNECTED post comes from cleanup().
             deviceRepository.updateConnectionStatus(ConnectionStatus.DISCONNECTING);
@@ -240,6 +339,12 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // for this service (FLAG_GRANT_READ_URI_PERMISSION on the incoming Intent).
         // Starting the send flow from here guarantees the grant is fully active before
         // any ContentResolver I/O runs in SendFileUseCase.
+        if (intent != null && "com.example.android.ACTION_SEND_CLIPBOARD".equals(intent.getAction())) {
+            Log.d(TAG, "Received clipboard send action");
+            new Thread(() -> clipboardSyncUseCase.execute(), "ClipboardSync").start();
+            return START_NOT_STICKY;
+        }
+
         if (intent != null && "com.example.android.ACTION_GRANT_FILE_URI".equals(intent.getAction())) {
             android.net.Uri fileUri = intent.getData();
             String fileName = intent.getStringExtra("FILE_NAME");
@@ -285,9 +390,18 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
-        Log.d(TAG, "App removed from recent apps, shutting down");
-        cleanup();
-        stopSelf();
+        Log.d(TAG, "App removed from recents — sending disconnect before cleanup");
+        // Same race as the ACTION_SEND_DISCONNECT path: arm isCleaningUp on the main
+        // thread before any background work starts so reconnect callbacks are discarded.
+        isCleaningUp = true;
+        if (transportManager != null && transportManager.isConnected()) {
+            // sendDisconnectToPC() opens the DISCONNECT_FROM_PHONE channel so
+            // the desktop transitions cleanly instead of detecting a socket drop.
+            // It calls stopSelf() in its finally block → onDestroy() → cleanup().
+            sendDisconnectToPC();
+        } else {
+            cleanup();  // includes stopSelf()
+        }
         super.onTaskRemoved(rootIntent);
     }
 
@@ -314,13 +428,18 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     }
 
     /**
-     * Gracefully releases open sockets, unregisters sub-components, and resets the local connection state.
+     * Gracefully releases open sockets, unregisters subcomponents, and resets the local connection state.
      */
     private void cleanup() {
+        isCleaningUp = true;
         Log.d(TAG, "Cleanup started - stopping threads and shutting down network");
         if (handlerRegistry != null) {
             handlerRegistry.shutdownAll();
         }
+        // Stop accepting peer-request handlers and interrupt in-flight ones; the
+        // transportManager.shutdown() below closes the socket that unblocks any
+        // handler parked in tauSync.connect().
+        peerRequestExecutor.shutdownNow();
         if (transportManager != null) {
             transportManager.shutdown();
         }
@@ -328,6 +447,12 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             // Hard disconnect resets state models so the application re-opens directly on the connect screen
             deviceRepository.disconnect();
         }
+
+        // Stop webcam stream if one is active
+        if (webcamStreamUseCase != null) {
+            webcamStreamUseCase.stop();
+        }
+        WebcamRepository.getInstance().reset();
 
         // Reset file transfer repositories so stale status isn't shown after reconnect
         ReceiveFileRepository.getInstance().reset();
@@ -354,6 +479,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     public void onStatusChanged(TransportStatus status) {
         Log.d(TAG, "Transport status changed: " + status);
 
+        // Discard any status update that arrives after cleanup() has started.
+        // Both cleanup() and these onStatusChanged() callbacks run on the main thread,
+        // so once isCleaningUp is set, no further callbacks can slip through.
+        if (isCleaningUp) {
+            Log.d(TAG, "Ignoring status update during cleanup: " + status);
+            return;
+        }
+
         // Map transport status to domain status
         ConnectionStatus connectionStatus = mapTransportStatusToConnectionStatus(status);
 
@@ -365,11 +498,40 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
         if (status == TransportStatus.CONNECTED) {
             deviceRepository.updateConnectionStatus(ConnectionStatus.CONNECTED);
+            requestPcName();
         } else if (status == TransportStatus.CONNECTING || status == TransportStatus.RECONNECTING) {
             deviceRepository.updateConnectionStatus(connectionStatus);
         } else if (status == TransportStatus.FAILED) {
             deviceRepository.updateConnectionStatus(ConnectionStatus.FAILED);
         }
+    }
+
+    /**
+     * Proactively pulls the PC name on a background thread once the transport is connected.
+     *
+     * <p>Android initiates the {@code pc_name} channel (the desktop only answers on request via
+     * its {@code PhoneRequestService} listener loop), so this read must be kicked off actively
+     * rather than waiting for a peer request that never comes. {@code onStatusChanged} runs on
+     * the main thread and {@link com.example.android.network.handlers.PCNameChannelHandler}'s
+     * read blocks, hence the dedicated thread.
+     *
+     * <p>The channel is claimed in {@link #inProgressChannels} first so a re-fired
+     * {@code CONNECTED} (e.g. a reconnect) cannot overlap an in-flight request; reconnects
+     * legitimately re-fetch the name once the prior request has completed.
+     */
+    private void requestPcName() {
+        String channel = DeviceInfoChannels.PC_NAME.getValue();
+        if (!inProgressChannels.add(channel)) {
+            Log.d(TAG, "PC name request already in progress, skipping");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                pcNameHandler.onPeerRequest();
+            } finally {
+                inProgressChannels.remove(channel);
+            }
+        }, "PcNameRequest").start();
     }
 
     @Override
@@ -400,13 +562,22 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                 continue;
             }
 
-            new Thread(() -> {
-                try {
-                    handlerRegistry.handlePeerRequest(channel);
-                } finally {
-                    inProgressChannels.remove(channel);
-                }
-            }, "PeerRequestHandler-" + channel).start();
+            final String ch = channel;
+            try {
+                peerRequestExecutor.execute(() -> {
+                    try {
+                        handlerRegistry.handlePeerRequest(ch);
+                    } finally {
+                        inProgressChannels.remove(ch);
+                    }
+                });
+            } catch (RejectedExecutionException rejected) {
+                // Pool saturated: release the claim so the next poll tick re-dispatches
+                // this channel once a worker frees. Never run inline — the caller is the
+                // UI main thread and handlePeerRequest() blocks for the whole op.
+                inProgressChannels.remove(ch);
+                Log.d(TAG, "Peer-request pool saturated, deferring channel: " + ch);
+            }
         }
     }
 
@@ -465,17 +636,41 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     /**
      * Sends a disconnect notification to the PC when the user initiates a disconnect on the phone.
      *
-     * <p>Writes to the {@code DISCONNECT_FROM_PHONE} TauSync channel, then stops this service.
-     * {@code stopSelf()} triggers {@link #onDestroy()} → {@link #cleanup()}, which shuts down
-     * the transport and resets the repository — no explicit sleep is needed because
-     * {@code writeToChannel} closes the stream (and flushes data) before returning.
+     * <p>Stops the polling loop first via {@link TransportManager#prepareForDisconnect()} to
+     * prevent a race condition: the 20 ms polling tick calls {@code getPeerWaitingWords()} on the
+     * same {@code TauSync} object that {@code writeToChannel} is about to block inside.  If the
+     * poll fails concurrently it triggers {@code handlePollingFailure → tauSync.dispose()} which
+     * kills the socket before the desktop can join the {@code disconnect_phone} meeting word.
+     *
+     * <p>A 3-second connect timeout is used instead of the default 30 s.  The desktop polls
+     * every 200 ms and responds (via {@code tau.disconnect()}) within ~200 ms of detecting the
+     * channel, so 3 s provides safe headroom while preventing a 30-second UI hang when the PC
+     * is slow or unreachable.  The desktop's {@code tau.disconnect()} closes the TCP socket,
+     * which causes {@code tauSync.connect()} here to throw — the exception is caught and cleanup
+     * proceeds via the {@code finally} block regardless.
+     *
+     * <p>After the channel write (or on any exception) {@code stopSelf()} triggers
+     * {@link #onDestroy()} → {@link #cleanup()}, which shuts down the transport and resets the
+     * repository.
      */
     private void sendDisconnectToPC() {
         new Thread(() -> {
             try {
                 if (transportManager != null && transportManager.isConnected()) {
+                    // Stop the 20 ms polling loop BEFORE opening the channel.
+                    // Without this, a concurrent polling tick calls getPeerWaitingWords()
+                    // on the same TauSync object that writeToChannel is about to block inside.
+                    // If that poll fails it triggers handlePollingFailure → tauSync.disconnect(),
+                    // closing the socket underneath writeToChannel — writeToChannel throws and
+                    // the PC never receives the disconnect channel (waits full 10 s timeout).
+                    // prepareForDisconnect() sets status=DISCONNECTING (writeToChannel allows
+                    // DISCONNECTING) and awaits any in-flight poll tick before returning.
+                    transportManager.prepareForDisconnect();
+
+                    // 10-second timeout: desktop detects the channel in ≤5 s (phone_request_service
+                    // polls every 5 s). Caps worst-case disconnect latency instead of 30 s default.
                     transportManager.writeToChannel(
-                            SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect");
+                            SessionChannels.DISCONNECT_FROM_PHONE.getValue(), "disconnect", 10);
                     Log.d(TAG, "Disconnect signal sent to PC");
                 }
             } catch (Exception e) {
@@ -787,6 +982,32 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                     }
                 }
         );
+    }
+
+    /**
+     * Registers ConnectivityService as the {@link WebcamRepository.StreamActionListener}.
+     * Mirrors registerBackupTransferActionListener — spawns a background thread on Start,
+     * and calls stop() on the use case on Stop.
+     */
+    private void registerWebcamActionListener() {
+        WebcamRepository.getInstance().setActionListener(new WebcamRepository.StreamActionListener() {
+            @Override
+            public void onStartRequested() {
+                new Thread(() -> {
+                    try {
+                        webcamStreamUseCase.execute();
+                    } catch (Exception e) {
+                        Log.e(TAG, "Unexpected error in WebcamStreamThread: " + e.getMessage());
+                        WebcamRepository.getInstance().onStreamFailed();
+                    }
+                }, "WebcamStreamThread").start();
+            }
+
+            @Override
+            public void onStopRequested() {
+                webcamStreamUseCase.stop();
+            }
+        });
     }
 
     /**
