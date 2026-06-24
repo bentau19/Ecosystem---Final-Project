@@ -177,6 +177,12 @@ public class MainActivity extends AppCompatActivity {
      * {@code DISCONNECTED} before the frame is sent, causing the UI to navigate away
      * and the transport to be abandoned mid-flight.
      */
+    public void sendClipboard() {
+        Intent intent = new Intent(this, ConnectivityService.class);
+        intent.setAction("com.example.android.ACTION_SEND_CLIPBOARD");
+        startService(intent);
+    }
+
     public void disconnect() {
         Log.d("TauSyncFlow", "Requesting clean disconnect from service...");
         Intent intent = new Intent(this, ConnectivityService.class);

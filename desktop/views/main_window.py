@@ -69,6 +69,7 @@ class MainWindow(QMainWindow):
         self._device_vm: DeviceViewModel = app_state.device_viewmodel
         # Holds the FileReceivedToast alive while it's on screen.
         self._toast: FileReceivedToast | None = None
+        self._clipboard_service = app_state.clipboard_service
 
         self._setup_ui()
         self._connect_signals()
@@ -109,7 +110,7 @@ class MainWindow(QMainWindow):
         # Tray icon visibility is managed reactively by showEvent/hideEvent.
 
     def _connect_signals(self) -> None:
-        # Wire navigation, file-transfer, backup, and theme signals to their slots.
+        # Wire navigation, file-transfer, backup, theme, and clipboard signals to their slots.
         self._navigation_manager.navigate.connect(self._change_page)
         self._file_transfer_vm.receive_error.connect(self._on_file_receive_error)
         self._file_transfer_vm.send_error.connect(self._on_file_send_error)
@@ -119,7 +120,10 @@ class MainWindow(QMainWindow):
         self._backup_vm.backup_session_result.connect(self._on_backup_session_result)
         self._backup_vm.device_ready_changed.connect(self._on_backup_device_ready_changed)
         app_state.device_viewmodel.connection_error.connect(self._on_connection_error)
+        self._clipboard_service.clipboard_text_received.connect(self._on_clipboard_text_received)
         theme_manager.theme_changed.connect(self._restyle_tray)
+        # PC → Android: delegate clipboard changes entirely to the service.
+        QApplication.clipboard().dataChanged.connect(self._on_clipboard_changed)
         # Stop all services on any exit path (X button, tray Quit, sys.exit, …).
         # aboutToQuit fires as the last act of app.exec() before it returns.
 
@@ -327,3 +331,15 @@ class MainWindow(QMainWindow):
             QSystemTrayIcon.MessageIcon.Warning,
             4000,
         )
+
+    @Slot(str)
+    def _on_clipboard_text_received(self, text: str) -> None:
+        # Always called on the main thread via Qt's queued connection — safe to touch QClipboard.
+        # Hash management is handled inside ClipboardService._receive() before this signal
+        # was emitted, so no logic needed here.
+        QApplication.clipboard().setText(text)
+
+    @Slot()
+    def _on_clipboard_changed(self) -> None:
+        # Thin relay — all sync logic (hash guard, send decision) lives in ClipboardService.
+        self._clipboard_service.on_clipboard_changed(QApplication.clipboard().text())

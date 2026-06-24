@@ -60,6 +60,9 @@ bidirectional file transfer via Windows shell integration, and a configurable to
   appears and behaves like a local disk
 - **Sidebar Navigation** — Icon-based sidebar with logo; `NavigationManager` drives all
   screen transitions without coupling widgets to `MainWindow`
+- **Clipboard Sync** — Two-directional clipboard sync over TauSync. Android → PC: user taps
+  "Send Clipboard to PC"; PC → Android: automatic push on every local clipboard change.
+  SHA-256 hash guard prevents echo loops in both directions
 
 ---
 
@@ -446,7 +449,8 @@ desktop/
 │       ├── backup_channels.py      # BackupChannels — control + per-file result channel names
 │       ├── backup_file_result.py   # BackupFileResult (ACCEPTED, REJECTED, NEEDS_REVIEW, …)
 │       ├── backup_status.py        # BackupStatus — overall backup session state machine
-│       └── virtual_drive_channels.py  # VirtualDriveChannels — list / stat / read / write / … op names
+│       ├── virtual_drive_channels.py  # VirtualDriveChannels — list / stat / read / write / … op names
+│       └── clipboard_channels.py   # ClipboardChannels — CLIPBOARD_ANDROID_TO_PC / CLIPBOARD_PC_TO_ANDROID
 │
 ├── native/
 │   └── windows/
@@ -482,7 +486,8 @@ desktop/
 │   ├── phone_request.py            # PhoneRequestService — polls peer waiting channels, dispatches
 │   ├── tool.py                     # ToolService — wraps ToolRepository, re-emits its signals
 │   ├── backup.py                   # BackupService — receives backup files, runs FileDetection pipeline
-│   └── virtual_drive.py            # VirtualDriveService — bridges VirtualDrive.exe ↔ Android via TauSync
+│   ├── virtual_drive.py            # VirtualDriveService — bridges VirtualDrive.exe ↔ Android via TauSync
+│   └── clipboard.py                # ClipboardService — two-directional clipboard sync; SHA-256 anti-loop guard
 │
 ├── utils/                          # Shared utilities (no singletons here)
 │   ├── meta.py                     # ABCQObjectMeta — metaclass bridging ABC and QObject
@@ -557,6 +562,7 @@ desktop/
     │   └── test_serializer_tool.py
     ├── services/
     │   ├── test_connectivity.py
+    │   ├── test_clipboard.py
     │   ├── test_file_transfer.py
     │   └── test_phone_request.py
     ├── utils/
@@ -615,6 +621,7 @@ class AppState:
         self.file_transfer_service  = FileTransferService(connectivity)
         self.tool_service           = ToolService(tools_repository)
         self.backup_service         = BackupService(connectivity)
+        self.clipboard_service      = ClipboardService(connectivity)
 
         # ViewModels
         self.device_viewmodel        = DeviceViewModel(connectivity_service, device_info_service)
@@ -910,6 +917,33 @@ Default handler map (registered in `AppState`):
 | `FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC` | `FileTransferService.receive_metadata` |
 | `SessionChannels.DISCONNECT_FROM_PHONE` | `ConnectivityService.disconnect_device` |
 | `BackupChannels.*` | `BackupService` (backup session control channel) |
+
+### `ClipboardService`
+
+Two-directional clipboard sync between the PC and Android over TauSync.
+
+**Android → PC (manual):** `PhoneRequestService` detects Android waiting on `CLIPBOARD_ANDROID_TO_PC`
+and calls `receive()`. A daemon thread reads the JSON payload, checks the SHA-256 hash to skip
+duplicates, and emits `clipboard_text_received` so the main-thread slot in `MainWindow` calls
+`QClipboard.setText()`.
+
+**PC → Android (automatic):** `MainWindow` wires `QClipboard.dataChanged` to
+`on_clipboard_changed()`. The method hashes the new content, skips if unchanged, updates
+`_last_synced_hash`, and spawns a daemon thread that writes the JSON payload to
+`CLIPBOARD_PC_TO_ANDROID`.
+
+**Anti-loop guard:** `_last_synced_hash` (SHA-256) is set in `_receive()` *before* emitting the
+signal, so the clipboard change that results from `setText()` is silently dropped by
+`on_clipboard_changed`.
+
+| Signal | Payload | When |
+|---|---|---|
+| `clipboard_text_received` | `str` | Text received from Android; connect to main-thread `QClipboard.setText()` |
+
+| Channel | Wire value | Direction | Purpose |
+|---|---|---|---|
+| `CLIPBOARD_ANDROID_TO_PC` | `clipboard_android_to_pc` | Android → PC | User-initiated push |
+| `CLIPBOARD_PC_TO_ANDROID` | `clipboard_pc_to_android` | PC → Android | Automatic push on PC clipboard change |
 
 ### `ToolService`
 
