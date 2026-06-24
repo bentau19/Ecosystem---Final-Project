@@ -147,7 +147,6 @@ public class ActionsFragment extends Fragment {
         toolList.add(new ToolItem("backup", "File Backup", R.drawable.ic_backup));
         toolList.add(new ToolItem("clipboard", "Send Clipboard to PC", R.drawable.ic_clipboard));
         toolList.add(new ToolItem("camera", "Camera Mirror", R.drawable.ic_camera));
-        toolList.add(new ToolItem("security", "Antivirus Scan", R.drawable.ic_security));
 
         toolsAdapter = new ToolsAdapter(toolList, tool -> {
             // Only execute tools if a connection is currently active
@@ -170,8 +169,6 @@ public class ActionsFragment extends Fragment {
         switch (toolId) {
             case "backup":
                 if (viewModel.isBackupActive()) {
-                    // A scan or transfer is already running in the background —
-                    // block a second one to prevent system overload.
                     Toast.makeText(getContext(),
                             R.string.backup_already_in_progress,
                             Toast.LENGTH_SHORT).show();
@@ -181,6 +178,11 @@ public class ActionsFragment extends Fragment {
                 break;
             case "clipboard":
                 handleClipboardSend();
+                break;
+            case "camera":
+                if (getActivity() instanceof MainActivity) {
+                    ((MainActivity) getActivity()).navigateToWebcam();
+                }
                 break;
             default:
                 Toast.makeText(getContext(), "Executing: " + toolId, Toast.LENGTH_SHORT).show();

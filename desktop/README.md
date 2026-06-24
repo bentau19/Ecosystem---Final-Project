@@ -63,6 +63,9 @@ bidirectional file transfer via Windows shell integration, and a configurable to
 - **Clipboard Sync** — Two-directional clipboard sync over TauSync. Android → PC: user taps
   "Send Clipboard to PC"; PC → Android: automatic push on every local clipboard change.
   SHA-256 hash guard prevents echo loops in both directions
+- **Camera Mirror** — Receives a live JPEG frame stream from the Android app and feeds it
+  into a virtual webcam via `pyvirtualcam` + OBS Virtual Camera driver. Portrait frames are
+  pillarboxed to preserve aspect ratio. Requires OBS Virtual Camera to be installed on the PC
 
 ---
 
@@ -96,6 +99,7 @@ by pip during setup — only the tools below need manual installation.
 | **CMake** | ≥ 3.20 | Configure & build the pipe module | Bundled with the C++ workload above; or [cmake.org](https://cmake.org/download/) (add to PATH) |
 | **.NET 8 SDK** | 8.x | Package the MSI installer; WiX toolset | [dotnet.microsoft.com/download/dotnet/8.0](https://dotnet.microsoft.com/download/dotnet/8.0) |
 | **WiX Toolset** | ≥ 4.x | Create the `.msi` production package | `dotnet tool install --global wix` (requires .NET SDK above) |
+| **OBS Studio** (with Virtual Camera) | ≥ 29.x | Camera Mirror feature — `pyvirtualcam` uses the OBS Virtual Camera driver as its backend | [obsproject.com/download](https://obsproject.com/download) — the driver is installed automatically with OBS |
 
 ### Installing the prerequisites
 
@@ -203,6 +207,21 @@ wix --version   # prints: 4.x.x
 ```
 
 > If `wix` is not found after install, close and reopen your terminal so the PATH is refreshed.
+
+#### 8. OBS Studio (Virtual Camera driver)
+
+`pyvirtualcam` requires a virtual camera driver. The easiest way to get it on Windows is to install
+OBS Studio — the **OBS Virtual Camera** driver is bundled and registered automatically during setup.
+
+1. Download OBS Studio from [obsproject.com/download](https://obsproject.com/download).
+2. Run the installer with default options (no additional components need to be ticked).
+3. After installation you do **not** need to launch OBS — the driver is registered system-wide and
+   `pyvirtualcam` will find it automatically at runtime.
+4. Verify the driver is present by opening **Device Manager → Cameras**: you should see
+   **OBS Virtual Camera** listed.
+
+> **Camera Mirror only.** The OBS driver is only needed when using the Camera Mirror feature.
+> All other SyncDose features (file transfer, backup, device info, clipboard) work without it.
 
 ---
 
@@ -564,7 +583,8 @@ desktop/
     │   ├── test_connectivity.py
     │   ├── test_clipboard.py
     │   ├── test_file_transfer.py
-    │   └── test_phone_request.py
+    │   ├── test_phone_request.py
+    │   └── test_webcam.py
     ├── utils/
     │   ├── test_network.py
     │   └── test_styles.py
@@ -944,6 +964,25 @@ signal, so the clipboard change that results from `setText()` is silently droppe
 |---|---|---|---|
 | `CLIPBOARD_ANDROID_TO_PC` | `clipboard_android_to_pc` | Android → PC | User-initiated push |
 | `CLIPBOARD_PC_TO_ANDROID` | `clipboard_pc_to_android` | PC → Android | Automatic push on PC clipboard change |
+
+### `WebcamService`
+
+Receives a live camera stream from Android and feeds it into a virtual webcam via `pyvirtualcam`.
+
+Flow:
+1. `PhoneRequestService` detects Android waiting on `webcam_start` and calls `receive_start()`.
+2. A daemon thread connects to `WEBCAM_START` (reads the handshake), then opens `pyvirtualcam.Camera` at 1280×720 @ 24 fps.
+3. The thread connects to `WEBCAM_FRAMES` and reads length-prefixed JPEG frames in a loop.
+4. Each JPEG is decoded with Pillow, padded to 1280×720 preserving aspect ratio (`ImageOps.pad`), converted to a numpy array, and pushed to the virtual camera via `cam.send()`.
+5. When Android closes the channel, `webcam_stopped` is emitted and the virtual camera is released.
+
+| Signal | Payload | When |
+|---|---|---|
+| `webcam_started` | — | Virtual camera opened and streaming |
+| `webcam_stopped` | — | Stream ended (normal or disconnected) |
+| `webcam_error` | `str` | Unrecoverable exception in the stream loop |
+
+**Prerequisite:** OBS Virtual Camera driver must be installed on the PC (`pyvirtualcam` uses it as its backend).
 
 ### `ToolService`
 

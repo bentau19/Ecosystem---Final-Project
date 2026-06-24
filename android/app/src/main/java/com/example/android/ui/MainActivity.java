@@ -24,6 +24,7 @@ import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.services.AppNotificationManager;
 import com.example.android.ui.fragments.ActionsFragment;
 import com.example.android.ui.fragments.BackupFragment;
+import com.example.android.ui.fragments.WebcamFragment;
 import com.example.android.ui.fragments.ConnectFragment;
 import com.example.android.viewmodel.FileTransferViewModel;
 import com.example.android.viewmodel.MainViewModel;
@@ -196,11 +197,17 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Navigates to the Actions dashboard if not already there.
+     *
+     * Skips navigation when the back stack is non-empty: that means the user
+     * is inside a sub-screen (WebcamFragment, BackupFragment, …) that sits on
+     * top of ActionsFragment. This prevents LiveData re-delivery on rotation
+     * from wiping the sub-screen and jumping back to ActionsFragment.
      */
     public void navigateToActions() {
-        if (!(getSupportFragmentManager().findFragmentById(R.id.fragment_container) instanceof ActionsFragment)) {
-            replaceFragment(new ActionsFragment());
-        }
+        FragmentManager fm = getSupportFragmentManager();
+        if (fm.getBackStackEntryCount() > 0) return;
+        if (fm.findFragmentById(R.id.fragment_container) instanceof ActionsFragment) return;
+        replaceFragment(new ActionsFragment());
     }
 
     /**
@@ -214,6 +221,19 @@ public class MainActivity extends AppCompatActivity {
         getSupportFragmentManager().beginTransaction()
                 .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out)
                 .replace(R.id.fragment_container, new BackupFragment())
+                .addToBackStack(null)
+                .commitAllowingStateLoss();
+    }
+
+    /**
+     * Navigates to the Webcam viewfinder screen.
+     *
+     * <p>Uses addToBackStack so the back button returns to ActionsFragment.
+     */
+    public void navigateToWebcam() {
+        getSupportFragmentManager().beginTransaction()
+                .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out)
+                .replace(R.id.fragment_container, new WebcamFragment())
                 .addToBackStack(null)
                 .commitAllowingStateLoss();
     }
