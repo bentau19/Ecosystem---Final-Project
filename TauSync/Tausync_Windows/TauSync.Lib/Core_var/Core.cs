@@ -116,6 +116,12 @@ namespace TauSync.Core
         public const int SessionJoinAckTimeoutMs = 10_000;
 
         /// <summary>
+        /// Max time to wait for the peer's KEY_EXCHANGE public key during the security handshake that
+        /// runs right after the primary transport connects (before BT_MAGIC / meeting-word discovery).
+        /// </summary>
+        public const int KeyExchangeTimeoutMs = 15_000;
+
+        /// <summary>
         /// Max time a transport switch waits for the peer's BARRIER_ACK before proceeding anyway.
         /// On timeout the send continues (degrading to the unordered cross-transport behaviour)
         /// rather than hanging — a lost ACK must never deadlock a write.

@@ -110,6 +110,15 @@ public final class CoreConfig {
     public static final int SESSION_JOIN_ACK_TIMEOUT_MS = 10_000;
 
     /**
+     * Max time to wait for the peer's KEY_EXCHANGE public key during the security handshake that runs
+     * right after the primary transport connects (before BT_MAGIC / meeting-word discovery).
+     */
+    public static final int KEY_EXCHANGE_TIMEOUT_MS = 15_000;
+
+    /** EC curve used for the ephemeral ECDH key agreement (must match the Windows P-256 / nistP256). */
+    public static final String KEY_EXCHANGE_CURVE = "secp256r1";
+
+    /**
      * Max time a transport switch waits for the peer's BARRIER_ACK before proceeding anyway. On
      * timeout the send continues (degrading to the unordered cross-transport behaviour) rather than
      * hanging — a lost ACK must never deadlock a write.

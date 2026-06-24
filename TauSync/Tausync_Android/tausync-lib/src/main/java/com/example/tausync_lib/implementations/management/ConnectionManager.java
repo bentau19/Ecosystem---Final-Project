@@ -160,10 +160,18 @@ public class ConnectionManager implements IConnectionManager {
                     // always-on link rather than the lazy Wi-Fi socket. Done after reset() (which
                     // clears it) and before connect so it is in place for the whole session.
                     ctx.setBluetoothTransport(primaryTransport);
+                    // Arm the key exchange before connecting, then derive the session key right after
+                    // the link is up and before the BT_MAGIC handshake (which is now encrypted).
+                    ctx.beginKeyExchange();
                     primaryTransport.connect(targetId, timeoutSeconds).get();
+                    ctx.completeKeyExchange(primaryTransport);
                     hybrid.startBtSession();
                 } else {
-                    ConnectionContext.getInstance().initializeTransports(targetId, timeoutSeconds);
+                    // Wi-Fi-only: initializeTransports calls reset() + beginKeyExchange() + connect;
+                    // derive the key right after.
+                    ConnectionContext ctx = ConnectionContext.getInstance();
+                    ctx.initializeTransports(targetId, timeoutSeconds);
+                    ctx.completeKeyExchange(ctx.getWifiTransport());
                 }
             } catch (Exception e) {
                 throw new RuntimeException(e);

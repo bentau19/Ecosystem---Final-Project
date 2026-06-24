@@ -117,14 +117,19 @@ namespace TauSync.Implementations.Management
             if (_hybrid != null)
             {
                 // Hybrid: connect the Bluetooth primary directly (the manager owns its transports, so
-                // the singleton's internal transport is bypassed), then run the BT_MAGIC handshake.
-                // Wi-Fi is connected lazily on the first large payload, not here.
+                // the singleton's internal transport is bypassed), then derive the session key, then
+                // run the BT_MAGIC handshake (now encrypted). Wi-Fi is connected lazily later.
                 ConnectionContext.Instance.Reset();
+                ConnectionContext.Instance.BeginKeyExchange();
                 await _primaryTransport!.Connect(targetId, timeoutSeconds).ConfigureAwait(false);
+                await ConnectionContext.Instance.CompleteKeyExchangeAsync(_primaryTransport).ConfigureAwait(false);
                 await _hybrid.StartBtSessionAsync().ConfigureAwait(false);
                 return;
             }
+            // Wi-Fi-only: BeginKeyExchange before connecting so a peer KEY_EXCHANGE arriving immediately
+            // is handled synchronously; InitializeTransports calls Reset() then connects.
             await ConnectionContext.Instance.InitializeTransports(targetId, timeoutSeconds).ConfigureAwait(false);
+            await ConnectionContext.Instance.CompleteKeyExchangeAsync(ConnectionContext.Instance.GetWifiTransport()).ConfigureAwait(false);
         }
 
         /// <inheritdoc />

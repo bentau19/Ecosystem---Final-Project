@@ -1,16 +1,22 @@
 package com.example.tausync_lib.implementations.management;
 
 import com.example.tausync_lib.core.CoreConfig;
+import com.example.tausync_lib.implementations.protocol.ProtocolHandler;
+import com.example.tausync_lib.implementations.security.SecuritySession;
 import com.example.tausync_lib.implementations.transport.SocketTransport;
+import com.example.tausync_lib.interfaces.IProtocolHandler;
 import com.example.tausync_lib.interfaces.ITransport;
+import com.example.tausync_lib.models.KeyExchangeMessage;
 import com.example.tausync_lib.models.SessionControlMessage;
 import com.example.tausync_lib.models.TransferRequest;
 import com.google.gson.Gson;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -102,8 +108,74 @@ public final class ConnectionContext {
      */
     private volatile ITransport bluetoothTransport = null;
 
+    /**
+     * Per-session crypto: runs the ECDH key exchange and encrypts/decrypts frame payloads once a
+     * shared key is derived. Same lifecycle as {@link #sessionToken} — cleared by {@link #reset()}.
+     */
+    private final SecuritySession securitySession = new SecuritySession();
+
+    /** Completed when the peer's KEY_EXCHANGE public key arrives, unblocking {@link #completeKeyExchange}. */
+    private volatile CompletableFuture<String> peerKeyReceived;
+
+    /** Our ephemeral ECDH public key (base64 SPKI) for the in-flight exchange. */
+    private volatile String localPublicKey;
+
+    /** Builds the (plaintext) KEY_EXCHANGE frame; framing only, no routing state. */
+    private final IProtocolHandler keyExchangeProtocol = new ProtocolHandler();
+
     private ConnectionContext() {
         wifiTransport = new SocketTransport();
+    }
+
+    /** True once the ECDH exchange has derived a key and payload encryption is active. */
+    public boolean isEncryptionActive() {
+        return securitySession.isEncryptionActive();
+    }
+
+    /** Encrypts a frame payload (no-op while inactive or empty). Called from {@link ProtocolHandler#buildFrame}. */
+    public byte[] encryptPayload(byte[] payload) {
+        return securitySession.encryptPayload(payload);
+    }
+
+    /** Decrypts a frame payload (no-op while inactive or empty). Called from {@link #dispatch} after routing. */
+    public byte[] decryptPayload(byte[] payload) {
+        return securitySession.decryptPayload(payload);
+    }
+
+    /**
+     * Generates the local ECDH key pair and arms the peer-key awaiter. Call right after {@link #reset()}
+     * and BEFORE the transport connects, so a peer KEY_EXCHANGE that arrives immediately can be completed
+     * synchronously on the receive thread (closing the race where the peer's first encrypted frame is
+     * processed before encryption activates).
+     */
+    public void beginKeyExchange() {
+        peerKeyReceived = new CompletableFuture<>();
+        localPublicKey = securitySession.generateLocalPublicKey();
+    }
+
+    /**
+     * Sends our KEY_EXCHANGE public key over {@code transport} and awaits the peer's, then derives the
+     * shared key. The exchange is symmetric (both sides send and receive) and runs as the very first
+     * traffic on the primary transport, before BT_MAGIC / meeting-word discovery. Idempotent with the
+     * synchronous derivation done in {@link #tryHandleKeyExchange}.
+     */
+    public void completeKeyExchange(ITransport transport) throws Exception {
+        if (transport == null) throw new IllegalArgumentException("transport must not be null");
+        if (peerKeyReceived == null) beginKeyExchange();
+        CompletableFuture<String> awaiter = peerKeyReceived;
+
+        KeyExchangeMessage message = new KeyExchangeMessage();
+        message.setMagicBytes(CoreConfig.MAGIC_BYTES);
+        message.setType(KeyExchangeMessage.TYPE_KEY_EXCHANGE);
+        message.setPublicKey(localPublicKey);
+        byte[] body = gson.toJson(message).getBytes(StandardCharsets.UTF_8);
+        byte[] frame = keyExchangeProtocol.buildFrame(CoreConfig.CONTROL_CHANNEL_ID, body, CoreConfig.FLAG_CONTROL);
+        transport.sendRaw(frame).get();
+
+        String peerKey = awaiter.get(CoreConfig.KEY_EXCHANGE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        // Safety net: the dispatch path normally derives the key synchronously when the peer frame
+        // arrives. completeExchange is idempotent, so this is a no-op if that already happened.
+        securitySession.completeExchange(peerKey);
     }
 
     /** Stores the hybrid session token (see {@link #sessionToken}). */
@@ -152,6 +224,9 @@ public final class ConnectionContext {
         // re-establishing, so stale handlers and pending REQs are not replayed on the
         // new session's frames. Mirrors the C# ConnectionContext.InitializeTransports.
         reset();
+        // Arm the key exchange before connecting so a peer KEY_EXCHANGE arriving the instant the link
+        // is up is captured (and derived synchronously) rather than lost.
+        beginKeyExchange();
         try {
             wifiTransport.connect(targetId, timeoutSeconds).get();
         } catch (java.util.concurrent.ExecutionException e) {
@@ -349,6 +424,9 @@ public final class ConnectionContext {
         sessionToken = null;
         peerWifiHost = null;
         bluetoothTransport = null;
+        securitySession.clear();
+        peerKeyReceived = null;
+        localPublicKey = null;
         nextCorrelationId.set(CoreConfig.MIN_ID);
     }
 
@@ -382,6 +460,9 @@ public final class ConnectionContext {
         BiConsumer<byte[], Byte> handler = routingMap.get(targetId);
         if (handler == null) return false;
 
+        // Decrypt only now — after the plaintext-header routing decision picked this handler — so
+        // decryption is never on the routing path and dropped/empty frames cost nothing.
+        payload = securitySession.decryptPayload(payload);
         handler.accept(payload, flags);
 
         if ((flags & CoreConfig.FLAG_FIN) != 0) {
@@ -394,6 +475,15 @@ public final class ConnectionContext {
 
     private boolean dispatchDiscoveryRequest(byte[] payload, byte flags) {
         if ((flags & CoreConfig.FLAG_CONTROL) == 0) return false;
+
+        // Key-exchange frames arrive in plaintext, before encryption is active, as the first traffic on
+        // the link. Consume them here (gated on !active so a later decrypted control frame can never be
+        // mistaken for one) BEFORE any decryption, and derive the key synchronously on this receive
+        // thread so the peer's first encrypted frame is never processed before activation.
+        if (!securitySession.isEncryptionActive() && tryHandleKeyExchange(payload)) return true;
+        // Now that the key exchange has been ruled out, decrypt the control payload (no-op while inactive
+        // or empty) before parsing its JSON.
+        payload = securitySession.decryptPayload(payload);
 
         // Hybrid session signaling (BT_MAGIC, WIFI_CONNECT_*, SESSION_JOIN*) is checked before
         // meeting-word discovery: it shares TargetID=0 + CONTROL but is keyed by a reserved Type,
@@ -631,6 +721,41 @@ public final class ConnectionContext {
         if (message == null) return false;
         listener.accept(message);
         return true;
+    }
+
+    /**
+     * Consumes a plaintext KEY_EXCHANGE frame: derives the shared key synchronously (on the receive
+     * thread, so encryption is active before the next frame is read) and unblocks
+     * {@link #completeKeyExchange}. Returns false for any non-KEY_EXCHANGE payload so it falls through
+     * to the normal discovery path.
+     */
+    private boolean tryHandleKeyExchange(byte[] payload) {
+        KeyExchangeMessage message = parseKeyExchange(payload);
+        if (message == null || message.getPublicKey() == null || message.getPublicKey().isEmpty()) {
+            return false;
+        }
+        try {
+            // Derive now if our key pair is ready (it is, after beginKeyExchange ran before connect).
+            securitySession.completeExchange(message.getPublicKey());
+        } catch (Exception ignored) {
+            // Key pair not ready yet or malformed peer key — the driver's await + completeExchange safety
+            // net will derive it. Never let a bad frame break dispatch.
+        }
+        CompletableFuture<String> awaiter = peerKeyReceived;
+        if (awaiter != null) awaiter.complete(message.getPublicKey());
+        return true;
+    }
+
+    private KeyExchangeMessage parseKeyExchange(byte[] payload) {
+        if (payload == null || payload.length == 0) return null;
+        try {
+            KeyExchangeMessage message =
+                    gson.fromJson(new String(payload, StandardCharsets.UTF_8), KeyExchangeMessage.class);
+            if (message == null || message.getMagicBytes() != CoreConfig.MAGIC_BYTES) return null;
+            return KeyExchangeMessage.TYPE_KEY_EXCHANGE.equals(message.getType()) ? message : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private SessionControlMessage parseSessionControl(byte[] payload) {

@@ -1,4 +1,7 @@
-# TauSync Protocol Specification (v3.1)
+# TauSync Protocol Specification (v3.2)
+
+> **v3.2** adds the **Security Layer** (§14): every session is transparently encrypted with
+> AES-256-GCM, keyed by an ephemeral ECDH (P-256) exchange. The TPack header always stays plaintext.
 
 **Project Name:** TauSync (Cross-Platform Smart Connectivity)  
 **Philosophy:** Pure Infrastructure Layer — "Dumb Pipe, Smart Routing"  
@@ -60,7 +63,13 @@ Offset  Size  Field         Encoding
 |:----|:-------|:---------|:-----------------------------------------------------------------------------------------------------|
 | 0   | `0x01` | FIN      | Last frame for this stream. Receiver must clean up the handler, routing entries, and release the ID. |
 | 1   | `0x02` | CONTROL  | Payload is a JSON `TransferRequest` (signaling). When unset, payload is opaque binary data.          |
-| 2–7 |        | Reserved | Must be `0`.                                                                                         |
+| 2   | `0x04` | BARRIER  | Transport-switch ordering barrier (hybrid mode). Empty payload.                                       |
+| 3   | `0x08` | BARRIER_ACK | Reply to a BARRIER frame.                                                                          |
+| 4–7 |        | Reserved | Must be `0`.                                                                                         |
+
+> **Header is never encrypted.** When a session is encrypted (§14), only the **payload** bytes are
+> ciphertext. The 8-byte header — length, TargetID, flags — is always plaintext, so the receiver
+> routes and classifies every frame without decrypting.
 
 ### 2.2 Frame Construction (BuildFrame)
 
@@ -221,12 +230,14 @@ The public API consumed by applications.
 | `CompleteStream`      | `void CompleteStream(int localId)`                                       | Sends FIN and releases the local ID.                                                            |
 | `ErrorOccurred`       | `event EventHandler<Exception>`                                          | Error notifications.                                                                            |
 
-### 5.4 ISecureChannel (Not Yet Integrated)
+### 5.4 ISecureChannel (Integrated — see §14)
 
-Defined for future AES-GCM payload encryption. Currently implemented (`SecureChannel.cs`) but **not wired** into the frame pipeline. When integrated:
+AES-256-GCM payload encryption, **wired into the frame pipeline** and active on every session (see
+§14 for the full design). `SecureChannel` (`SecureChannel.cs` / `.java`) performs the AEAD; a
+per-session `SecuritySession` runs the key exchange and gates encrypt/decrypt.
 - `Encrypt(plaintext)` → `[IV 12B] + [Ciphertext] + [Tag 16B]`
 - `Decrypt(ciphertextWithIv)` → plaintext
-- Encryption applies to the **payload only** (header is always plaintext).
+- Encryption applies to the **payload only** (header is always plaintext, so routing never decrypts).
 
 ---
 
@@ -674,9 +685,193 @@ Standard `Stream.Read` contract: return immediately if **any** data is available
 
 The queue handles the case where Peer A sends REQ("word") before Peer B has called `Connect("word")`. Without the queue, the REQ would be dropped (no service registered), and the handshake would never complete. The queue stores up to 64 REQs per word, draining them when `RegisterService` is called.
 
-### 13.5 Security Layer (Future)
+### 13.5 Security Layer
 
-`SecureChannel` (AES-256-GCM) is implemented but not yet wired into the pipeline. When activated:
-- Encryption happens **after** `BuildFrame` (encrypt the payload only, header stays plaintext).
-- Decryption happens **before** `Dispatch` (decrypt the payload, pass plaintext to handlers).
-- Key exchange mechanism is TBD (likely Diffie-Hellman during transport connection).
+`SecureChannel` (AES-256-GCM) is **wired into the pipeline** and active on every session. See §14 for
+the full specification. In short:
+- Encryption happens inside `BuildFrame` (encrypt the payload only; the header is built over the
+  ciphertext length and always stays plaintext).
+- Decryption happens inside `Dispatch`, **after** the TargetID/flags routing branch (decrypt the
+  payload, pass plaintext to handlers) — so routing never decrypts.
+- Key exchange is **ephemeral ECDH over P-256**, run as the first frames on the transport.
+
+---
+
+## 14. Security Layer (AES-256-GCM)
+
+Every TauSync session is **transparently encrypted**. Immediately after a transport connects, the two
+peers run an ephemeral Diffie-Hellman key exchange to derive a shared symmetric key, then encrypt the
+payload of every frame with AES-256-GCM for the rest of the session. There is **no API change** —
+encryption sits entirely below the stream API, so applications, the Python SDK, and the Android SDK are
+unaffected.
+
+### 14.1 Goals & Threat Model
+
+| Property | Status |
+|:---------|:-------|
+| **Confidentiality** vs. a passive eavesdropper (Wi-Fi sniffer, BT sniffer) | ✅ Protected |
+| **Integrity / tamper-evidence** of each frame | ✅ Protected (GCM authentication tag) |
+| **Confidentiality of the meeting word** and all signalling | ✅ Encrypted (control frames too) |
+| **Active man-in-the-middle** (attacker relays both key-exchange messages) | ❌ **Out of scope** — the ECDH exchange is unauthenticated. A future short-authentication-string (SAS) compare or PIN-mixed HKDF can authenticate it without changing the pipeline. |
+
+The header is **never** encrypted, so an observer can still see frame sizes, channel IDs, and
+flags (FIN/CONTROL/BARRIER) — only the payload contents are hidden.
+
+### 14.2 Cryptographic Primitives
+
+| Purpose | Algorithm |
+|:--------|:----------|
+| Key agreement | **ECDH** over **NIST P-256** (`secp256r1`), ephemeral key pair per session |
+| Key derivation | `sessionKey = SHA-256(ECDH_shared_secret)` → 32 bytes |
+| Payload cipher | **AES-256-GCM** (AEAD), 96-bit random IV per frame, 128-bit tag |
+| Public-key wire encoding | DER **SubjectPublicKeyInfo** (X.509), base64 |
+
+The ECDH shared secret is the 32-byte P-256 X coordinate. Both platforms hash it with SHA-256 so the
+derived AES key is identical:
+- **C#:** `ECDiffieHellman.DeriveKeyFromHash(peerKey, SHA256)`
+- **Java:** `SHA-256(KeyAgreement("ECDH").generateSecret())`, normalised to a fixed 32 bytes.
+
+### 14.3 Key-Exchange Handshake
+
+A new control message `KEY_EXCHANGE` (TargetID = 0, Flags = CONTROL) carries the sender's base64 public
+key. It is the **first frame each side sends** after the transport connects — before BT_MAGIC and before
+any meeting-word REQ — and it travels in **plaintext** because encryption is not yet active.
+
+```json
+{ "MagicBytes": 1413567827, "Type": "KEY_EXCHANGE", "PublicKey": "<base64 DER SPKI>" }
+```
+
+```
+Peer A                                   Peer B
+══════                                   ══════
+transport connects                       transport connects
+ │  KEY_EXCHANGE(pubKey_A)  ───────────►  │   (plaintext)
+ │  ◄───────────  KEY_EXCHANGE(pubKey_B)  │   (plaintext)
+ │                                        │
+ derive sessionKey = SHA-256(ECDH(a,B))   derive sessionKey = SHA-256(ECDH(b,A))
+ encryption ACTIVE                        encryption ACTIVE
+ │  ═══ all later frames AES-256-GCM ════  │
+```
+
+The exchange is **symmetric** (both sides send and receive a key) — the same pattern as the meeting-word
+handshake and BT_MAGIC.
+
+### 14.4 Activation Ordering (why no plaintext frame is ever mis-decrypted)
+
+Encryption is a single session-wide toggle. The exchange is the first traffic on an **in-order**
+transport (TCP / RFCOMM), and the toggle is flipped on the receive thread the instant the peer's
+`KEY_EXCHANGE` is consumed — **before the next frame is read**. Therefore:
+
+- A sender only emits encrypted frames *after* sending its own (plaintext) `KEY_EXCHANGE`, which
+  precedes them in the ordered stream.
+- The receiver flips to "active" while consuming that `KEY_EXCHANGE`, so it has the key before the
+  first encrypted frame arrives.
+
+No header flag is needed to distinguish key-exchange frames: they are recognised by their JSON `Type`
+while encryption is still inactive, and that recognition is gated on `!active` so a later (decrypted)
+control frame can never be misread as a key exchange.
+
+### 14.5 Placement in the Frame Pipeline
+
+```
+SEND     payload ─► [BuildFrame: encrypt payload if active] ─► header(plaintext)+ciphertext ─► SendRaw
+RECEIVE  socket ─► read header(plaintext) ─► read payload bytes ─► ParseFrame (pure split, UNCHANGED)
+                ─► Dispatch: route by TargetID/flags (plaintext)
+                           ─► [decrypt payload] ─► hand plaintext to the channel handler / parse JSON
+```
+
+- **Encrypt** is applied in `ProtocolHandler.BuildFrame` — the single point every outgoing frame is
+  built (data, REQ/OK/CANCEL, session control, barriers). The header is built over the resulting
+  ciphertext length.
+- **Decrypt** is applied in `ConnectionContext.Dispatch`, **after** the TargetID/flags routing branch
+  selects a handler. `ParseFrame` and the transport receive loops are unchanged.
+- **Decryption is never on the routing path.** Dropped frames (unknown TargetID) and empty-payload
+  frames (FIN, BARRIER/BARRIER_ACK) are routed and handled with **zero** decryption.
+
+### 14.6 What Is and Isn't Encrypted
+
+| Frame | Encrypted? |
+|:------|:-----------|
+| 8-byte TPack header (length / TargetID / flags) | **Never** |
+| `KEY_EXCHANGE` frames | No (they establish the key) |
+| Empty-payload frames — FIN, BARRIER, BARRIER_ACK | No (nothing to encrypt; stay 0-length) |
+| Meeting-word REQ / OK / CANCEL | Yes |
+| Hybrid session control (BT_MAGIC, WIFI_CONNECT_*, SESSION_JOIN*) | Yes |
+| All stream data | Yes |
+
+### 14.7 Encrypted Payload Wire Format
+
+A non-empty encrypted payload is laid out as:
+
+```
+[ IV 12B ] [ Ciphertext NB ] [ GCM Tag 16B ]      (total = plaintext length + 28)
+```
+
+The IV is freshly random for **every frame**. This is what makes a single session key safe across all
+multiplexed channels: even though every stream shares one key, no two frames ever reuse a nonce, so
+AES-GCM remains secure (see §14.8).
+
+### 14.8 One Key per Session, Many Streams
+
+TauSync multiplexes many logical streams over one transport. The key exchange runs **once per
+transport connection**, producing **one session key shared by every channel** (including channels
+opened later by a secondary manager). This mirrors TLS: one handshake, one session key, many
+multiplexed streams.
+
+Per-stream key isolation is intentionally **not** used — it is unnecessary here because the per-frame
+random IV (§14.7) already guarantees no nonce reuse across streams. (If isolation were ever required,
+per-channel sub-keys could be derived via HKDF salted with the channel ID, with no extra round-trips.)
+
+### 14.9 Session Lifecycle
+
+- **Activation:** once, right after the primary transport connects (`ConnectTransport`). The key pair
+  is generated *before* connecting so an immediately-arriving peer key is captured and derived
+  synchronously.
+- **Reconnect (unexpected drop):** the transport reconnects **without** re-running the key exchange —
+  the session key persists, and traffic resumes encrypted with no re-handshake (consistent with the
+  "channels survive reconnect" design).
+- **Explicit disconnect:** the last transport's teardown calls `Reset()`, which clears the key and
+  deactivates encryption. The next connection runs a fresh key exchange (new ephemeral keys).
+
+### 14.10 Cross-Platform Interop
+
+The C# and Java implementations are wire-compatible by construction:
+
+- **Public keys:** DER SubjectPublicKeyInfo, base64 (C# `ExportSubjectPublicKeyInfo` ↔ Java
+  `X509EncodedKeySpec` / `getEncoded()`).
+- **Key derivation:** both compute `SHA-256(P-256 X-coordinate)`. Verified equal in-process:
+  `DeriveKeyFromHash(SHA256)` == `SHA-256(DeriveRawSecretAgreement)`.
+- **AES-GCM blob:** both produce `IV ‖ ciphertext ‖ tag` (C# appends the tag explicitly; Java's
+  `Cipher.doFinal` appends it within its output — identical bytes on the wire).
+
+### 14.11 Implementation Map
+
+| Concern | C# (`Tausync_Windows`) | Java (`Tausync_Android`) |
+|:--------|:-----------------------|:-------------------------|
+| AEAD primitive | `Implementations/Security/SecureChannel.cs` | `implementations/security/SecureChannel.java` |
+| Key exchange + encrypt/decrypt gate | `Implementations/Security/SecuritySession.cs` | `implementations/security/SecuritySession.java` |
+| Key-exchange message model | `Models/KeyExchangeMessage.cs` | `models/KeyExchangeMessage.java` |
+| Send-side encrypt | `ProtocolHandler.BuildFrame` | `ProtocolHandler.buildFrame` |
+| Receive-side decrypt + KE dispatch | `ConnectionContext.Dispatch` / `TryHandleKeyExchange` | `ConnectionContext.dispatch` / `tryHandleKeyExchange` |
+| Handshake driver | `ConnectionContext.BeginKeyExchange` / `CompleteKeyExchangeAsync` | `ConnectionContext.beginKeyExchange` / `completeKeyExchange` |
+| Constant | `CoreConfig.KeyExchangeTimeoutMs` | `CoreConfig.KEY_EXCHANGE_TIMEOUT_MS`, `KEY_EXCHANGE_CURVE` |
+
+### 14.12 Debugging / Verification
+
+When encryption activates, each side logs one line containing a **key fingerprint** (first 8 hex chars
+of `SHA-256(sessionKey)`):
+
+```
+[TauSync][SECURITY] AES-256-GCM encryption ACTIVE — session key fingerprint 6c79c0e3
+```
+
+- **PC:** printed to the console (stdout) and the debug output.
+- **Android:** `Log` tag `TauSync` (`adb logcat -s TauSync`).
+
+If the PC and the phone print the **same fingerprint**, both derived the identical key — confirming the
+channel is encrypted end-to-end. Differing fingerprints (or a missing line on one side) mean the key
+exchange did not pair.
+
+An in-process test suite — `TauSync/Tausync_Windows/Security.ManualTest` — validates key agreement, the
+full `BuildFrame → Dispatch` round-trip (ciphertext on the wire, plaintext header, plaintext to the
+handler), unknown-TargetID drop without decryption, and C#≡Java key-derivation parity.

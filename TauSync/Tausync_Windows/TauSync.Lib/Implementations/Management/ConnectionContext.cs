@@ -6,6 +6,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using TauSync.Core;
+using TauSync.Implementations.Protocol;
+using TauSync.Implementations.Security;
 using TauSync.Implementations.Transport;
 using TauSync.Interfaces;
 using TauSync.Models;
@@ -88,10 +90,78 @@ namespace TauSync.Implementations.Management
         /// </summary>
         private volatile string? _peerWifiHost;
 
+        /// <summary>
+        /// Per-session crypto: runs the ECDH key exchange and encrypts/decrypts frame payloads once a
+        /// shared key is derived. Same lifecycle as <see cref="_sessionToken"/> — cleared by <see cref="Reset"/>.
+        /// </summary>
+        private readonly SecuritySession _securitySession = new SecuritySession();
+
+        /// <summary>Completed when the peer's KEY_EXCHANGE public key arrives, unblocking <see cref="CompleteKeyExchangeAsync"/>.</summary>
+        private volatile TaskCompletionSource<string>? _peerKeyReceived;
+
+        /// <summary>Our ephemeral ECDH public key (base64 SPKI) for the in-flight exchange.</summary>
+        private volatile string? _localPublicKey;
+
+        /// <summary>Used to build the (plaintext) KEY_EXCHANGE frame; framing only, no routing state.</summary>
+        private readonly IProtocolHandler _keyExchangeProtocol = new ProtocolHandler();
+
         private ConnectionContext()
         {
             _wifiTransport = new SocketTransport();
             _bluetoothTransport = new BluetoothTransport();
+        }
+
+        /// <summary>True once the ECDH exchange has derived a key and payload encryption is active.</summary>
+        public bool IsEncryptionActive => _securitySession.IsEncryptionActive;
+
+        /// <summary>Encrypts a frame payload (no-op while inactive or empty). Called from <see cref="ProtocolHandler.BuildFrame"/>.</summary>
+        public byte[] EncryptPayload(byte[] payload) => _securitySession.EncryptPayload(payload);
+
+        /// <summary>Decrypts a frame payload (no-op while inactive or empty). Called from <see cref="Dispatch"/> after routing.</summary>
+        public byte[] DecryptPayload(byte[] payload) => _securitySession.DecryptPayload(payload);
+
+        /// <summary>
+        /// Generates the local ECDH key pair and arms the peer-key awaiter. Call right after
+        /// <see cref="Reset"/> and BEFORE the transport connects, so a peer KEY_EXCHANGE that arrives
+        /// immediately can be completed synchronously on the receive thread (closing the race where the
+        /// peer's first encrypted frame is processed before encryption activates).
+        /// </summary>
+        public void BeginKeyExchange()
+        {
+            _peerKeyReceived = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _localPublicKey = _securitySession.GenerateLocalPublicKey();
+        }
+
+        /// <summary>
+        /// Sends our KEY_EXCHANGE public key over <paramref name="transport"/> and awaits the peer's,
+        /// then derives the shared key. The exchange is symmetric (both sides send and receive) and runs
+        /// as the very first traffic on the primary transport, before BT_MAGIC / meeting-word discovery.
+        /// Idempotent with the synchronous derivation done in <see cref="TryHandleKeyExchange"/>.
+        /// </summary>
+        public async Task CompleteKeyExchangeAsync(ITransport transport)
+        {
+            if (transport == null) throw new ArgumentNullException(nameof(transport));
+            if (_peerKeyReceived == null)
+                BeginKeyExchange();
+            TaskCompletionSource<string> peerKeyReceived = _peerKeyReceived!;
+
+            var message = new KeyExchangeMessage
+            {
+                MagicBytes = CoreConfig.MagicBytes,
+                Type = KeyExchangeMessage.TypeKeyExchange,
+                PublicKey = _localPublicKey
+            };
+            byte[] body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
+            byte[] frame = _keyExchangeProtocol.BuildFrame(CoreConfig.ControlChannelId, body, CoreConfig.FlagControl);
+            await transport.SendRaw(frame).ConfigureAwait(false);
+
+            string peerKey = await peerKeyReceived.Task
+                .WaitAsync(TimeSpan.FromMilliseconds(CoreConfig.KeyExchangeTimeoutMs))
+                .ConfigureAwait(false);
+
+            // Safety net: the dispatch path normally derives the key synchronously when the peer frame
+            // arrives. CompleteExchange is idempotent, so this is a no-op if that already happened.
+            _securitySession.CompleteExchange(peerKey);
         }
 
         /// <summary>Stores the hybrid session token (see <see cref="_sessionToken"/>).</summary>
@@ -116,6 +186,9 @@ namespace TauSync.Implementations.Management
             // re-establishing. Without this, stale handlers and pending REQs from the
             // prior connection get replayed onto the new session's frames.
             Reset();
+            // Arm the key exchange before connecting so a peer KEY_EXCHANGE arriving the instant the
+            // link is up is captured (and derived synchronously) rather than lost.
+            BeginKeyExchange();
             await _wifiTransport.Connect(targetId, timeoutSeconds).ConfigureAwait(false);
         }
 
@@ -182,6 +255,9 @@ namespace TauSync.Implementations.Management
             _pendingDiscoveryByWord.Clear();
             _sessionToken = null;
             _peerWifiHost = null;
+            _securitySession.Clear();
+            _peerKeyReceived = null;
+            _localPublicKey = null;
             Interlocked.Exchange(ref _nextCorrelationId, MinId);
         }
 
@@ -318,6 +394,9 @@ namespace TauSync.Implementations.Management
             if (!_routingMap.TryGetValue(targetId, out var handler))
                 return false;
 
+            // Decrypt only now — after the plaintext-header routing decision picked this handler — so
+            // decryption is never on the routing path and dropped/empty frames cost nothing.
+            payload = _securitySession.DecryptPayload(payload);
             handler(payload, flags);
             if ((flags & CoreConfig.FlagFin) != 0)
             {
@@ -332,6 +411,15 @@ namespace TauSync.Implementations.Management
         {
             if ((flags & CoreConfig.FlagControl) == 0)
                 return false;
+            // Key-exchange frames arrive in plaintext, before encryption is active, as the first traffic
+            // on the link. Consume them here (gated on !active so a later decrypted control frame can
+            // never be mistaken for one) BEFORE any decryption, and derive the key synchronously on this
+            // receive thread so the peer's first encrypted frame is never processed before activation.
+            if (!_securitySession.IsEncryptionActive && TryHandleKeyExchange(payload))
+                return true;
+            // Now that the key exchange has been ruled out, decrypt the control payload (no-op while
+            // inactive or empty) before parsing its JSON.
+            payload = _securitySession.DecryptPayload(payload);
             // Hybrid session signaling (BT_MAGIC, WIFI_CONNECT_*, SESSION_JOIN*) is checked before
             // meeting-word discovery: it shares TargetID=0 + CONTROL but is keyed by a reserved
             // Type, so it never collides with a user meeting word.
@@ -481,6 +569,48 @@ namespace TauSync.Implementations.Management
                 return false;
             listener(message);
             return true;
+        }
+
+        /// <summary>
+        /// Consumes a plaintext KEY_EXCHANGE frame: derives the shared key synchronously (on the receive
+        /// thread, so encryption is active before the next frame is read) and unblocks
+        /// <see cref="CompleteKeyExchangeAsync"/>. Returns false for any non-KEY_EXCHANGE payload so it
+        /// falls through to the normal discovery path.
+        /// </summary>
+        private bool TryHandleKeyExchange(byte[] payload)
+        {
+            KeyExchangeMessage? message = ParseKeyExchange(payload);
+            if (message == null || string.IsNullOrEmpty(message.PublicKey))
+                return false;
+            try
+            {
+                // Derive now if our key pair is ready (it is, after BeginKeyExchange ran before connect).
+                _securitySession.CompleteExchange(message.PublicKey);
+            }
+            catch
+            {
+                // Key pair not ready yet or malformed peer key — the driver's await + CompleteExchange
+                // safety net will derive it. Never let a bad frame break dispatch.
+            }
+            _peerKeyReceived?.TrySetResult(message.PublicKey);
+            return true;
+        }
+
+        private static KeyExchangeMessage? ParseKeyExchange(byte[] payload)
+        {
+            if (payload == null || payload.Length == 0)
+                return null;
+            try
+            {
+                var message = JsonSerializer.Deserialize<KeyExchangeMessage>(Encoding.UTF8.GetString(payload));
+                if (message == null || message.MagicBytes != CoreConfig.MagicBytes)
+                    return null;
+                return message.Type == KeyExchangeMessage.TypeKeyExchange ? message : null;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static SessionControlMessage? ParseSessionControl(byte[] payload)
