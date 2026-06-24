@@ -107,6 +107,11 @@ namespace TauSync.Core
         /// <summary>Max time to wait for an RFCOMM connection to establish.</summary>
         public const int BtConnectTimeoutMs = 15_000;
 
+        /// <summary>Max time to wait for the peer's BT_MAGIC during the session handshake. Longer than
+        /// the connect timeout because the server may pause here for the operator to approve the
+        /// connection.</summary>
+        public const int BtHandshakeTimeoutMs = 60_000;
+
         /// <summary>Max time the Wi-Fi client waits for SESSION_JOIN_ACK after joining.</summary>
         public const int SessionJoinAckTimeoutMs = 10_000;
 

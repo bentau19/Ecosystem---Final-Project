@@ -27,6 +27,9 @@ public class SessionControlMessage {
     /** Server's confirmation that the SESSION_JOIN token matched. */
     public static final String TYPE_SESSION_JOIN_ACK = "SESSION_JOIN_ACK";
 
+    /** Server → client: the operator declined the connection. The client aborts without reconnecting. */
+    public static final String TYPE_SESSION_REJECT = "SESSION_REJECT";
+
     @SerializedName("MagicBytes")
     private long magicBytes = 0x54415553L;
 
@@ -41,6 +44,9 @@ public class SessionControlMessage {
 
     @SerializedName("WifiPort")
     private int wifiPort;
+
+    @SerializedName("DeviceName")
+    private String deviceName;
 
     public SessionControlMessage() {}
 
@@ -82,5 +88,13 @@ public class SessionControlMessage {
 
     public void setWifiPort(int wifiPort) {
         this.wifiPort = wifiPort;
+    }
+
+    public String getDeviceName() {
+        return deviceName;
+    }
+
+    public void setDeviceName(String deviceName) {
+        this.deviceName = deviceName;
     }
 }

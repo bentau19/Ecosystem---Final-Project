@@ -86,13 +86,14 @@ Every automated test below is paired with a matching handler in
 """
 
 import hashlib
+import json
 import os
 import queue
 import tempfile
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import ttk, scrolledtext, messagebox
 
 from tausync_py import TauSync
 
@@ -898,6 +899,11 @@ class TauSyncTestConsole(tk.Tk):
         # Name the phone shows in its "connect to this PC?" dialog during BLE discovery (hybrid mode).
         self.device_name_var = tk.StringVar(value=(os.environ.get("COMPUTERNAME") or "TauSync PC"))
 
+        # Phones approved on this PC are remembered so the first connect asks but later ones are silent.
+        self._approved_file = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "approved_devices.json")
+        self._approved_devices = self._load_approved_devices()
+
         self._build_ui()
         self.after(80, self._drain_ui_queue)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -967,7 +973,7 @@ class TauSyncTestConsole(tk.Tk):
         device_name = self.device_name_var.get().strip() or None
 
         def connect_hybrid():
-            self.tau.connect_hybrid(device_name=device_name)
+            self.tau.connect_hybrid(device_name=device_name, on_approve=self._on_approve_device)
             ip = self.tau.peer_wifi_ip
             self.post(lambda: self._log_system(
                 f"Bluetooth handshake done. Phone's Wi-Fi IP discovered over BT: {ip or '(none)'}"))
@@ -979,6 +985,52 @@ class TauSyncTestConsole(tk.Tk):
             # Arm both suites so a hybrid link serves 'Run All Tests' and 'Run Hybrid Tests'.
             suite=serve_all_tests_and_hybrid,
         )
+
+    def _on_approve_device(self, name):
+        """Decide whether to accept a connecting phone. Runs on a TauSync background thread.
+
+        A phone approved before is auto-accepted (silent). A new phone pops a yes/no dialog on the
+        UI thread; if accepted it is remembered so future connects are silent. Returns a bool to .NET.
+        """
+        device = (name or "").strip() or "Unknown phone"
+        if device in self._approved_devices:
+            self.post(lambda: self._log_system(f"Auto-approved known device: {device}"))
+            return True
+
+        result = {"ok": False}
+        done = threading.Event()
+
+        def ask():
+            result["ok"] = bool(messagebox.askyesno(
+                "Approve connection",
+                f"Phone '{device}' wants to connect over Bluetooth.\n\nAccept this device?",
+                parent=self))
+            done.set()
+
+        self.post(ask)
+        done.wait()
+
+        if result["ok"]:
+            self._approved_devices.add(device)
+            self._save_approved_devices()
+            self.post(lambda: self._log_system(f"Approved and remembered: {device}"))
+        else:
+            self.post(lambda: self._log_system(f"Declined connection from: {device}"))
+        return result["ok"]
+
+    def _load_approved_devices(self):
+        try:
+            with open(self._approved_file, "r", encoding="utf-8") as handle:
+                return set(json.load(handle))
+        except Exception:
+            return set()
+
+    def _save_approved_devices(self):
+        try:
+            with open(self._approved_file, "w", encoding="utf-8") as handle:
+                json.dump(sorted(self._approved_devices), handle)
+        except Exception:
+            pass
 
     def _start_mode(self, mode, label, connect, suite):
         """Establishes one server mode (singleton transport allows exactly one) and arms its suite."""

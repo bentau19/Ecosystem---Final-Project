@@ -102,6 +102,10 @@ public final class CoreConfig {
     /** Max time to wait for an RFCOMM connection to establish. */
     public static final int BT_CONNECT_TIMEOUT_MS = 15_000;
 
+    /** Max time to wait for the peer's BT_MAGIC during the handshake. Longer than the connect
+     *  timeout because the server may pause here for the operator to approve the connection. */
+    public static final int BT_HANDSHAKE_TIMEOUT_MS = 60_000;
+
     /** Max time the Wi-Fi client waits for SESSION_JOIN_ACK after joining. */
     public static final int SESSION_JOIN_ACK_TIMEOUT_MS = 10_000;
 

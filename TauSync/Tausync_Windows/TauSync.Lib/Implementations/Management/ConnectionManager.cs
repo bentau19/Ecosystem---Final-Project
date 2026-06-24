@@ -99,6 +99,18 @@ namespace TauSync.Implementations.Management
             _primaryTransport = transport;
         }
 
+        /// <summary>
+        /// Sets the Bluetooth connection-approval gate for a hybrid manager (no-op otherwise). The
+        /// callback runs on the server (PC) right after a client connects and before the session
+        /// completes; given the client's device name it returns true to accept or false to reject.
+        /// Must be set before <see cref="ConnectTransport"/>.
+        /// </summary>
+        public void SetBtApprovalCallback(Func<string?, bool>? approve)
+        {
+            if (_hybrid != null)
+                _hybrid.ApprovalCallback = approve;
+        }
+
         /// <inheritdoc />
         public async Task ConnectTransport(string? targetId, int? timeoutSeconds = null)
         {

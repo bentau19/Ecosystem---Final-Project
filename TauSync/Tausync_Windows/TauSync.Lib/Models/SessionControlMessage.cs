@@ -25,6 +25,10 @@ namespace TauSync.Models
         /// <summary>Server's confirmation that the SESSION_JOIN token matched.</summary>
         public const string TypeSessionJoinAck = "SESSION_JOIN_ACK";
 
+        /// <summary>Server → client: the operator declined the connection. The client aborts and does
+        /// not auto-reconnect. Sent over Bluetooth before the server drops the link.</summary>
+        public const string TypeSessionReject = "SESSION_REJECT";
+
         /// <summary>Protocol identity: 0x54415553 ("TAUS").</summary>
         [JsonPropertyName("MagicBytes")]
         public uint MagicBytes { get; set; } = 0x54415553;
@@ -44,5 +48,10 @@ namespace TauSync.Models
         /// <summary>Wi-Fi server TCP port (present on WIFI_CONNECT_READY).</summary>
         [JsonPropertyName("WifiPort")]
         public int WifiPort { get; set; }
+
+        /// <summary>Sender's friendly Bluetooth name (present on BT_MAGIC), shown in the PC's
+        /// connection-approval dialog so the operator knows which phone is connecting.</summary>
+        [JsonPropertyName("DeviceName")]
+        public string? DeviceName { get; set; }
     }
 }

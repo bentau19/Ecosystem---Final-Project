@@ -604,6 +604,7 @@ class TauSync:
         self._manager = _ConnectionManagerCls(False)
         self._disposed = False
         self._ble_advertiser = None
+        self._approve_delegate = None  # keeps the .NET approval delegate alive (GC guard)
 
     def get_peer_waiting_words(self) -> list[str]:
         """Get a snapshot of the peer's pending discovery words.
@@ -740,7 +741,10 @@ class TauSync:
             raise
 
     def connect_hybrid(
-        self, timeout_seconds: int | None = None, device_name: str | None = None
+        self,
+        timeout_seconds: int | None = None,
+        device_name: str | None = None,
+        on_approve=None,
     ) -> None:
         """Start a hybrid Bluetooth + Wi-Fi session as the server (Windows side).
 
@@ -758,6 +762,10 @@ class TauSync:
             device_name: Name shown to the phone in its "connect to this PC?" dialog
                 during first-time BLE discovery. ``None``/blank uses the Windows computer
                 name. Truncated to fit the BLE advertisement (~14 bytes).
+            on_approve: Optional ``callable(phone_name: str | None) -> bool`` run when a
+                phone connects, before the session completes. Return ``True`` to accept or
+                ``False`` to decline (the phone is told and aborts). ``None`` accepts all.
+                Called on a background thread — marshal any UI to your main thread.
 
         Raises:
             TimeoutError: If no Bluetooth client connected within *timeout_seconds*.
@@ -794,6 +802,11 @@ class TauSync:
             # BT listener itself and runs the BT_MAGIC handshake (where the peer's Wi-Fi IP
             # is discovered).
             self._manager = _ConnectionManagerCls()
+            if on_approve is not None:
+                from System import Func, String, Boolean
+                # Keep a reference so the delegate is not garbage-collected while .NET holds it.
+                self._approve_delegate = Func[String, Boolean](on_approve)
+                self._manager.SetBtApprovalCallback(self._approve_delegate)
             self._manager.ConnectTransport("", timeout_seconds).GetAwaiter().GetResult()
             self._stop_ble_advertiser()  # client connected — no need to keep advertising
         except TimeoutException as exc:

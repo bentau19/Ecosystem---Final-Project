@@ -45,6 +45,12 @@ public interface ITransport extends AutoCloseable {
     boolean isConnected();
 
     /**
+     * Explicitly tears down the connection (intentional close): the transport does not auto-reconnect
+     * after this. Implemented by both transports; declared here to match C# {@code ITransport}.
+     */
+    void disconnect();
+
+    /**
      * @return true when this transport accepted a connection (server mode),
      *         false when it initiated one (client mode)
      */

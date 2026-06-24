@@ -39,6 +39,17 @@ namespace TauSync.Implementations.Management
         private volatile bool _isServer;
         private volatile bool _disposed;
 
+        /// <summary>The peer's friendly Bluetooth name from its BT_MAGIC, shown in the approval prompt.</summary>
+        private volatile string? _peerDeviceName;
+
+        /// <summary>
+        /// Optional gate run on the server right after the peer's BT_MAGIC arrives and before the
+        /// session is completed: given the peer's device name, returns true to accept or false to
+        /// reject. Null (the default) accepts every connection, so behaviour is unchanged unless a
+        /// caller opts in.
+        /// </summary>
+        public Func<string?, bool>? ApprovalCallback { get; set; }
+
         /// <summary>Completed when the peer's BT_MAGIC arrives, unblocking <see cref="StartBtSessionAsync"/>.</summary>
         private TaskCompletionSource _peerMagicReceived =
             new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -73,13 +84,42 @@ namespace TauSync.Implementations.Management
             var magic = NewMessage(SessionControlMessage.TypeBtMagic);
             magic.WifiHost = NetworkUtils.GetLocalWifiIpAddress();
             magic.WifiPort = CoreConfig.DefaultPort;
-            await SendOverBluetoothAsync(magic).ConfigureAwait(false);
-            await _peerMagicReceived.Task
-                .WaitAsync(TimeSpan.FromMilliseconds(CoreConfig.BtConnectTimeoutMs))
-                .ConfigureAwait(false);
+            magic.DeviceName = Environment.MachineName;
 
-            if (_isServer)
+            var approve = ApprovalCallback;
+            if (_isServer && approve != null)
+            {
+                // Gated server: wait for the client's magic first so we know who is connecting, run the
+                // approval, and only then reveal our magic. Withholding our magic is what keeps the
+                // client from completing its connect — so a declined client never sees itself connected.
+                await _peerMagicReceived.Task
+                    .WaitAsync(TimeSpan.FromMilliseconds(CoreConfig.BtHandshakeTimeoutMs))
+                    .ConfigureAwait(false);
+
+                if (!approve(_peerDeviceName))
+                {
+                    // Tell the client it was declined, then drop the link. RFCOMM is in-order, so the
+                    // client reads REJECT before the EOF and tears down intentionally (no reconnect).
+                    await SendOverBluetoothAsync(NewMessage(SessionControlMessage.TypeSessionReject))
+                        .ConfigureAwait(false);
+                    _bluetooth.Disconnect();
+                    throw new OperationCanceledException("The connection was declined on the PC.");
+                }
+
+                await SendOverBluetoothAsync(magic).ConfigureAwait(false);
                 ConnectionContext.Instance.SetSessionToken(Guid.NewGuid().ToString());
+            }
+            else
+            {
+                // Ungated path (no approval, or client): send our magic, then wait for the peer's.
+                await SendOverBluetoothAsync(magic).ConfigureAwait(false);
+                await _peerMagicReceived.Task
+                    .WaitAsync(TimeSpan.FromMilliseconds(CoreConfig.BtHandshakeTimeoutMs))
+                    .ConfigureAwait(false);
+
+                if (_isServer)
+                    ConnectionContext.Instance.SetSessionToken(Guid.NewGuid().ToString());
+            }
         }
 
         /// <summary>
@@ -151,6 +191,7 @@ namespace TauSync.Implementations.Management
                     // field) without manual entry. The peer's BT_MAGIC is the earliest we learn it.
                     if (!string.IsNullOrWhiteSpace(message.WifiHost))
                         ConnectionContext.Instance.SetPeerWifiHost(message.WifiHost);
+                    _peerDeviceName = message.DeviceName;
                     _peerMagicReceived.TrySetResult();
                     break;
                 case SessionControlMessage.TypeWifiConnectReq:

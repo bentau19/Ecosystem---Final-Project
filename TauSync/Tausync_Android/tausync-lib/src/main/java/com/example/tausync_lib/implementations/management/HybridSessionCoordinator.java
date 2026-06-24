@@ -81,8 +81,11 @@ final class HybridSessionCoordinator {
         SessionControlMessage magic = newMessage(SessionControlMessage.TYPE_BT_MAGIC);
         magic.setWifiHost(NetworkUtils.getLocalWifiIpAddress());
         magic.setWifiPort(CoreConfig.DEFAULT_PORT);
+        magic.setDeviceName(localBluetoothName());
         sendOverBluetooth(magic).get();
-        peerMagicReceived.get(CoreConfig.BT_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        // Wait for the peer's magic. The server may pause here while its operator approves the
+        // connection; if it declines, a SESSION_REJECT completes this future exceptionally instead.
+        peerMagicReceived.get(CoreConfig.BT_HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
 
         if (isServer) {
             ConnectionContext.getInstance().setSessionToken(UUID.randomUUID().toString());
@@ -144,6 +147,12 @@ final class HybridSessionCoordinator {
                 ConnectionContext.getInstance().setPeerWifiHost(host);
             }
             peerMagicReceived.complete(null);
+        } else if (SessionControlMessage.TYPE_SESSION_REJECT.equals(type)) {
+            // The PC declined. Fail the handshake and tear down intentionally so the Bluetooth
+            // transport does not auto-reconnect straight into another rejection.
+            peerMagicReceived.completeExceptionally(
+                    new java.io.IOException("The connection was declined on the PC."));
+            try { bluetooth.disconnect(); } catch (Exception ignored) {}
         } else if (SessionControlMessage.TYPE_WIFI_CONNECT_REQ.equals(type)) {
             if (isServer) triggerWifiConnect();
         } else if (SessionControlMessage.TYPE_WIFI_CONNECT_READY.equals(type)) {
@@ -291,6 +300,19 @@ final class HybridSessionCoordinator {
         message.setType(type);
         message.setMagicBytes(CoreConfig.MAGIC_BYTES);
         return message;
+    }
+
+    /** This phone's friendly Bluetooth name, shown in the PC's approval prompt; "Android" if unknown. */
+    @android.annotation.SuppressLint({"MissingPermission", "HardwareIds"})
+    private static String localBluetoothName() {
+        try {
+            android.bluetooth.BluetoothAdapter adapter =
+                    android.bluetooth.BluetoothAdapter.getDefaultAdapter();
+            String name = adapter != null ? adapter.getName() : null;
+            return (name != null && !name.trim().isEmpty()) ? name : "Android";
+        } catch (Exception e) {
+            return "Android";
+        }
     }
 
     private CompletableFuture<Void> sendOverBluetooth(SessionControlMessage message) {
