@@ -8,7 +8,7 @@
 **Architecture:** 4-Layer Decoupled Communication Stack  
 **Target Platforms:** Windows (C# .NET 8) & Android (Java/Kotlin)  
 **Byte Order:** Little Endian  
-**Transport:** TCP  
+**Transports:** TCP (Wi-Fi) and Bluetooth RFCOMM — usable alone or together in **hybrid mode** (§17)  
 
 ---
 
@@ -23,12 +23,36 @@ All protocol-level constants live in one place (`CoreConfig` on C#). Both platfo
 | `MagicBytes`                     | `0x54415553` | ASCII "TAUS" — protocol identity in every signaling JSON.                                |
 | `ControlChannelId`               | `0`          | Reserved TargetID for discovery/handshake frames.                                        |
 | `FlagFin`                        | `0x01`       | Bit 0 — final packet of a logical stream. Triggers cleanup.                              |
-| `FlagControl`                    | `0x02`       | Bit 1 — payload is a `TransferRequest` JSON (signaling).                                 |
-| `StreamChunkSize`                | `65536`      | Recommended max payload per data frame (64 KB).                                          |
-| `HandshakeTimeoutSeconds`        | `30`         | Max time to wait for a handshake OK before timing out.                                   |
+| `FlagControl`                    | `0x02`       | Bit 1 — payload is a JSON signaling message (`TransferRequest` / session control / key exchange). |
+| `FlagBarrier`                    | `0x04`       | Bit 2 — transport-switch ordering barrier (hybrid mode, §17.5). Empty payload.            |
+| `FlagBarrierAck`                 | `0x08`       | Bit 3 — reply to a BARRIER frame.                                                         |
+| `StreamChunkSize`                | `65536`      | Max payload per **wire** data frame (64 KB). Larger logical writes are sliced into chunks.|
+| `MaxPayloadSize`                 | `16 MB`      | Max accepted payload per frame. Guards against a crafted header triggering a huge allocation.|
+| `HandshakeTimeoutSeconds`        | `30`         | Max time to wait for a meeting-word OK before timing out.                                 |
+| `ConnectRetryCount`              | `3`          | Auto-retries of `Connect(word)` after a handshake timeout.                                |
 | `DefaultPort`                    | `8888`       | TCP port used by `SocketTransport`.                                                      |
 | `ClientConnectRetryDelaySeconds` | `2`          | Delay between TCP connection retries (client mode).                                      |
 | `MaxPendingDiscoveryPerWord`     | `64`         | Max queued REQs per word before the service is registered.                               |
+| `ReconnectInitialDelayMs`        | `1000`       | First back-off after an unexpected drop; doubles up to the cap (§16).                     |
+| `ReconnectMaxDelayMs`            | `30000`      | Cap on the exponential reconnect back-off.                                               |
+| `SendReconnectWaitMs`            | `30000`      | Max time a send blocks waiting for a mid-drop reconnect before failing.                   |
+| `KeyExchangeTimeoutMs`           | `15000`      | Max wait for the peer's `KEY_EXCHANGE` during the security handshake (§14).               |
+
+#### Bluetooth / hybrid constants (§17)
+
+| Constant                         | Value        | Description                                                                              |
+|:---------------------------------|:-------------|:-----------------------------------------------------------------------------------------|
+| `RfcommServiceUuid`              | `…cde02`     | RFCOMM service UUID both platforms use for SDP lookup of the data channel.                |
+| `BtConnectTimeoutMs`             | `15000`      | Max time to establish an RFCOMM connection / bring Wi-Fi up.                              |
+| `BtHandshakeTimeoutMs`           | `60000`      | Max wait for the peer's `BT_MAGIC` (longer — the PC may pause for operator approval).     |
+| `SessionJoinAckTimeoutMs`        | `10000`      | Max wait for `SESSION_JOIN_ACK` after the Wi-Fi client joins.                             |
+| `BarrierAckTimeoutMs`            | `5000`       | Max wait for a `BARRIER_ACK` before proceeding unordered (§17.5).                         |
+| `HybridSmallThresholdBytes`      | `64 KB − 1`  | Payloads ≤ this go over Bluetooth; larger ones trigger the lazy Wi-Fi link.              |
+| `LargeTransferChunkSize`         | `256 KB`     | Default file-transfer chunk; deliberately above the threshold so files route over Wi-Fi.|
+| `WifiIdleTimeoutMs`              | `60000`      | Idle time before the hybrid manager tears the Wi-Fi link down (Bluetooth stays up).      |
+| `WifiReconnectMaxAttempts`       | `3`          | Wi-Fi bring-up retries before falling back to Bluetooth for the current send.            |
+
+Both platforms **must** use identical values; constants live in `CoreConfig` (C#) / `CoreConfig.java`.
 
 ### Valid ID Range
 
@@ -111,6 +135,16 @@ This is implemented as `ReadExactlyAsync(stream, buffer, offset, count)` which l
 
 ## 3. Signaling Model (TransferRequest)
 
+Control frames (TargetID=0, Flags=CONTROL) carry **three** JSON message families, all stamped with
+`MagicBytes` and disambiguated by their `Type`/shape when received in `DispatchDiscoveryRequest`:
+
+1. **`TransferRequest`** — meeting-word discovery (this section). `Status` ∈ REQ/OK/REJECT/CANCEL.
+2. **`KeyExchangeMessage`** — `Type = "KEY_EXCHANGE"`, the security handshake (§14). Checked first, while
+   encryption is inactive.
+3. **`SessionControlMessage`** — hybrid Bluetooth↔Wi-Fi signalling (§17), `Type` ∈ BT_MAGIC /
+   WIFI_CONNECT_REQ / WIFI_CONNECT_READY / SESSION_JOIN / SESSION_JOIN_ACK / SESSION_REJECT. Checked
+   before meeting-word discovery so its reserved types never collide with a user word.
+
 Discovery and handshake use JSON payloads inside **control frames** (TargetID=0, Flags=CONTROL).
 
 ```json
@@ -156,8 +190,9 @@ A `TransferRequest` is valid when:
 │                (ConnectionManager)                        │
 │                                                         │
 │  - Connect(word) → handshake + race resolution → Stream │
-│  - SendStreamData / CompleteStream                      │
-│  - Owns ProtocolHandler for frame building              │
+│  - SendStreamData(...,preferWifi) / CompleteStream      │
+│  - Owns ProtocolHandler (frame build) and, in hybrid    │
+│    mode, a HybridSessionCoordinator (§17)               │
 └──────────────────┬──────────────────────────────────────┘
                    │
 ┌──────────────────▼──────────────────────────────────────┐
@@ -167,17 +202,22 @@ A `TransferRequest` is valid when:
 │  - _routingMap: localId → handler(payload, flags)       │
 │  - _targetMap:  localId → peerId                        │
 │  - _serviceRegistry: word → callback                    │
-│  - Dispatch(targetId, payload, flags)                   │
+│  - SecuritySession: key exchange + payload crypto (§14) │
+│  - Dispatch(targetId, payload, flags) → decrypt → route │
+│  - Owns the Wi-Fi + (Android) Bluetooth transports      │
 └──────────────────┬──────────────────────────────────────┘
                    │
 ┌──────────────────▼──────────────────────────────────────┐
-│              ITransport (SocketTransport)                 │
+│   ITransport:  SocketTransport (Wi-Fi/TCP)               │
+│                BluetoothTransport (RFCOMM)               │
 │                                                         │
-│  - TCP client/server                                    │
-│  - SendRaw(frame)                                       │
-│  - ReceiveLoopAsync → parse frames → Dispatch           │
+│  - Connect / SendRaw / Disconnect, auto-reconnect (§16) │
+│  - ReceiveLoop → ParseFrame → ConnectionContext.Dispatch│
 └─────────────────────────────────────────────────────────┘
 ```
+
+> The stack is the same on both platforms. Encryption (§14) is a payload transform applied inside
+> `BuildFrame` (send) and `Dispatch` (receive); it is not a separate pipeline stage.
 
 ---
 
@@ -185,22 +225,26 @@ A `TransferRequest` is valid when:
 
 ### 5.1 ITransport
 
-Manages the physical TCP connection. One instance per medium (singleton).
+Manages one physical connection (TCP/Wi-Fi or Bluetooth RFCOMM). Implemented by `SocketTransport`
+(Wi-Fi) and `BluetoothTransport` (RFCOMM). See §15 for the two transports and §16 for reconnect.
 
-| Method           | Signature                        | Description                                                                                         |
-|:-----------------|:---------------------------------|:----------------------------------------------------------------------------------------------------|
-| `Connect`        | `Task Connect(string? targetId)` | `targetId` = IP → client mode (connect to peer). `null`/`""` → server mode (listen for one client). |
-| `SendRaw`        | `Task SendRaw(byte[] data)`      | Send a complete TPack frame (header + payload). Thread-safe via internal send lock.                 |
-| `IsConnected`    | `bool IsConnected()`             | Connection status.                                                                                  |
-| `OnDataReceived` | `event EventHandler<byte[]>`     | Fired for unhandled control frames only (handled frames go through `ConnectionContext.Dispatch`).   |
+| Member           | Signature                                       | Description                                                                                         |
+|:-----------------|:------------------------------------------------|:----------------------------------------------------------------------------------------------------|
+| `TransportType`  | `TransportKind { WiFi, Bluetooth }`             | The physical medium this transport carries.                                                          |
+| `IsServerMode`   | `bool` (property)                               | True if this side accepted the connection (server), false if it dialed out (client). Drives the race tiebreaker (§7.3) and the hybrid Wi-Fi role (§17). |
+| `Connect`        | `Task Connect(string? targetId, int? timeoutSeconds = null)` | `targetId` = IP/MAC → client mode. `null`/`""` → server mode (listen for one peer). `timeoutSeconds` null = wait forever. |
+| `SendRaw`        | `Task SendRaw(byte[] data)`                     | Send a complete TPack frame. Serialized by an internal send lock; blocks briefly during a reconnect window (§16). |
+| `IsConnected`    | `bool IsConnected()`                            | Connection status.                                                                                  |
+| `Disconnect`     | `void Disconnect()`                             | Explicit, app-initiated teardown — ends the session for this transport (no reconnect).               |
+| `OnDataReceived` | `event EventHandler<byte[]>`                    | Fired for unhandled control frames only (no subscribers in practice; handled frames go through `Dispatch`). |
 
 #### Transport Behavior
 
-- **Server mode**: Binds to `0.0.0.0:DefaultPort`, accepts **one** TCP client, then stops listening.
-- **Client mode**: Retries connection every `ClientConnectRetryDelaySeconds` until success or disposal.
-- **Receive loop**: Runs in a background task. Reads frames using `IProtocolHandler.GetHeaderSize()` and `GetPayloadLength()`, then dispatches via `ConnectionContext.Instance.Dispatch()`.
-- **Send lock**: A `SemaphoreSlim(1,1)` serializes writes to prevent interleaved frames on the TCP stream.
-- **IsServerMode**: Exposed as a `bool` property. Used by `ConnectionManager` for the simultaneous-connect tiebreaker (see §7.3).
+- **Server mode**: Binds to `0.0.0.0:DefaultPort` (Wi-Fi) / advertises the RFCOMM service (BT), accepts **one** peer.
+- **Client mode**: Retries connection every `ClientConnectRetryDelaySeconds` until success, timeout, or disposal.
+- **Receive loop**: Background task. Reads frames via `GetHeaderSize()` / `GetPayloadLength()`, validates the length against `MaxPayloadSize`, then calls `ConnectionContext.Instance.Dispatch()`.
+- **Send lock**: A `SemaphoreSlim(1,1)` (C#) / `Semaphore` (Java) serializes writes to prevent interleaved frames.
+- **Reconnect resilience**: An *unexpected* drop (vs. an explicit `Disconnect`) triggers transparent reconnect with exponential back-off, preserving channels — see §16.
 
 ### 5.2 IProtocolHandler
 
@@ -221,14 +265,21 @@ The public API consumed by applications.
 
 | Method                | Signature                                                                | Description                                                                                     |
 |:----------------------|:-------------------------------------------------------------------------|:------------------------------------------------------------------------------------------------|
-| `Initialize`          | `void Initialize(ITransport transport)`                                  | Binds to a transport. Called once.                                                              |
-| `ConnectTransport`    | `Task ConnectTransport(string? targetId)`                                | Delegates to `ConnectionContext.InitializeTransports`.                                          |
-| `IsConnected`         | `bool IsConnected()`                                                     | Transport status.                                                                               |
-| `Connect`             | `Task<Stream> Connect(string word)`                                      | Symmetric connect — both sides call this with the same word. Returns a duplex `Stream`.         |
-| `SendStreamData`      | `void SendStreamData(int localId, byte[] buffer, int offset, int count)` | Sends data over an existing stream. Throws `InvalidOperationException` if no peer route exists. |
-| `SendStreamDataAsync` | `Task SendStreamDataAsync(...)`                                          | Async version of `SendStreamData`.                                                              |
-| `CompleteStream`      | `void CompleteStream(int localId)`                                       | Sends FIN and releases the local ID.                                                            |
+| `Initialize`          | `void Initialize(ITransport transport)`                                  | Binds to a transport. Used by the single-transport ctor; the hybrid ctor wires its own two transports. |
+| `ConnectTransport`    | `Task ConnectTransport(string? targetId, int? timeoutSeconds)`           | Connects the transport, then runs the security key exchange (§14), then (hybrid) the BT session (§17). |
+| `IsConnected`         | `bool IsConnected()`                                                     | Transport status (primary transport).                                                           |
+| `Connect`             | `Task<Stream> Connect(string word, int? timeoutSeconds = null)`         | Symmetric connect — both sides call with the same word. Returns a duplex `Stream`. Auto-retries on timeout (`ConnectRetryCount`). |
+| `SendStreamData`      | `void SendStreamData(int localId, byte[] buffer, int offset, int count)` | Sends over an existing stream (routes by size in hybrid). Throws `InvalidOperationException` if no peer route exists. |
+| `SendStreamData`      | `void SendStreamData(int localId, byte[] buffer, int offset, int count, bool preferWifi)` | Hybrid: route this send over Wi-Fi (`true`) or Bluetooth (`false`); see §17.4. |
+| `SendStreamDataAsync` | `Task SendStreamDataAsync(...)` (with and without `preferWifi`)          | Async versions of the above.                                                                    |
+| `CompleteStream`      | `void CompleteStream(int localId)`                                       | Sends FIN (over the stream's last-used link) and releases the local ID.                          |
+| `Disconnect`          | `void Disconnect()`                                                      | Tears down all transports of this manager; the session ends when the last transport drops (§16). |
 | `ErrorOccurred`       | `event EventHandler<Exception>`                                          | Error notifications.                                                                            |
+
+> **Construction:** the C# `ConnectionManager(bool hybrid = true)` ctor selects single-transport
+> (Wi-Fi-only / Bluetooth-only) vs. hybrid (Bluetooth primary + lazy Wi-Fi). A non-hybrid manager
+> created mid-session (e.g. Python `new_manager()`) binds to whichever transport is already connected
+> (the always-on Bluetooth primary in a hybrid session, else Wi-Fi).
 
 ### 5.4 ISecureChannel (Integrated — see §14)
 
@@ -659,7 +710,9 @@ The Java implementation must be **wire-compatible** with the C# side. This means
 - Singleton pattern (Java static instance vs C# static readonly).
 - Async model (Java `CompletableFuture`/threads vs C# `Task`/`async-await`).
 - Channel implementation (Java `BlockingQueue` or `LinkedTransferQueue` vs C# `Channel<T>`).
-- Transport discovery (Android may use Bluetooth in addition to Wi-Fi/TCP).
+- Transport roles: both platforms support Wi-Fi/TCP and Bluetooth RFCOMM. In the Bluetooth/hybrid
+  subsystem (§15, §17) the platforms take fixed complementary roles — Windows is the RFCOMM server,
+  Android is the RFCOMM client.
 
 ---
 
@@ -875,3 +928,163 @@ exchange did not pair.
 An in-process test suite — `TauSync/Tausync_Windows/Security.ManualTest` — validates key agreement, the
 full `BuildFrame → Dispatch` round-trip (ciphertext on the wire, plaintext header, plaintext to the
 handler), unknown-TargetID drop without decryption, and C#≡Java key-derivation parity.
+
+---
+
+## 15. Transports
+
+A transport is just a byte pipe for complete TPack frames. The protocol above it (framing, routing,
+handshakes, crypto) is **transport-agnostic** — the same `ConnectionContext`/`ConnectionManager` run
+over either medium. Two implementations exist, both satisfying `ITransport` (§5.1):
+
+### 15.1 SocketTransport (Wi-Fi / TCP)
+
+- TCP on `DefaultPort` (8888). Server mode binds `0.0.0.0` and accepts one client; client mode dials a
+  host with retry every `ClientConnectRetryDelaySeconds`.
+- Receive loop reads `header → payload` with `ReadExactly`, validates length ≤ `MaxPayloadSize`, and
+  calls `Dispatch`. Sends are serialized by a send lock.
+- Tracks a **last-activity timestamp** (bumped on every send/receive) so the hybrid coordinator can
+  detect an idle Wi-Fi link (§17.3).
+- Auto-reconnects after an unexpected drop (§16).
+
+### 15.2 BluetoothTransport (RFCOMM)
+
+- Uses the `RfcommServiceUuid` for SDP. **Roles are fixed by platform:** Windows is the RFCOMM
+  **server** (`RfcommServiceProvider` + `StreamSocketListener` advertising); Android is the RFCOMM
+  **client** (`createRfcommSocketToServiceRecord`, requires a **bonded** device, with a connect
+  watchdog for `BtConnectTimeoutMs`).
+- Frame loop and send lock mirror `SocketTransport`, so frames are byte-identical across media.
+- First-time pairing (discovery + bond) is handled by a BLE beacon + in-app confirm flow — see
+  `Shared_Definitions/Phase4_BLE_Discovery_Plan.md`. Once bonded, the data path is plain RFCOMM.
+
+---
+
+## 16. Reconnect Resilience
+
+A TauSync session survives transient link loss. The rule: **a session ends only on an explicit
+`Disconnect()`** — any *unexpected* drop (peer out of range, socket killed, even a graceful peer close)
+triggers indefinite reconnection instead of tearing the session down.
+
+### 16.1 Behaviour
+
+- **Reconnect loop:** the dropped transport re-dials (client) or re-accepts (server) with exponential
+  back-off from `ReconnectInitialDelayMs` (1 s) up to `ReconnectMaxDelayMs` (30 s), forever, until it
+  reconnects or the app explicitly disconnects.
+- **Channels survive:** `_routingMap`/`_targetMap` and the in-memory `BackBuffered*` streams are **not**
+  torn down on a drop. After reconnect, both sides resume on the **same** channel/stream objects with
+  **no meeting-word re-handshake** and **no new key exchange** (the session key persists, §14.9). The
+  application just sees reads/writes pause, then resume.
+- **Send gate:** a `SendRaw` issued during the reconnect window blocks (up to `SendReconnectWaitMs`)
+  for the link to return, then proceeds — rather than throwing.
+
+### 16.2 Multi-transport ref-counting
+
+`ConnectionContext` keeps an `activeTransportCount` of intentionally-connected transports. Only when the
+**last** transport is explicitly disconnected (count → 0) does it call `AbortAllChannels()` + `Reset()`.
+So dropping Wi-Fi while Bluetooth stays up (hybrid, §17) leaves the surviving transport's channels
+intact. Unexpected drops never touch the count.
+
+### 16.3 Stream abort on real death
+
+When a transport is genuinely torn down (last explicit disconnect, or a fatal unrecoverable state),
+`AbortAllChannels()` delivers a synthetic FIN to every registered handler, so any reader blocked in
+`Read()` returns EOF instead of hanging forever (§7.7).
+
+### 16.4 Known limitation — lost in-flight frame
+
+There is **no application-level ACK/retransmission**. A frame that is in flight at the exact instant of
+an unexpected drop is **lost**: reconnect resumes on a fresh socket and does not replay it. TCP
+guarantees in-order delivery *within* one socket, but not *across* a socket replacement. For a single
+lost frame this can truncate or gap that one stream; the channel itself survives. Reliable delivery
+(sequence numbers + ACK + resend buffer) is intentionally out of scope.
+
+---
+
+## 17. Hybrid Bluetooth + Wi-Fi Mode
+
+`ConnectionManager` can drive **one** transport (Wi-Fi-only or Bluetooth-only, behaving exactly as the
+sections above) or **two** in hybrid mode. In hybrid mode **Bluetooth is the always-on primary** link
+(control traffic and small payloads) and **Wi-Fi is brought up lazily** for large payloads and torn
+down again after it sits idle. All hybrid logic lives in an internally-owned `HybridSessionCoordinator`;
+the routing maps stay in the shared `ConnectionContext`, so a channel works over whichever transport
+carried its frames. Full design: `Shared_Definitions/Bluetooth_Transport_Plan.md`.
+
+### 17.1 SessionControlMessage
+
+Hybrid signalling rides control frames (TargetID=0, CONTROL), checked before meeting-word discovery
+(§3) so reserved types never collide with a user word.
+
+```json
+{ "MagicBytes": 1413567827, "Type": "<type>",
+  "SessionToken": "<guid>", "WifiHost": "<ipv4>", "WifiPort": 8888, "DeviceName": "<name>" }
+```
+
+| `Type` | Meaning |
+|:-------|:--------|
+| `BT_MAGIC`           | Exchanged both ways right after RFCOMM connects; confirms both peers are TauSync, carries each side's Wi-Fi IP + friendly device name. The server mints the session token. |
+| `WIFI_CONNECT_REQ`   | Sent over BT by whichever side first needs Wi-Fi. |
+| `WIFI_CONNECT_READY` | Wi-Fi server's reply over BT: it has started its TCP listener; carries the session token + host/port. |
+| `SESSION_JOIN`       | First frame the Wi-Fi client sends on the new TCP socket; echoes the token. |
+| `SESSION_JOIN_ACK`   | Server's confirmation that the token matched; Wi-Fi is now usable. |
+| `SESSION_REJECT`     | Server → client: the operator declined the connection (§17.6). Sent over BT before the link drops. |
+
+### 17.2 Session bring-up & lazy Wi-Fi
+
+The **Bluetooth role fixes the Wi-Fi role** (BT server = Wi-Fi server), so no extra negotiation is
+needed. The session token proves an incoming Wi-Fi socket belongs to the same session as the BT link.
+
+```
+After RFCOMM connects:           (key exchange §14 runs first, then…)
+  both:  ── BT_MAGIC ──►          server mints SessionToken
+
+First large payload needs Wi-Fi:
+  client ── WIFI_CONNECT_REQ ──► (over BT)
+  server starts TCP listener,  ── WIFI_CONNECT_READY {token, host, port} ──► (over BT)
+  client connects TCP,         ── SESSION_JOIN {token} ──► (over Wi-Fi)
+  server verifies token,       ── SESSION_JOIN_ACK ──► (over Wi-Fi)
+  Wi-Fi now usable for sends
+```
+
+A token mismatch makes the server drop the Wi-Fi socket without acknowledging (Bluetooth stays up).
+
+### 17.3 Idle teardown
+
+A 5 s timer checks the Wi-Fi link's last-activity timestamp (§15.1). After `WifiIdleTimeoutMs` (60 s)
+with no traffic, the coordinator **intentionally** disconnects Wi-Fi. Because Bluetooth is still up, the
+ref-count (§16.2) keeps all channels alive; the next large payload re-runs the bring-up from scratch.
+
+### 17.4 Per-send routing
+
+Routing is decided **per send**, not per stream: the same stream may use Bluetooth for one write and
+Wi-Fi for the next, but a single send is never split across links (all its wire frames ride one link,
+staying ordered). The transport is chosen by:
+
+- An explicit `preferWifi` flag from the SDK method — `writeString`/`write_string` → Bluetooth;
+  `writeFile`/`write_file` → Wi-Fi; **or**
+- For a raw write with no hint, by **size**: `count > HybridSmallThresholdBytes` → Wi-Fi, else Bluetooth.
+
+A Wi-Fi-routed send brings the link up on demand (§17.2), reviving it after an idle teardown, and falls
+back to Bluetooth if Wi-Fi cannot be established (`WifiReconnectMaxAttempts`). The stream's FIN is sent
+over the **last link it actually used** so it cannot overtake that link's data.
+
+### 17.5 Transport-switch barrier
+
+The two links have no mutual receive-side ordering, so when a stream **switches** the link it sends on,
+the faster new link's data could overtake the old link's still-in-flight data at the receiver. To
+prevent reorder/corruption, the sender performs a barrier round-trip on the switch:
+
+1. Emit an empty `BARRIER` frame (flag `0x04`) on the **old** link — ordered after that link's data.
+2. Block until the peer replies `BARRIER_ACK` (flag `0x08`, sent over the always-on Bluetooth primary).
+3. Then start sending on the new link.
+
+The wait is bounded by `BarrierAckTimeoutMs` (5 s): a lost ACK degrades to unordered rather than
+deadlocking. Pure-Bluetooth or pure-Wi-Fi streams never switch, so they pay nothing.
+
+### 17.6 Connection-approval gate
+
+Because Windows "Just Works" RFCOMM pairing shows no prompt, an optional app-level gate runs on the
+**server** during the `BT_MAGIC` exchange: given the client's `DeviceName`, a callback returns accept or
+reject. A gated server **withholds its own `BT_MAGIC` until approved** — so a declined client never sees
+itself connected — and on rejection sends `SESSION_REJECT` then drops the link (RFCOMM in-order delivery
+guarantees the client reads REJECT before EOF, so it aborts without reconnecting). With no callback set,
+behaviour is unchanged (every connection accepted).
