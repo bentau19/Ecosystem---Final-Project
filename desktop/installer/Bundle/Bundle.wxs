@@ -34,7 +34,7 @@
                   InstallArguments="/install /quiet /norestart"
                   Permanent="yes"
                   Vital="yes"
-                  DetectCondition="HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft .NET Runtime 8.0 x64" />
+                  DetectCondition="RegKeyExists('HKEY_LOCAL_MACHINE', 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft .NET Runtime 8.0 x64')" />
 
       <!-- WinFSP (required for the Virtual Drive feature via VirtualDrive.exe).
            MsiPackage auto-detects via the MSI ProductCode captured at build
@@ -52,7 +52,7 @@
                   InstallArguments="/S /D=C:\Program Files\obs-studio"
                   Permanent="yes"
                   Vital="no"
-                  DetectCondition="HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OBS-Studio_is1" />
+                  DetectCondition="RegKeyExists('HKEY_LOCAL_MACHINE', 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OBS-Studio_is1')" />
 
       <!-- Main SyncDose application installer (Package.msi, built earlier in CI). -->
       <MsiPackage SourceFile="..\Package\bin\Release\Package.msi"
