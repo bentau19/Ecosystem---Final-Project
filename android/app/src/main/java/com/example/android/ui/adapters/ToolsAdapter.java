@@ -48,6 +48,8 @@ public class ToolsAdapter extends RecyclerView.Adapter<ToolsAdapter.ToolViewHold
         // Update button text and icon based on the tool data
         holder.toolButton.setText(tool.getTitle());
         holder.toolButton.setIconResource(tool.getIconRes());
+        holder.toolButton.setEnabled(tool.isEnabled());
+        holder.toolButton.setAlpha(tool.isEnabled() ? 1.0f : 0.5f);
 
         // Set click listener on the MaterialButton component
         holder.toolButton.setOnClickListener(v -> listener.onToolClick(tool));

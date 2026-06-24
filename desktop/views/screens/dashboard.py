@@ -9,7 +9,7 @@ from app.app_state import app_state
 from app.navigation_manager import navigation_manager
 from app.theme_manager import theme_manager
 from domain.dto.device_info import DeviceInfoDTO
-from enums.screen import Screen
+from domain.enums.screen import Screen
 from resources.spacing import Spacing
 from views.widgets.dashboard.dashboard_content import DashboardContent
 from views.widgets.divider import Divider
