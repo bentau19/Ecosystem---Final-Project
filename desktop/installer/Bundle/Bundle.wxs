@@ -46,7 +46,7 @@
            Silent install with auto-detection. Permanent so it's not removed when SyncDose uninstalls.
            Vital="no" allows SyncDose to install even if OBS fails (user can fix manually). -->
       <ExePackage Id="ObsStudio"
-                  SourceFile="OBS-Studio-30.1.3-Full-Installer-x64.exe"
+                  SourceFile="OBS-Studio-32.1.2-Windows-x64-Installer.exe"
                   InstallArguments="/S /D=C:\Program Files\obs-studio"
                   Permanent="yes"
                   Vital="no" />
