@@ -24,17 +24,26 @@
 //                carries data for read responses and write requests.
 //
 // Operations ("op" field):
-//   "list"        {path}                  -> {ok, entries:[{name,is_dir,size,mtime_ms}]}
-//   "list_page"   {path,after,limit}      -> {ok, entries:[...], has_more, next_after}
-//   "stat"        {path}                  -> {ok, name,is_dir,size,mtime_ms} | {ok:false}
-//   "read"        {path,offset,length}    -> {ok} + payload(file bytes)
-//   "write_open"  {path}                  -> {ok}
-//   "write"       {path,offset} + payload -> {ok}
-//   "write_close" {path}                  -> {ok}
-//   "create"      {path,is_dir}           -> {ok}
-//   "delete"      {path}                  -> {ok}
-//   "rename"      {from,to}               -> {ok}
-//   "truncate"    {path,new_size}         -> {ok}
+//   "list"        {path}                    -> {ok, entries:[{name,is_dir,size,mtime_ms}]}
+//   "list_page"   {path,after,limit}        -> {ok, entries:[...], has_more, next_after}
+//   "stat"        {path}                    -> {ok, name,is_dir,size,mtime_ms} | {ok:false}
+//   "read"        {path,offset,length}      -> {ok} + payload(file bytes)   [one-shot channel]
+//   "read"        {session,offset,length}   -> {ok} + payload(file bytes)   [persistent session]
+//   "read_open"   {path}                    -> {ok, session}   open a persistent read channel
+//   "read_close"  {session}                 -> {ok}            close a persistent read channel
+//   "write_open"  {path}                    -> {ok}
+//   "write"       {path,offset} + payload   -> {ok}
+//   "write_close" {path}                    -> {ok}
+//   "create"      {path,is_dir}             -> {ok}
+//   "delete"      {path}                    -> {ok}
+//   "rename"      {from,to}                 -> {ok}
+//   "truncate"    {path,new_size}           -> {ok}
+//
+// Persistent read sessions: read_open establishes ONE long-lived TauSync channel
+// per open streaming (video) file handle; the handle then issues many `read`
+// {session,offset,length} ops reused over it and a final read_close. This pays
+// the channel handshake + Android file-open once per handle instead of per fetch.
+// A `read` with {path} (no session) keeps the one-shot behaviour for ordinary files.
 
 // Forward declaration — Protocol.cpp includes ClientNamedPipe.h directly.
 class ClientNamedPipe;

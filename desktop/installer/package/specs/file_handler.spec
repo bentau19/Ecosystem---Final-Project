@@ -18,7 +18,7 @@ a = Analysis(
            ("../../../native/__init__.py", "native"),
            ("../../../native/windows/__init__.py", "native/windows"),
            ("../../../native/windows/pipe/__init__.py", "native/windows/pipe")],
-    hiddenimports=["native", "native.windows", "native.windows.pipe", "native.windows.pipe.pipe_module"],
+    hiddenimports=["native", "native.windows", "native.windows.pipe", "native.windows.pipe.pipe_module", "views", "views.widgets", "views.widgets.dialogs"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

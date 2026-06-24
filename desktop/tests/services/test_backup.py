@@ -48,9 +48,9 @@ import pytest
 from pytestqt.qtbot import QtBot
 
 from classifer import Classifier, ClassificationVerdict
+from classification_types import ClassificationResult
 from domain.dto.backup_session_prompt import BackupSessionPromptDTO
 from domain.enums.backup_channels import BackupChannels
-from image_classifer import ClassificationResult
 from services.backup import BackupService
 
 

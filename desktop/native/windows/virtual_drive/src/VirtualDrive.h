@@ -15,6 +15,7 @@ typedef NTSTATUS* PNTSTATUS;
 #include <winfsp/winfsp.h>
 
 #include <condition_variable>
+#include <deque>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -71,21 +72,46 @@ struct FileNode {
     // the round-trip at a window boundary.
     bool streaming = false;
 
+    // ── One in-flight background prefetch task ──────────────────────────────
+    // Each PrefetchSlot owns the future for one async fetch of the window
+    // starting at `start`. `gen` tags the seek generation the task was launched
+    // under: a result whose gen no longer matches the node's current generation
+    // (the player seeked away) is discarded instead of inserted into `ready`.
+    // Slots are pruned once complete and all are joined in Close before the node
+    // is freed (the task captures `node`).
+    struct PrefetchSlot {
+        uint64_t          start = 0;   // file offset the task is fetching
+        uint64_t          gen   = 0;   // seek generation at launch
+        std::future<void> fut;         // joined / pruned under readMtx
+    };
+
     // ── Read-cache state (guarded by readMtx) ──────────────────────────────
-    // readMtx guards readCache, nextCache and the prefetch/ramp bookkeeping
-    // below. WinFsp may dispatch concurrent Reads on one handle, and a background
-    // prefetch task mutates these too, so all access is serialised.
+    // readMtx guards readCache, the `ready` pipeline, the in-flight prefetch
+    // slots and the ramp/streaming bookkeeping below. WinFsp may dispatch
+    // concurrent Reads on one handle, and background prefetch tasks mutate these
+    // too, so all access is serialised.
     std::mutex                 readMtx;
     std::unique_ptr<ReadCache> readCache;   // current window serving reads
-    std::unique_ptr<ReadCache> nextCache;   // prefetched next window (ready)
-    bool                       prefetchInFlight = false; // a prefetch task is running
-    uint64_t                   prefetchStart    = 0;     // offset that task is fetching
-    std::future<void>          prefetchFut;              // joined in Close before delete
+    // Prefetched windows ahead of the read frontier, kept in ascending
+    // startOffset order. Replaces the old single nextCache so a streaming handle
+    // keeps PREFETCH_DEPTH windows buffered and never stalls one window at a time.
+    std::deque<std::unique_ptr<ReadCache>> ready;
+    std::vector<PrefetchSlot>  prefetch;       // in-flight prefetch tasks (joined in Close)
+    uint64_t                   prefetchFrontier = 0;  // next offset to prefetch from
+    uint64_t                   prefetchGen      = 0;  // bumped on each seek; tags slots
 
-    // ── Sequential read-ahead ramp ─────────────────────────────────────────
+    // ── Streaming read session ──────────────────────────────────────────────
+    // Persistent Python read-channel id for this handle (the "read_open" op
+    // returns it). Empty until the first streaming miss opens it; reused for
+    // every subsequent read/prefetch so the per-fetch TauSync handshake and
+    // Android file-open are paid once per handle, not once per window.
+    std::string readSession;
+
+    // ── Sequential read-ahead ramp (NON-streaming files only) ───────────────
     // The fetch window starts small (so a hover/thumbnail read fetches little)
-    // and grows only while reads continue sequentially (a real playback/copy),
-    // so "real" reads get large chunks while previews stay cheap.
+    // and grows only while reads continue sequentially (a real file copy), so
+    // "real" reads get large chunks while previews stay cheap. Streaming handles
+    // bypass the ramp and use a fixed STREAM_WINDOW with the prefetch pipeline.
     uint64_t lastFetchEnd = 0;   // end offset of the furthest window fetched so far
     uint32_t rampStep     = 0;   // consecutive-sequential-miss counter (drives window)
 };
@@ -190,14 +216,19 @@ private:
     void             ReleasePipe(ClientNamedPipe* pipe);
     void             ReplacePipe(ClientNamedPipe* poisoned);
 
-    // Background prefetch of [start, start+len) into node->nextCache. Runs on a
-    // std::async task whose future is joined in Close before the node is freed.
-    void PrefetchInto(FileNode* node, uint64_t start, uint64_t len);
+    // Background prefetch of [start, start+len) into node->ready (in ascending
+    // offset order). `gen` is the seek generation at launch — if the player
+    // seeked away (node->prefetchGen advanced) the result is discarded. Runs on a
+    // std::async task whose future lives in a PrefetchSlot and is joined in Close
+    // before the node is freed.
+    void PrefetchInto(FileNode* node, uint64_t start, uint64_t len, uint64_t gen);
 
-    // If a streaming read has advanced into the back half of the current window
-    // and more file remains, launch an async prefetch of the next window. MUST be
-    // called with node->readMtx held.
-    void StartPrefetchLocked(FileNode* node, uint64_t offset);
+    // Top the prefetch pipeline up to PREFETCH_DEPTH windows ahead of `frontier`
+    // for a streaming handle: prune completed prefetch slots, drop ready windows
+    // that fell behind a seek, and launch async prefetches for any of the next
+    // PREFETCH_DEPTH windows not already ready or in flight. MUST be called with
+    // node->readMtx held.
+    void RefillPipelineLocked(FileNode* node, uint64_t frontier);
 
     // True if path has a streaming-media extension (video). Such files get a
     // larger read window and prefetch-ahead.

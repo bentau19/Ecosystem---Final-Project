@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import Slot, QEvent
+from PySide6.QtCore import Slot, QEvent, QTimer, QCoreApplication
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog, QMainWindow, QMenu, QStackedWidget,
@@ -27,6 +27,7 @@ from views.widgets.backup.backup_dest_picker_dialog import BackupDestPickerDialo
 from views.widgets.backup.backup_progress_window import BackupProgressWindow
 from views.widgets.backup.backup_review_dialog import BackupReviewDialog
 from views.widgets.dialogs.file_handler import TransferErrorDialog
+from views.widgets.loading.overlay import LoadingOverlay
 from views.widgets.toasts.file_received import FileReceivedToast
 
 
@@ -44,6 +45,10 @@ class MainWindow(QMainWindow):
 
     Navigation is driven by :data:`~app.navigation_manager.navigation_manager`.
     """
+
+    # Message shown on the shutdown overlay (kept in one place: shown initially in
+    # _begin_shutdown and re-applied in _change_page when the screen changes).
+    _SHUTDOWN_OVERLAY_MESSAGE: str = "Shutting down…"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Set up the window, screens, and system tray.
@@ -69,6 +74,11 @@ class MainWindow(QMainWindow):
         self._device_vm: DeviceViewModel = app_state.device_viewmodel
         # Holds the FileReceivedToast alive while it's on screen.
         self._toast: FileReceivedToast | None = None
+
+        # App-exit shutdown state (loading overlay + service-teardown poll).
+        self._shutting_down: bool = False
+        self._shutdown_overlay: LoadingOverlay | None = None
+        self._shutdown_timer: QTimer | None = None
 
         self._setup_ui()
         self._connect_signals()
@@ -102,7 +112,7 @@ class MainWindow(QMainWindow):
         quit_action = self._tray_menu.addAction("Quit")
 
         open_action.triggered.connect(self._restore_window)
-        quit_action.triggered.connect(QApplication.quit)
+        quit_action.triggered.connect(self._begin_shutdown)
 
         self._tray_icon.setContextMenu(self._tray_menu)
         self._tray_icon.activated.connect(self._on_tray_activated)
@@ -120,8 +130,9 @@ class MainWindow(QMainWindow):
         self._backup_vm.device_ready_changed.connect(self._on_backup_device_ready_changed)
         app_state.device_viewmodel.connection_error.connect(self._on_connection_error)
         theme_manager.theme_changed.connect(self._restyle_tray)
-        # Stop all services on any exit path (X button, tray Quit, sys.exit, …).
-        # aboutToQuit fires as the last act of app.exec() before it returns.
+        # Exit paths (X button + tray Quit) both route through _begin_shutdown,
+        # which shows the spinner, fires app_state.stop_all(), and polls
+        # app_state.any_active() before quitting.
 
     def changeEvent(self, event: QEvent) -> None:
         """Intercept minimize events and hide the window to the system tray.
@@ -155,11 +166,12 @@ class MainWindow(QMainWindow):
         self._tray_icon.show()
 
     def closeEvent(self, event: QEvent) -> None:
-        """Exit the application when the user clicks the X title-bar button.
+        """Begin graceful shutdown when the user clicks the X title-bar button.
 
         Suppresses the default hide so ``hideEvent`` cannot briefly flash the
-        tray icon during exit.  ``QApplication.quit()`` emits ``aboutToQuit``
-        which triggers ``app_state.shutdown()`` for clean service teardown.
+        tray icon during exit, then delegates to :meth:`_begin_shutdown` which
+        shows the spinner dialog and tears the services down off the main
+        thread before quitting.
 
         Minimize-to-tray is handled by :meth:`changeEvent` (unchanged).
 
@@ -168,8 +180,62 @@ class MainWindow(QMainWindow):
         """
         event.ignore()  # prevent Qt's default hide (avoids tray flash)
         self._tray_icon.hide()  # ensure tray stays off before the process ends
-        self._device_vm.disconnect_device()
-        QApplication.quit()  # emits aboutToQuit → app_state.shutdown()
+        self._begin_shutdown()
+
+    # ── Shutdown ─────────────────────────────────────────────────────────────────
+
+    def _begin_shutdown(self) -> None:
+        """Show the "Shutting down…" spinner and tear services down off-thread.
+
+        Idempotent — the first call (X button or tray Quit) wins; later calls
+        no-op while shutdown is already in progress.  ``prepare_shutdown`` runs
+        here on the GUI thread so the device viewmodel's refresh ``QTimer`` is
+        stopped and the restart guard is set *before* any teardown emits
+        ``device_disconnected`` — preventing the connectivity listener from
+        re-arming mid-shutdown.  Teardown itself is fire-and-forget; a poll
+        timer watches :meth:`app_state.AppState.any_active` and quits once the
+        services have stopped.
+        """
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+
+        app_state.device_viewmodel.prepare_shutdown()
+
+        self._tray_icon.hide()  # so nothing lingers in the tray after the hard exit
+        # Tray-Quit can leave the window hidden — restore it so the overlay shows.
+        if not self.isVisible():
+            self._restore_window()
+
+        # Reuse the shared loading overlay (same look as Connecting/Disconnecting).
+        parent = self._stack.currentWidget() or self
+        self._shutdown_overlay = LoadingOverlay(parent)
+        self._shutdown_overlay.start(self._SHUTDOWN_OVERLAY_MESSAGE)
+
+        app_state.stop_all()  # fire-and-forget stop() on every service
+
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.timeout.connect(self._poll_shutdown)
+        self._shutdown_timer.start(150)  # poll every 150 ms; spinner animates between
+
+    @Slot()
+    def _poll_shutdown(self) -> None:
+        # Keep the overlay up until no service is active, then exit cleanly.
+        # Once every service has drained its executor we ask Qt to leave the event
+        # loop: app.exec() returns and main.py's sys.exit() finalizes the
+        # interpreter normally.  The pythonnet finalization hang is already
+        # neutralised by main.py's atexit.unregister(pythonnet.unload), so no
+        # explicit transport disposal is needed here and no hard kill is used.
+        if app_state.any_active():
+            return
+        if self._shutdown_timer is not None:
+            self._shutdown_timer.stop()
+        # Exit the event loop.  exit(0) (not quit()) is required: _poll_shutdown
+        # runs one event-loop level deep, and quit() targets the base level and
+        # is silently ignored here, whereas exit(0) leaves the current level so
+        # app.exec() returns and main.py's sys.exit() finalizes the interpreter.
+
+        QCoreApplication.exit()
 
     # ── Slots ──────────────────────────────────────────────────────────────────
 
@@ -183,6 +249,11 @@ class MainWindow(QMainWindow):
     def _change_page(self, index: int) -> None:
         # Switch the stacked widget to the screen at the given index.
         self._stack.setCurrentIndex(index)
+        # During shutdown, follow the active screen so the overlay stays visible
+        # when teardown navigates (e.g. dashboard → login on device_disconnected).
+        if self._shutting_down and self._shutdown_overlay is not None:
+            self._shutdown_overlay.setParent(self._stack.currentWidget() or self)
+            self._shutdown_overlay.start(self._SHUTDOWN_OVERLAY_MESSAGE)
 
     @Slot()
     def _restore_window(self) -> None:

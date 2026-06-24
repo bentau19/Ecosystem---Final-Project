@@ -104,6 +104,10 @@ class DeviceViewModel(QObject):
 
         self._current_device_connected_id: str = ""
 
+        # Set during app exit so _on_device_disconnected does not re-arm the
+        # connectivity listener while every service is being torn down.
+        self._is_shutting_down: bool = False
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def load_current_device_info(self) -> None:
@@ -166,6 +170,19 @@ class DeviceViewModel(QObject):
         """
         self._connectivity_service.stop()
 
+    def prepare_shutdown(self) -> None:
+        """Arm shutdown mode so the app can tear down without re-listening.
+
+        Called from :meth:`~views.main_window.MainWindow._begin_shutdown` (on
+        every exit path) before any service is stopped.  Stops the periodic
+        refresh timer and sets the
+        flag that makes :meth:`_on_device_disconnected` skip its normal
+        connectivity restart — otherwise stopping the connectivity service
+        would immediately spawn a fresh listener as the process is exiting.
+        """
+        self._is_shutting_down = True
+        self._refresh_timer.stop()
+
     # ── Private helpers ────────────────────────────────────────────────────────
 
     def _request_device_info_refresh(self) -> None:
@@ -222,8 +239,13 @@ class DeviceViewModel(QObject):
         # connectivity.start() is safe here: ConnectivityService emits
         # device_disconnected only after its own executor is fully drained,
         # so this restart can never race the previous shutdown.
+        #
+        # During app exit the restart is suppressed: prepare_shutdown() has set
+        # _is_shutting_down, so stopping connectivity does not re-arm a listener
+        # that would otherwise hang the process at interpreter shutdown.
         # self._device_info_service.stop()
-        self._connectivity_service.start()
+        if not self._is_shutting_down:
+            self._connectivity_service.start()
         # self._device_info_service.start()
         self.device_disconnected.emit()
 

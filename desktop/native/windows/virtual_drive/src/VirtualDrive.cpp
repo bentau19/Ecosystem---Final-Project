@@ -621,31 +621,34 @@ NTSTATUS VirtualDrive::Overwrite(FSP_FILE_SYSTEM* fs,
 // (e.g. 64 KB WinFsp chunks × 128 = one round-trip per 8 MB of data).
 static constexpr uint64_t READ_PREFETCH_BYTES = 8ULL * 1024 * 1024;
 
-// Maximum read-ahead window for streaming media (video). Combined with
-// prefetch-ahead this keeps a decoder fed: while the player drains the current
-// window we fetch the next one in the background, so a sequential read never
-// blocks on the round-trip at a window boundary. Memory: up to 2 windows
-// (current + next) per open video handle = 200 MB, bounded by the number of
-// concurrently open videos (usually 1–2). NOTE: a single 100 MB fetch can take
-// minutes over slow Wi-Fi — the read timeouts (PIPE_READ_TIMEOUT here, and the
-// Python _READ_TOTAL_TIMEOUT_S) are sized to span a full-window transfer.
-static constexpr uint64_t READ_PREFETCH_BYTES_STREAM = 100ULL * 1024 * 1024;
+// ── Streaming pipeline tuning (video) ───────────────────────────────────────
+// Streaming handles do NOT use the ramp below. Instead the foreground (player-
+// blocking) read fetches at most FG_MAX so the first frame arrives fast, while a
+// background pipeline keeps PREFETCH_DEPTH fixed-size STREAM_WINDOW windows
+// buffered ahead of the read frontier. Pipelined small windows beat one giant
+// window: each becomes usable as soon as it lands (not after a 100 MB blob), the
+// pipeline refills continuously so the decoder never starves, and a foreground
+// miss can wait at most ~one STREAM_WINDOW behind an in-flight prefetch.
+// Memory per open video ≈ (PREFETCH_DEPTH + 1) × STREAM_WINDOW (current + ready).
+static constexpr uint64_t STREAM_WINDOW  = 8ULL * 1024 * 1024;   // fixed prefetch window
+static constexpr uint32_t PREFETCH_DEPTH = 3;                    // windows kept ahead
+static constexpr uint64_t FG_MAX         = 1ULL * 1024 * 1024;   // foreground miss cap
 
-// ── Sequential read-ahead ramp ─────────────────────────────────────────────
+// ── Sequential read-ahead ramp (NON-streaming files only) ───────────────────
 // The window is NOT fixed: it starts small and doubles only while reads stay
 // sequential. This distinguishes a hover/thumbnail read (a short, often
 // non-sequential burst near the start — stays at the small window, fetching
-// little) from a real playback/copy (sustained sequential reads — ramps up to
-// the max window for throughput). WinFsp gives no reliable open-time "intent"
+// little) from a real file copy (sustained sequential reads — ramps up to the
+// max window for throughput). WinFsp gives no reliable open-time "intent"
 // signal, so the read *pattern* is the signal.
 static constexpr uint64_t READ_WINDOW_MIN  = 256ULL * 1024;  // initial / hover window
-static constexpr uint32_t READ_RAMP_MAX    = 9;  // 256 KB << 9 = 128 MB, clamped to the max window
-static constexpr uint32_t PREFETCH_RAMP_MIN = 3; // ramp (window ≥ 2 MB) before prefetch
+static constexpr uint32_t READ_RAMP_MAX    = 5;  // 256 KB << 5 = 8 MB == READ_PREFETCH_BYTES
 
-// Max read-ahead window for a node, by its streaming flag.
-static uint64_t MaxWindowFor(const FileNode* node)
+// Max read-ahead window for an ordinary (non-streaming) file. Streaming handles
+// bypass this and use the STREAM_WINDOW pipeline instead.
+static uint64_t MaxWindowFor(const FileNode* /*node*/)
 {
-    return node->streaming ? READ_PREFETCH_BYTES_STREAM : READ_PREFETCH_BYTES;
+    return READ_PREFETCH_BYTES;
 }
 
 // True if [Offset, Offset+len) is fully contained in cache window rc.
@@ -666,13 +669,21 @@ bool VirtualDrive::IsStreamingPath(const std::string& path)
         || ext == "webm" || ext == "m4v" || ext == "ts" || ext == "m2ts";
 }
 
-void VirtualDrive::PrefetchInto(FileNode* node, uint64_t start, uint64_t len)
+void VirtualDrive::PrefetchInto(FileNode* node, uint64_t start, uint64_t len, uint64_t gen)
 {
+    // Read the persistent session id under the lock (it may have been reopened).
+    std::string session;
+    {
+        std::lock_guard<std::mutex> lk(node->readMtx);
+        session = node->readSession;
+    }
+    if (session.empty()) return;  // no session — foreground read will fetch instead
+
     protocol::Message resp;
     bool ok = false;
     try {
         json req = {
-            {"op", "read"}, {"path", node->path},
+            {"op", "read"}, {"session", session},
             {"offset", start}, {"length", len}
         };
         resp = SendReq(req.dump(), {}, PIPE_READ_TIMEOUT);
@@ -682,48 +693,75 @@ void VirtualDrive::PrefetchInto(FileNode* node, uint64_t start, uint64_t len)
     }
 
     std::lock_guard<std::mutex> lk(node->readMtx);
-    if (ok) {
-        auto nc = std::make_unique<FileNode::ReadCache>();
-        nc->startOffset = start;
-        nc->data.assign(resp.payload.begin(), resp.payload.end());
-        // Advance the sequential frontier so a later sync miss past the
-        // prefetched region is still seen as sequential (keeps the ramp at max).
-        node->lastFetchEnd = std::max(node->lastFetchEnd, start + nc->data.size());
-        node->nextCache = std::move(nc);
-    }
-    node->prefetchInFlight = false;
+    // Discard the result if the fetch failed or the player seeked away while it
+    // was in flight (gen advanced) — RefillPipelineLocked relaunches from the
+    // live frontier in that case.
+    if (!ok || gen != node->prefetchGen || resp.payload.empty()) return;
+
+    auto nc = std::make_unique<FileNode::ReadCache>();
+    nc->startOffset = start;
+    nc->data.assign(resp.payload.begin(), resp.payload.end());
+    // Insert in ascending startOffset order, skipping an exact duplicate.
+    auto it = node->ready.begin();
+    while (it != node->ready.end() && (*it)->startOffset < start) ++it;
+    if (it == node->ready.end() || (*it)->startOffset != start)
+        node->ready.insert(it, std::move(nc));
 }
 
-void VirtualDrive::StartPrefetchLocked(FileNode* node, uint64_t offset)
+void VirtualDrive::RefillPipelineLocked(FileNode* node, uint64_t frontier)
 {
-    if (!node->streaming || !node->readCache) return;
-    // Only prefetch once the handle has proven a sustained sequential read — a
-    // hover/thumbnail (low rampStep) must never spawn a 32 MB prefetch.
-    if (node->rampStep < PREFETCH_RAMP_MIN) return;
-    const auto& rc = *node->readCache;
-    uint64_t winEnd = rc.startOffset + static_cast<uint64_t>(rc.data.size());
-    uint64_t half   = rc.startOffset + rc.data.size() / 2;
-    if (offset < half)        return;  // not yet far enough to prefetch
-    if (winEnd >= node->size) return;  // nothing beyond the current window
-    if (node->prefetchInFlight) return;                                   // busy
-    if (node->nextCache && node->nextCache->startOffset == winEnd) return; // ready
+    if (!node->streaming || node->readSession.empty()) return;
 
-    // Prefetch a full max-size window (the ramp has already engaged).
-    uint64_t start = winEnd;
-    uint64_t len   = std::min(MaxWindowFor(node), node->size - start);
-    node->prefetchInFlight = true;
-    node->prefetchStart    = start;
-    // Reassigning prefetchFut is safe: a prior task is only ever finished here
-    // (prefetchInFlight is set false at its end under readMtx), so the future's
-    // destructor does not block. The future is joined in Close before delete.
-    try {
-        node->prefetchFut = std::async(
-            std::launch::async,
-            [this, node, start, len]() { PrefetchInto(node, start, len); });
-    } catch (...) {
-        // Thread/resource exhaustion: skip prefetch this round (the foreground
-        // read still works). Never let this escape into the WinFsp callback.
-        node->prefetchInFlight = false;
+    // 1. Prune completed prefetch slots. Their results (if still current) were
+    //    already inserted into `ready` by PrefetchInto; stale-gen results were
+    //    discarded there. get() never blocks here (the future is ready).
+    for (auto it = node->prefetch.begin(); it != node->prefetch.end(); ) {
+        if (it->fut.valid() &&
+            it->fut.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            try { it->fut.get(); } catch (...) {}
+            it = node->prefetch.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // 2. Drop ready windows entirely behind the read frontier (consumed/seeked past).
+    while (!node->ready.empty()) {
+        const auto& rc = *node->ready.front();
+        if (rc.startOffset + rc.data.size() <= frontier) node->ready.pop_front();
+        else break;
+    }
+
+    // 3. Count in-flight prefetches for the CURRENT generation. Stale in-flight
+    //    slots (old gen, from before a seek) are ignored so a seek refills now.
+    size_t inflight = 0;
+    for (const auto& slot : node->prefetch)
+        if (slot.gen == node->prefetchGen) ++inflight;
+
+    // 4. Launch AT MOST ONE prefetch at a time. The persistent session stream is
+    //    serial (the Python side serialises request/response on it), so concurrent
+    //    fetches would only contend on that lock and add head-of-line latency to a
+    //    foreground miss. One-at-a-time has the same throughput while bounding a
+    //    foreground miss's wait behind an in-flight prefetch to a single window.
+    //    The ready buffer is filled toward PREFETCH_DEPTH across successive reads:
+    //    each completed prefetch lets the next read launch the following window.
+    if (inflight == 0 &&
+        node->ready.size() < PREFETCH_DEPTH &&
+        node->prefetchFrontier < node->size) {
+        uint64_t start = node->prefetchFrontier;
+        uint64_t len   = std::min<uint64_t>(STREAM_WINDOW, node->size - start);
+        uint64_t gen   = node->prefetchGen;
+        try {
+            node->prefetch.push_back(FileNode::PrefetchSlot{
+                start, gen,
+                std::async(std::launch::async,
+                    [this, node, start, len, gen]() { PrefetchInto(node, start, len, gen); })
+            });
+            node->prefetchFrontier += len;
+        } catch (...) {
+            // Thread/resource exhaustion — try again on the next read. Never let
+            // this escape into the WinFsp callback.
+        }
     }
 }
 
@@ -752,38 +790,136 @@ NTSTATUS VirtualDrive::Read(FSP_FILE_SYSTEM* fs,
         size_t idx = static_cast<size_t>(Offset - node->readCache->startOffset);
         std::memcpy(Buffer, node->readCache->data.data() + idx, actual);
         *PBytesTransferred = actual;
-        self->StartPrefetchLocked(node, Offset);
+        if (node->streaming)
+            self->RefillPipelineLocked(
+                node, node->readCache->startOffset + node->readCache->data.size());
         return STATUS_SUCCESS;
     }
 
-    // ── Prefetched next window hit: promote it to current and serve ─────────
-    if (node->nextCache && CacheCovers(*node->nextCache, Offset, actual)) {
-        node->readCache = std::move(node->nextCache);
+    // ── Prefetched window hit: promote it to current and serve ──────────────
+    // `ready` is only ever populated for streaming handles; the loop is a no-op
+    // (empty deque) for ordinary files.
+    for (size_t i = 0; i < node->ready.size(); ++i) {
+        if (!CacheCovers(*node->ready[i], Offset, actual)) continue;
+        // Drop any earlier windows the player has now advanced past.
+        for (size_t k = 0; k < i; ++k) node->ready.pop_front();
+        node->readCache = std::move(node->ready.front());
+        node->ready.pop_front();
         size_t idx = static_cast<size_t>(Offset - node->readCache->startOffset);
         std::memcpy(Buffer, node->readCache->data.data() + idx, actual);
         *PBytesTransferred = actual;
-        // Consuming a full prefetched window is a confirmed sequential run; keep
-        // the ramp pinned high so any later sync-miss fallback uses the max
-        // window immediately instead of re-ramping from small.
-        node->rampStep = std::min(node->rampStep + 1, READ_RAMP_MAX);
-        self->StartPrefetchLocked(node, Offset);
+        self->RefillPipelineLocked(
+            node, node->readCache->startOffset + node->readCache->data.size());
         return STATUS_SUCCESS;
     }
 
-    // ── Miss: fetch synchronously ──────────────────────────────────────────
-    // Adaptive window: grow only while reads stay sequential. A miss that
-    // continues exactly where the last fetch ended is a sustained sequential
-    // read (playback/copy) → ramp the window up; anything else (first read of a
-    // handle, or a seek — e.g. a thumbnailer probing the start/moov atom) resets
-    // the ramp, so a hover fetches just READ_WINDOW_MIN instead of the full max.
+    // ── Streaming miss: small foreground fetch + background pipeline refill ──
+    if (node->streaming) {
+        // Lazily open the persistent read session on the first miss so a handle
+        // that is opened but barely read (e.g. a thumbnailer) pays nothing.
+        if (node->readSession.empty()) {
+            lk.unlock();
+            json oreq = {{"op", "read_open"}, {"path", node->path}};
+            protocol::Message ores = self->SendReq(oreq.dump(), {},
+                                                   VirtualDrive::PIPE_READ_TIMEOUT);
+            json oj;
+            if (!TryParse(ores.json, oj) || !oj.value("ok", false))
+                return STATUS_IO_DEVICE_ERROR;
+            std::string session = oj.value("session", "");
+            lk.lock();
+            if (node->readSession.empty()) {
+                node->readSession = session;
+            } else {
+                // A concurrent miss already opened a session; close the duplicate
+                // so we don't leak a TauSync channel on Android.
+                lk.unlock();
+                json creq = {{"op", "read_close"}, {"session", session}};
+                self->SendReq(creq.dump(), {}, VirtualDrive::PIPE_META_TIMEOUT);
+                lk.lock();
+            }
+        }
+
+        // Seek detection: an offset before the current window, or beyond the
+        // prefetch frontier, means the player jumped — bump the generation (so
+        // stale in-flight windows are discarded on arrival) and reset the
+        // pipeline. A miss inside the queued span is mere starvation; keep the
+        // in-flight windows so they are not refetched.
+        bool seek = node->readCache &&
+            (Offset < node->readCache->startOffset || Offset > node->prefetchFrontier);
+        if (seek) {
+            ++node->prefetchGen;
+            node->ready.clear();
+            node->prefetchFrontier = 0;
+        }
+
+        std::string session = node->readSession;
+        // FG_MAX caps the player-blocking read so the first frame arrives fast;
+        // everything beyond it is read ahead in the background by the pipeline.
+        uint64_t fgLen = std::min<uint64_t>(
+            std::max<uint64_t>(static_cast<uint64_t>(actual), FG_MAX),
+            node->size - Offset);
+        lk.unlock();
+
+        json req = {
+            {"op", "read"}, {"session", session},
+            {"offset", Offset}, {"length", fgLen}
+        };
+        protocol::Message resp = self->SendReq(req.dump(), {},
+                                               VirtualDrive::PIPE_READ_TIMEOUT);
+
+        // Tear the session down on any failure: close it (so SyncDose drops the
+        // stream and Android's read loop unblocks via EOF) and clear the id so the
+        // next miss reopens a fresh session. Reopening is cheap and keeps the
+        // failure handling uniform; a playing video almost never hits this path.
+        auto poison = [&]() {
+            json creq = {{"op", "read_close"}, {"session", session}};
+            self->SendReq(creq.dump(), {}, VirtualDrive::PIPE_META_TIMEOUT);
+            lk.lock();
+            if (node->readSession == session) node->readSession.clear();
+        };
+
+        json j;
+        if (!TryParse(resp.json, j)) {
+            poison();
+            return STATUS_IO_DEVICE_ERROR;
+        }
+        if (!j.value("ok", false)) {
+            std::string err = j.value("error", "");
+            poison();
+            return ErrorToStatus(err);
+        }
+
+        ULONG received = static_cast<ULONG>(
+            std::min<uint64_t>(resp.payload.size(), static_cast<uint64_t>(actual)));
+        std::memcpy(Buffer, resp.payload.data(), received);
+        *PBytesTransferred = received;
+
+        lk.lock();
+        auto rc = std::make_unique<FileNode::ReadCache>();
+        rc->startOffset = Offset;
+        rc->data.assign(resp.payload.begin(), resp.payload.end());
+        uint64_t winEnd = Offset + rc->data.size();
+        node->readCache = std::move(rc);
+        // Advance (never rewind) the prefetch frontier so the pipeline continues
+        // right after the foreground window without refetching in-flight windows.
+        node->prefetchFrontier = std::max(node->prefetchFrontier, winEnd);
+        self->RefillPipelineLocked(node, winEnd);
+        return STATUS_SUCCESS;
+    }
+
+    // ── Non-streaming miss: adaptive ramp, one synchronous window fetch ──────
+    // A miss that continues exactly where the last fetch ended is a sustained
+    // sequential read (file copy) → ramp the window up; anything else (first read
+    // of a handle, or a seek) resets the ramp, so a hover fetches just
+    // READ_WINDOW_MIN instead of the full max.
     bool sequential = (node->lastFetchEnd != 0 && Offset == node->lastFetchEnd);
     node->rampStep = sequential ? std::min(node->rampStep + 1, READ_RAMP_MAX) : 0;
-    uint64_t window = std::min(READ_WINDOW_MIN << node->rampStep, MaxWindowFor(node));
+    uint64_t window = std::min<uint64_t>(READ_WINDOW_MIN << node->rampStep, MaxWindowFor(node));
 
-    // Release readMtx during the blocking pipe round-trip so a concurrent Read
-    // (or the prefetch task) is not stalled behind it. Clamp to EOF.
-    uint64_t fetchLen = std::min(
-        std::max(static_cast<uint64_t>(actual), window),
+    // Release readMtx during the blocking pipe round-trip so a concurrent Read is
+    // not stalled behind it. Clamp to EOF.
+    uint64_t fetchLen = std::min<uint64_t>(
+        std::max<uint64_t>(static_cast<uint64_t>(actual), window),
         node->size - Offset);
     lk.unlock();
 
@@ -802,12 +938,11 @@ NTSTATUS VirtualDrive::Read(FSP_FILE_SYSTEM* fs,
         return ErrorToStatus(j.value("error", ""));
 
     ULONG received = static_cast<ULONG>(
-        std::min(static_cast<uint64_t>(resp.payload.size()),
-                 static_cast<uint64_t>(actual)));
+        std::min<uint64_t>(resp.payload.size(), static_cast<uint64_t>(actual)));
     std::memcpy(Buffer, resp.payload.data(), received);
     *PBytesTransferred = received;
 
-    // Install the fetched chunk as the current window and consider prefetching.
+    // Install the fetched chunk as the current window.
     lk.lock();
     auto rc = std::make_unique<FileNode::ReadCache>();
     rc->startOffset = Offset;
@@ -817,7 +952,6 @@ NTSTATUS VirtualDrive::Read(FSP_FILE_SYSTEM* fs,
     // as sequential and keeps ramping the window.
     node->lastFetchEnd = std::max(node->lastFetchEnd,
                                   Offset + node->readCache->data.size());
-    self->StartPrefetchLocked(node, Offset);
     return STATUS_SUCCESS;
 }
 
@@ -1167,14 +1301,22 @@ VOID VirtualDrive::Cleanup(FSP_FILE_SYSTEM* fs,
     }
 }
 
-VOID VirtualDrive::Close(FSP_FILE_SYSTEM* /*fs*/, PVOID FileContext)
+VOID VirtualDrive::Close(FSP_FILE_SYSTEM* fs, PVOID FileContext)
 {
     auto* node = static_cast<FileNode*>(FileContext);
-    // Join any in-flight prefetch first: its async task captures `node`, so it
-    // must finish before the node is freed (otherwise use-after-free). WinFsp
+    auto* self = static_cast<VirtualDrive*>(fs->UserContext);
+    // Join all in-flight prefetch tasks first: each captures `node`, so they must
+    // finish before the node is freed (otherwise use-after-free). WinFsp
     // guarantees no Read is in flight on this handle once Close is called, so the
-    // prefetch future is the only outstanding work touching the node.
-    if (node->prefetchFut.valid())
-        node->prefetchFut.wait();
+    // prefetch futures are the only outstanding work touching the node. Not under
+    // readMtx — the tasks acquire it themselves.
+    for (auto& slot : node->prefetch)
+        if (slot.fut.valid()) slot.fut.wait();
+    // Close the persistent read session so SyncDose tears down the TauSync channel
+    // and Android releases its open file handle.
+    if (!node->readSession.empty()) {
+        json req = {{"op", "read_close"}, {"session", node->readSession}};
+        self->SendReq(req.dump(), {}, VirtualDrive::PIPE_META_TIMEOUT);
+    }
     delete node;
 }

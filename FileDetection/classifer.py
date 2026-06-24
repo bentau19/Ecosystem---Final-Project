@@ -5,8 +5,11 @@ import threading
 from pathlib import Path
 
 from file_duplicates import check_for_duplicates
-from image_classifer import ClassificationResult, ClassificationVerdict
-# NOTE: classify_image is imported lazily in the classify() method to make torch optional
+from classification_types import ClassificationResult, ClassificationVerdict
+# NOTE: classify_image is imported lazily in the classify() method so torch
+# (pulled in by image_classifer) loads only when ML screening actually runs,
+# not at import time. Keeping torch out of this import path is what keeps the
+# desktop app's startup fast.
 
 
 class Classifier:

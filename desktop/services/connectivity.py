@@ -7,6 +7,7 @@ from PySide6.QtCore import QObject, Signal
 
 import utils
 from domain.enums.session_channels import SessionChannels
+from services.lifecycle import LifecycleFlag
 from tausync_py import TauSync
 # Imported for its side effect of binding the `network` submodule onto the
 # `utils` package object so `utils.network.*` below resolves correctly.
@@ -15,7 +16,7 @@ from utils import network
 logger = logging.getLogger(__name__)
 
 
-class ConnectivityService(QObject):
+class ConnectivityService(LifecycleFlag, QObject):
     """Manages the TauSync device connection lifecycle.
 
     Spawns a background thread to listen for an incoming TCP connection
@@ -70,6 +71,7 @@ class ConnectivityService(QObject):
         self._tau: TauSync = TauSync()
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
         self._is_running: threading.Event = threading.Event()
+        self._init_lifecycle()
 
         self._lifecycle_lock: threading.Lock = threading.Lock()
 
@@ -136,22 +138,25 @@ class ConnectivityService(QObject):
                 return
             self._executor = ThreadPoolExecutor()
             self._is_running.set()
+            self._mark_started()
             self._tau = TauSync()
         self._executor.submit(self._listen)
 
     def _stop(self) -> None:
         # Strictly ordered teardown — see stop() docstring.
         #
-        # Only the running-state flip and the tau/executor capture happen inside
-        # the lock; the teardown and lifecycle signals run *outside* it.  Holding
-        # the lock across the (up to 10 s) phone-notify handshake and the
-        # executor join would stall a queued start() — which also takes this lock
-        # — leaving the PC not yet re-listening when the peer retries.
+        # The whole teardown runs *inside* _lifecycle_lock so the running-state
+        # flip, the transport teardown, the executor drain, and the lifecycle
+        # signals form one atomic unit.  A queued start() takes the same lock and
+        # therefore waits for this stop to finish before it re-listens — the
+        # serialisation we want, so a stop and an immediately-following restart
+        # can never interleave.
         #
-        # The executor reference is captured *inside* the lock: once
-        # device_disconnected is emitted, a slot may call start(), which swaps
-        # self._executor for a fresh pool.  Shutting down the captured (old)
-        # reference guarantees we can never cancel the new listener's work.
+        # tau and executor are still captured into locals: once
+        # device_disconnected is emitted a slot may call start(), which (after
+        # this lock is released) swaps self._tau / self._executor for fresh ones.
+        # Tearing down the captured references guarantees a racing restart's new
+        # transport and pool are never disconnected or cancelled by this stop.
         with self._lifecycle_lock:
             if not self._is_running.is_set():
                 logger.debug("_stop: already stopped — no-op")
@@ -160,23 +165,24 @@ class ConnectivityService(QObject):
             tau = self._tau
             executor = self._executor
 
-        logger.debug("_stop: tearing down transport and draining workers")
-        self.device_disconnecting.emit()
+            logger.debug("_stop: tearing down transport and draining workers")
+            self.device_disconnecting.emit()
 
-        # Network teardown runs outside the lock so a queued start() is never
-        # blocked behind the (up to 10 s) phone-notify handshake.  Ordering is
-        # still safe: the restart trigger (device_disconnected) only fires at
-        # the very end of this method.  The captured tau (not self._tau) is
-        # torn down so a racing start() that swaps in a fresh transport can
-        # never have its replacement disconnected by this stop.
-        self._teardown_transport(tau)
+            # Teardown runs under the lock (see above): a queued start() waits
+            # rather than re-listening mid-teardown.  The captured tau (not
+            # self._tau) is torn down so a later start() that swaps in a fresh
+            # transport can never have its replacement disconnected by this stop.
+            self._teardown_transport(tau)
 
-        # tau.disconnect() aborts the blocking tau.listen() inside _listen, so
-        # the listener future exits promptly and this join completes.
-        executor.shutdown(wait=True, cancel_futures=True)
+            # tau.disconnect() aborts the blocking tau.listen() inside _listen, so
+            # the listener future exits promptly and this join completes.
+            executor.shutdown(wait=True, cancel_futures=True)
 
-        self.device_disconnected.emit()
-        logger.debug("_stop: teardown complete — device_disconnected emitted")
+            self.device_disconnected.emit()
+            logger.debug("_stop: teardown complete — device_disconnected emitted")
+
+            # Mark fully stopped unless a concurrent start() re-armed us mid-teardown.
+            self._mark_stopped()
 
     def _teardown_transport(self, tau: TauSync) -> None:
         # Notify the peer (best-effort) and close the transport.  Emits no

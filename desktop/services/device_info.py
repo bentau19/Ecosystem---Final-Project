@@ -10,6 +10,7 @@ from domain.entities.device_info import DeviceEntity
 from domain.enums.device_info_channels import DeviceInfoChannels
 from repositories.device import DeviceRepository
 from services.connectivity import ConnectivityService
+from services.lifecycle import LifecycleFlag
 # Imported for its side effect of binding the `network` submodule onto the
 # `utils` package object so `utils.network.*` below resolves correctly.
 from utils import network
@@ -17,7 +18,7 @@ from utils import network
 logger = logging.getLogger(__name__)
 
 
-class DeviceInfoService(QObject):
+class DeviceInfoService(LifecycleFlag, QObject):
     """Reads device metadata from TauSync channels and emits a DeviceEntity.
 
     Depends on a live :class:`~tausync_py.TauSync` transport (obtained from
@@ -77,6 +78,7 @@ class DeviceInfoService(QObject):
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
         self._lifecycle_lock: threading.Lock = threading.Lock()
         self._is_running: threading.Event = threading.Event()
+        self._init_lifecycle()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -133,7 +135,7 @@ class DeviceInfoService(QObject):
         threading.Thread(target=self._start, daemon=True).start()
 
     def stop(self) -> None:
-        """Stop the service on a background thread, joining all pending workers."""
+        """Stop the service on a daemon thread (fire-and-forget)."""
         threading.Thread(target=self._stop, daemon=True).start()
 
     def restart(self) -> None:
@@ -176,6 +178,7 @@ class DeviceInfoService(QObject):
                 return
             self._executor = ThreadPoolExecutor()
             self._is_running.set()
+            self._mark_started()
 
     def _stop(self) -> None:
         # Clear the running flag then wait for all submitted work to finish.
@@ -187,7 +190,8 @@ class DeviceInfoService(QObject):
                 return
             self._is_running.clear()
             executor = self._executor
-        executor.shutdown(wait=True, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
+            self._mark_stopped()
 
     def _save(self, entity: DeviceEntity) -> None:
         # Persist entity via repository, then emit both the saved signal and
