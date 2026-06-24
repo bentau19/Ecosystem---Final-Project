@@ -12,6 +12,20 @@
         Theme="hyperlinkLicense" />
     </BootstrapperApplication>
 
+    <!-- Registry searches to detect pre-installed prerequisites -->
+    <RegistrySearch Id="DotNetRuntime8Installed"
+                    Root="HKLM"
+                    Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft .NET Runtime 8.0 x64"
+                    Value="DisplayName"
+                    Result="exists"
+                    Variable="DotNetFound" />
+    <RegistrySearch Id="ObsStudioInstalled"
+                    Root="HKLM"
+                    Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OBS-Studio_is1"
+                    Value="DisplayName"
+                    Result="exists"
+                    Variable="ObsFound" />
+
     <!--
       OFFLINE INSTALLER.
       Every package below uses a local SourceFile and NO DownloadUrl, so WiX
@@ -34,7 +48,7 @@
                   InstallArguments="/install /quiet /norestart"
                   Permanent="yes"
                   Vital="yes"
-                  DetectCondition="RegKeyExists('HKEY_LOCAL_MACHINE', 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft .NET Runtime 8.0 x64')" />
+                  DetectCondition="DotNetFound" />
 
       <!-- WinFSP (required for the Virtual Drive feature via VirtualDrive.exe).
            MsiPackage auto-detects via the MSI ProductCode captured at build
@@ -52,7 +66,7 @@
                   InstallArguments="/S /D=C:\Program Files\obs-studio"
                   Permanent="yes"
                   Vital="no"
-                  DetectCondition="RegKeyExists('HKEY_LOCAL_MACHINE', 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OBS-Studio_is1')" />
+                  DetectCondition="ObsFound" />
 
       <!-- Main SyncDose application installer (Package.msi, built earlier in CI). -->
       <MsiPackage SourceFile="..\Package\bin\Release\Package.msi"
