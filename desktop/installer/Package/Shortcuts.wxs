@@ -33,6 +33,26 @@
           WorkingDirectory="INSTALLFOLDER"
           Icon="SyncDoseIcon" />
 
+        <!--
+            Explicitly delete both .lnk files on uninstall.  This is the actual
+            fix for the desktop icon that was left behind: Windows Installer does
+            NOT reliably remove *non-advertised* shortcuts when their component is
+            uninstalled (a long-standing MSI quirk), so the Shortcut rows above
+            are not enough on their own.  Removing the Start-Menu .lnk here also
+            lets the RemoveFolder below succeed, since a folder is only deleted
+            once it is empty.
+        -->
+        <RemoveFile
+          Id="RemoveSyncDoseDesktopShortcut"
+          Directory="DesktopFolder"
+          Name="SyncDose.lnk"
+          On="uninstall" />
+        <RemoveFile
+          Id="RemoveSyncDoseStartMenuShortcut"
+          Directory="SyncDoseStartMenuFolder"
+          Name="SyncDose.lnk"
+          On="uninstall" />
+
         <!-- Remove the Start Menu folder on uninstall -->
         <RemoveFolder
           Id="RemoveSyncDoseStartMenuFolder"
@@ -43,16 +63,15 @@
             Registry key — required as KeyPath for shortcut components.
             Tracks this component for clean install/repair/uninstall.
 
-            MUST be HKMU (not HKCU): this is a perMachine package, and the bundle
-            uninstalls the MSI elevated as LocalSystem. With an HKCU keypath the
-            value would be written under the installing user's hive but looked up
-            under SYSTEM's hive at uninstall — not found — so MSI would treat the
-            component as absent and LEAVE the desktop/Start-Menu shortcuts behind.
-            HKMU resolves to HKLM for perMachine (and HKCU for perUser), so the
-            keypath is found in any context and the shortcuts are removed cleanly.
+            Stays HKCU (per-user): the shortcuts live in DesktopFolder /
+            ProgramMenuFolder, which Windows Installer classifies as per-user
+            data.  The keypath must match that scope, so an HKLM/HKMU keypath
+            triggers ICE57 ("per-user data + per-machine/ambiguous keypath").
+            Reliable removal is handled by the RemoveFile rows above, not the
+            keypath.
         -->
         <RegistryValue
-          Root="HKMU"
+          Root="HKCU"
           Key="Software\SyncDose"
           Name="installed"
           Type="integer"
