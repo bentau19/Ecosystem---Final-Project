@@ -1,5 +1,6 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <Bundle Name="SyncDose"
           Version="1.0.0.0"
@@ -12,19 +13,33 @@
         Theme="hyperlinkLicense" />
     </BootstrapperApplication>
 
-    <!-- Registry searches to detect pre-installed prerequisites -->
-    <RegistrySearch Id="DotNetRuntime8Installed"
-                    Root="HKLM"
-                    Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft .NET Runtime 8.0 x64"
-                    Value="DisplayName"
-                    Result="exists"
-                    Variable="DotNetFound" />
-    <RegistrySearch Id="ObsStudioInstalled"
-                    Root="HKLM"
-                    Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OBS-Studio_is1"
-                    Value="DisplayName"
-                    Result="exists"
-                    Variable="ObsFound" />
+    <!--
+      Prerequisite detection. These searches run before the Chain and set Burn
+      variables consumed by each package's DetectCondition. When a DetectCondition
+      is true, Burn treats that package as already present and skips it.
+    -->
+
+    <!-- .NET 8 x64 runtime: detect by the on-disk shared-framework folder, which is
+         the authoritative source. (The Uninstall registry subkey is a GUID, and the
+         'dotnet\Setup\InstalledVersions\...\sharedfx' registry layout varies by
+         installer build, so neither is reliable.) Pinned to the bundled 8.0.16; if a
+         different 8.0.x is present but not this exact one, the .NET installer itself
+         no-ops, so it is a safe backstop. -->
+    <util:FileSearch Id="SearchDotNet8"
+                     Variable="DotNetFound"
+                     Path="[ProgramFiles64Folder]dotnet\shared\Microsoft.NETCore.App\8.0.16\System.Private.CoreLib.dll"
+                     Result="exists" />
+
+    <!-- OBS Studio: Inno Setup registers uninstall info under the literal
+         '<AppId>_is1' subkey in the native 64-bit registry view, so Bitness must be
+         always64 or the search reads the wrong (32-bit) hive and never matches. -->
+    <util:RegistrySearch Id="SearchObsStudio"
+                         Variable="ObsFound"
+                         Root="HKLM"
+                         Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OBS-Studio_is1"
+                         Value="DisplayName"
+                         Result="exists"
+                         Bitness="always64" />
 
     <!--
       OFFLINE INSTALLER.
@@ -41,8 +56,9 @@
       <!-- .NET 8 x64 Runtime (required by the TauSync C# library via pythonnet).
            Permanent + no UninstallArguments => Burn never removes the shared
            runtime on uninstall (other apps may depend on it). DetectCondition
-           skips installation if already present. The .NET installer is idempotent,
-           but this improves UX by avoiding unnecessary reinstalls. -->
+           (DotNetFound, set by SearchDotNet8) skips installation if already
+           present. The .NET installer is idempotent, but this improves UX by
+           avoiding unnecessary reinstalls. -->
       <ExePackage Id="DotNet8Runtime"
                   SourceFile="dotnet-runtime-8.0.16-win-x64.exe"
                   InstallArguments="/install /quiet /norestart"
@@ -52,15 +68,16 @@
 
       <!-- WinFSP (required for the Virtual Drive feature via VirtualDrive.exe).
            MsiPackage auto-detects via the MSI ProductCode captured at build
-           time, so it is skipped automatically if already installed. -->
+           time, so it is skipped automatically if already installed — no
+           DetectCondition needed (unlike the ExePackages above). -->
       <MsiPackage Id="WinFspMsi"
                   SourceFile="winfsp-2.0.23075.msi"
                   Vital="yes" />
 
       <!-- OBS Studio with Virtual Camera plugin (required for phone camera streaming).
-           DetectCondition skips install if already present. Permanent so it's not
-           removed when SyncDose uninstalls. Vital="no" allows SyncDose to install
-           even if OBS fails (user can fix manually). -->
+           DetectCondition (ObsFound, set by SearchObsStudio) skips install if already
+           present. Permanent so it's not removed when SyncDose uninstalls. Vital="no"
+           allows SyncDose to install even if OBS fails (user can fix manually). -->
       <ExePackage Id="ObsStudio"
                   SourceFile="OBS-Studio-32.1.2-Windows-x64-Installer.exe"
                   InstallArguments="/S /D=C:\Program Files\obs-studio"
