@@ -47,5 +47,21 @@
             <ComponentGroupRef Id="SyncDoseRegistry"/>
         </Feature>
 
+        <!--
+            Custom Action: Hide OBS from Add/Remove Programs by setting SystemComponent=1.
+            Runs AFTER installation completes, preventing users from accidentally
+            deleting the required OBS dependency.
+        -->
+        <CustomAction
+                Id="HideObsFromARP"
+                ExeCommand='powershell -NoProfile -NonInteractive -Command "reg add &quot;HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OBS Studio&quot; /v SystemComponent /t REG_DWORD /d 1 /f"'
+                Execute="deferred"
+                Impersonate="no"
+                Return="ignore" />
+
+        <InstallExecuteSequence>
+            <Custom Action="HideObsFromARP" After="InstallFinalize">NOT Installed</Custom>
+        </InstallExecuteSequence>
+
     </Package>
 </Wix>

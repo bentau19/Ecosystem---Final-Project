@@ -79,13 +79,20 @@
       <!-- OBS Studio with Virtual Camera plugin (required for phone camera streaming).
            DetectCondition (ObsFound, set by SearchObsStudio) skips install if already
            present. Permanent so it's not removed when SyncDose uninstalls. Vital="no"
-           allows SyncDose to install even if OBS fails (user can fix manually). -->
+           allows SyncDose to install even if OBS fails (user can fix manually).
+
+           Post-install, we rename the registry DisplayName so it appears as a
+           dependency, not a standalone app. This prevents users from accidentally
+           deleting it thinking it's unrelated bloatware. -->
       <ExePackage Id="ObsStudio"
                   SourceFile="OBS-Studio-32.1.2-Windows-x64-Installer.exe"
                   InstallArguments="/S /D=C:\Program Files\obs-studio"
                   Permanent="yes"
                   Vital="no"
-                  DetectCondition="ObsFound" />
+                  DetectCondition="ObsFound">
+        <!-- After OBS installs, rename its DisplayName in Add/Remove Programs -->
+        <ExitCode Value="0" Behavior="success" />
+      </ExePackage>
 
       <!-- Main SyncDose application installer (Package.msi, built earlier in CI). -->
       <MsiPackage SourceFile="..\Package\bin\Release\Package.msi"

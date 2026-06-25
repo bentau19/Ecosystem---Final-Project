@@ -43,6 +43,17 @@ from PySide6.QtWidgets import QApplication
 import resources_qrc  # noqa: F401 — registers Qt virtual filesystem
 
 if __name__ == "__main__":
+    # Single-instance guard FIRST — before any heavy import (MainWindow pulls in
+    # AppState → TauSync → pythonnet) and before QApplication.  If another
+    # SyncDose is already running, bail out immediately so we never bind the
+    # named pipes twice or open a duplicate TauSync connection.
+    from app.single_instance import SingleInstanceGuard, show_already_running_dialog
+
+    _instance_guard = SingleInstanceGuard()  # kept on the module stack for the process lifetime
+    if not _instance_guard.try_acquire():
+        show_already_running_dialog()
+        sys.exit(0)
+
     # These imports are intentionally deferred until after QApplication is
     # constructed.  The modules they pull in create QObjects (NavigationManager,
     # DeviceViewModel, QTimer …) at module-level; instantiating any QObject
@@ -68,7 +79,19 @@ if __name__ == "__main__":
     atexit.unregister(pythonnet.unload)
 
     app = QApplication(sys.argv)
+
+    # Show a splash screen while loading the main window to avoid a black screen
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtWidgets import QSplashScreen
+    from resources.paths import Icons
+
+    splash_pixmap = QPixmap(Icons.LOGO.value)
+    splash = QSplashScreen(splash_pixmap)
+    splash.show()
+    app.processEvents()
+
     main_window = MainWindow()
+    splash.finish(main_window)
     main_window.show()
     main_window.raise_()
     main_window.activateWindow()
