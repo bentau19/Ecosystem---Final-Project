@@ -1127,3 +1127,9 @@
 2026-06-24 19:47:08 [DEBUG] services.connectivity: _stop: tearing down transport and draining workers
 2026-06-24 19:47:17 [DEBUG] services.connectivity: _listen: listen timed out — retrying
 2026-06-24 19:47:18 [DEBUG] services.connectivity: _stop: teardown complete — device_disconnected emitted
+2026-06-25 15:44:10 [DEBUG] app.single_instance: Single-instance lock acquired (mutex=Local\SyncDose-SingleInstance-9F2C1A6E).
+2026-06-25 15:44:10 [INFO] services.dependency: Found .NET 8 at C:\Program Files\dotnet\shared\Microsoft.NETCore.App\8.0.16
+2026-06-25 15:44:10 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 15:44:17 [DEBUG] services.connectivity: _stop: tearing down transport and draining workers
+2026-06-25 15:44:21 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 15:44:22 [DEBUG] services.connectivity: _stop: teardown complete — device_disconnected emitted

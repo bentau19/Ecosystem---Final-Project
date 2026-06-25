@@ -54,13 +54,16 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,
+    console=False,  # GUI-only, no console window
+    noconsole=True,  # Force no console
     disable_windowed_traceback=False,
     icon='../../../resources/icons/logo.ico',
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
 )
 
 coll = COLLECT(

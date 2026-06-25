@@ -12,12 +12,12 @@ from PySide6.QtCore import QCoreApplication
 from PySide6.QtWidgets import QApplication, QDialog
 
 from native.windows.pipe import Client
-
-logger = logging.getLogger(__name__)
 from views.widgets.dialogs.file_handler import (
     PhoneNotDetectedDialog,
     TransferErrorDialog,
 )
+
+logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 

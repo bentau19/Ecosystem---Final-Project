@@ -54,6 +54,36 @@ if __name__ == "__main__":
         show_already_running_dialog()
         sys.exit(0)
 
+    # QApplication must exist before any QWidget/QDialog. Create it now — it has
+    # no .NET dependency — so the dependency gate below can show its dialog
+    # *before* the .NET-loading MainWindow import runs.
+    app = QApplication(sys.argv)
+
+    # ── Dependency gate ──────────────────────────────────────────────────────
+    # Detect missing Windows components (.NET 8 / WinFSP / OBS) BEFORE importing
+    # MainWindow. That import constructs AppState → ConnectivityService →
+    # TauSync(), which loads the .NET 8 runtime via pythonnet; if .NET 8 is
+    # absent the import itself can crash. Running the check here lets us block
+    # startup (and exit) when a required component is missing so the user can
+    # install it and relaunch. The service/viewmodel are bootstrap-local: a gate
+    # for the DI root cannot live on the DI root.
+    from services.dependency import DependencyService
+    from viewmodels.dependency import DependencyViewModel
+    from views.widgets.dialogs.missing_dependencies_dialog import (
+        MissingDependenciesDialog,
+    )
+
+    _dependency_service = DependencyService()
+    _missing_dependencies = _dependency_service.check_missing()
+    if _missing_dependencies:
+        _dependency_viewmodel = DependencyViewModel(
+            _dependency_service, _missing_dependencies
+        )
+        _dependency_dialog = MissingDependenciesDialog(_dependency_viewmodel)
+        _dependency_dialog.exec()
+        if not _dependency_dialog.should_launch:
+            sys.exit(0)
+
     # These imports are intentionally deferred until after QApplication is
     # constructed.  The modules they pull in create QObjects (NavigationManager,
     # DeviceViewModel, QTimer …) at module-level; instantiating any QObject
@@ -78,8 +108,6 @@ if __name__ == "__main__":
 
     atexit.unregister(pythonnet.unload)
 
-    app = QApplication(sys.argv)
-
     # Show a splash screen while loading the main window to avoid a black screen
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QSplashScreen
@@ -92,29 +120,6 @@ if __name__ == "__main__":
 
     main_window = MainWindow()
     splash.finish(main_window)
-
-    # Check if required dependencies are installed: .NET 8, WinFSP, OBS Studio.
-    # If any are missing, show a dialog offering to reinstall/download them.
-    from app.obs_checker import (
-        is_obs_installed,
-        is_dotnet8_installed,
-        is_winfsp_installed,
-    )
-    from views.widgets.dialogs.missing_dependencies_dialog import (
-        MissingDependenciesDialog,
-    )
-
-    missing_deps = []
-    if not is_dotnet8_installed():
-        missing_deps.append("dotnet8")
-    if not is_winfsp_installed():
-        missing_deps.append("winfsp")
-    if not is_obs_installed():
-        missing_deps.append("obs")
-
-    if missing_deps:
-        deps_dialog = MissingDependenciesDialog(missing_deps, main_window)
-        deps_dialog.exec()
 
     main_window.show()
     main_window.raise_()

@@ -1,151 +1,144 @@
-"""
-Missing Dependencies Dialog — shown at startup if required Windows components are missing.
-
-Offers to reinstall .NET 8, WinFSP, or OBS Studio.
-"""
-
-from typing import List
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
-    QVBoxLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QMessageBox,
-    QCheckBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
 
-from app.obs_checker import (
-    try_reinstall_obs_from_bundled,
-    open_obs_download_page,
-    open_dotnet_download_page,
-    open_winfsp_download_page,
-)
+from domain.dto.dependency_info import DependencyInfoDTO
 from resources.spacing import Spacing
+from viewmodels.dependency import DependencyViewModel
 
 
 class MissingDependenciesDialog(QDialog):
+    """Startup dialog listing required Windows components that are missing.
+
+    Presentational only: it renders the
+    :class:`~domain.dto.dependency_info.DependencyInfoDTO` list held by
+    :class:`~viewmodels.dependency.DependencyViewModel`, forwards install
+    choices to the ViewModel, and records whether the app should keep launching.
+
+    Launch gating (the app must not start until missing components are
+    installed):
+
+    * **Download & Install Selected** — triggers the installs, asks the user to
+      restart, and leaves :attr:`should_launch` ``False`` so the bootstrap
+      exits; freshly installed runtimes are only picked up on relaunch.
+    * **Continue Without Installing** — offered only when no *required*
+      component is missing; sets :attr:`should_launch` ``True``.
+    * **Closing the dialog** — launches only when no required component is
+      missing.
     """
-    Dialog shown when required dependencies are detected as missing at app startup.
 
-    Missing dependencies can be:
-    - .NET 8 Runtime (required by TauSync C# library via pythonnet)
-    - WinFSP (required for Virtual Drive feature)
-    - OBS Studio (required for phone camera streaming)
+    def __init__(
+            self,
+            viewmodel: DependencyViewModel,
+            parent: QWidget | None = None,
+    ) -> None:
+        """Initialize the dialog from its ViewModel.
 
-    Users can download and install each missing component.
-    """
-
-    def __init__(self, missing_deps: List[str], parent=None):
-        """
         Args:
-            missing_deps: List of missing dependency names ('dotnet8', 'winfsp', 'obs')
-            parent: Parent widget
+            viewmodel: Supplies the missing-dependency DTOs and performs installs.
+            parent: Optional Qt parent widget.
         """
         super().__init__(parent)
-        self.missing_deps = missing_deps
+        self._viewmodel: DependencyViewModel = viewmodel
+        # Default: launch only when nothing required is missing. Closing the
+        # dialog therefore exits the app while a required component is absent.
+        self._should_launch: bool = not viewmodel.has_required_missing
+        self._checkboxes: dict[DependencyInfoDTO, QCheckBox] = {}
+
         self.setWindowTitle("Missing Dependencies")
         self.setModal(True)
         self.setMinimumWidth(500)
-        self.setup_ui()
+        self._setup_ui()
 
-    def setup_ui(self) -> None:
-        """Build the dialog layout."""
+    @property
+    def should_launch(self) -> bool:
+        """Whether the bootstrap should continue launching after the dialog."""
+        return self._should_launch
+
+    def _setup_ui(self) -> None:
+        # Build the layout from the ViewModel's missing-dependency DTOs.
         layout = QVBoxLayout(self)
         layout.setSpacing(Spacing.MD)
         layout.setContentsMargins(Spacing.LG, Spacing.LG, Spacing.LG, Spacing.LG)
 
-        # Title
         title = QLabel("Missing Dependencies")
         title_font = title.font()
-        title_font.setPointSize(12)
         title_font.setBold(True)
         title.setFont(title_font)
         layout.addWidget(title)
 
-        # Explanation
-        explanation = QLabel(
-            "The following required components are not installed:\n\n"
-        )
+        explanation = QLabel(self._build_explanation())
         explanation.setWordWrap(True)
-
-        # Build explanation text with dependency descriptions
-        desc_text = ""
-        for dep in self.missing_deps:
-            if dep == "dotnet8":
-                desc_text += "• .NET 8 Runtime — required for internal system connectivity\n"
-            elif dep == "winfsp":
-                desc_text += "• WinFSP — required for virtual drive mounting feature\n"
-            elif dep == "obs":
-                desc_text += "• OBS Studio — required for phone camera streaming\n"
-
-        explanation.setText(explanation.text() + desc_text + "\nWould you like to install them?")
         layout.addWidget(explanation)
 
-        # Checkboxes for selecting which to install
-        self.checkboxes = {}
-        for dep in self.missing_deps:
-            if dep == "dotnet8":
-                label = ".NET 8 Runtime"
-            elif dep == "winfsp":
-                label = "WinFSP"
-            else:
-                label = "OBS Studio"
-
-            checkbox = QCheckBox(label)
+        for info in self._viewmodel.missing:
+            checkbox = QCheckBox(info.display_name)
             checkbox.setChecked(True)
-            self.checkboxes[dep] = checkbox
+            self._checkboxes[info] = checkbox
             layout.addWidget(checkbox)
 
         layout.addSpacing(Spacing.MD)
+        layout.addLayout(self._build_buttons())
 
-        # Buttons
+    def _build_explanation(self) -> str:
+        # Compose the body text from each missing component's description.
+        lines = ["The following required components are not installed:\n"]
+        lines += [
+            f"• {info.display_name} — {info.description}"
+            for info in self._viewmodel.missing
+        ]
+        lines.append("\nWould you like to install them?")
+        return "\n".join(lines)
+
+    def _build_buttons(self) -> QHBoxLayout:
+        # Install is always available; Continue only when nothing required is missing.
         button_layout = QHBoxLayout()
         button_layout.setSpacing(Spacing.SM)
 
-        # Install selected button
         install_btn = QPushButton("Download & Install Selected")
-        install_btn.clicked.connect(self.on_install_clicked)
+        install_btn.clicked.connect(self._on_install_clicked)
         button_layout.addWidget(install_btn)
 
-        # Skip button
-        skip_btn = QPushButton("Continue Without Installing")
-        skip_btn.clicked.connect(self.accept)
-        button_layout.addWidget(skip_btn)
+        if not self._viewmodel.has_required_missing:
+            continue_btn = QPushButton("Continue Without Installing")
+            continue_btn.clicked.connect(self._on_continue_clicked)
+            button_layout.addWidget(continue_btn)
 
-        layout.addLayout(button_layout)
+        return button_layout
 
-    def on_install_clicked(self) -> None:
-        """User clicked Install — open download pages for selected dependencies."""
-        selected = [dep for dep, checkbox in self.checkboxes.items() if checkbox.isChecked()]
+    def _on_continue_clicked(self) -> None:
+        # User skipped optional installs — allow the app to launch.
+        self._should_launch = True
+        self.accept()
 
+    def _on_install_clicked(self) -> None:
+        # Forward each checked component to the ViewModel, then require a restart.
+        selected = [
+            info.dependency
+            for info, checkbox in self._checkboxes.items()
+            if checkbox.isChecked()
+        ]
         if not selected:
             self.accept()
             return
 
-        # Open download pages
-        for dep in selected:
-            if dep == "dotnet8":
-                open_dotnet_download_page()
-            elif dep == "winfsp":
-                open_winfsp_download_page()
-            elif dep == "obs":
-                if not try_reinstall_obs_from_bundled():
-                    open_obs_download_page()
-
-        # Show info message
-        deps_str = ", ".join([
-            ".NET 8" if d == "dotnet8" else
-            "WinFSP" if d == "winfsp" else
-            "OBS Studio"
-            for d in selected
-        ])
+        for dependency in selected:
+            self._viewmodel.request_install(dependency)
 
         QMessageBox.information(
             self,
             "Installation Started",
-            f"Download pages for {deps_str} have been opened.\n\n"
-            "Please install the selected components, then restart SyncDose.",
+            "Download pages for the selected components have been opened.\n\n"
+            "Please install them, then restart SyncDose.",
         )
+        # A freshly installed runtime is only picked up on relaunch — do not
+        # continue into the app on this run.
+        self._should_launch = False
         self.accept()
