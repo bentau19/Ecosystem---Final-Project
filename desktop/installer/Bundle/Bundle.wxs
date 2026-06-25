@@ -88,7 +88,7 @@
       <ExePackage Id="ObsStudio"
                   SourceFile="OBS-Studio-32.1.2-Windows-x64-Installer.exe"
                   InstallArguments="/S /D=C:\Program Files\obs-studio"
-                  Permanent="no"
+                  Permanent="yes"
                   Vital="no"
                   DetectCondition="ObsFound" />
 
