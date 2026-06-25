@@ -73,16 +73,16 @@ if __name__ == "__main__":
         MissingDependenciesDialog,
     )
 
-    # _dependency_service = DependencyService()
-    # _missing_dependencies = _dependency_service.check_missing()
-    # if _missing_dependencies:
-    #     _dependency_viewmodel = DependencyViewModel(
-    #         _dependency_service, _missing_dependencies
-    #     )
-    #     _dependency_dialog = MissingDependenciesDialog(_dependency_viewmodel)
-    #     _dependency_dialog.exec()
-    #     if not _dependency_dialog.should_launch:
-    #         sys.exit(0)
+    dependency_service = DependencyService()
+    missing_dependencies = dependency_service.check_missing()
+    if missing_dependencies:
+        dependency_viewmodel = DependencyViewModel(
+            dependency_service, missing_dependencies
+        )
+        _dependency_dialog = MissingDependenciesDialog(dependency_viewmodel)
+        _dependency_dialog.exec()
+        if not _dependency_dialog.should_launch:
+            sys.exit(0)
 
     # These imports are intentionally deferred until after QApplication is
     # constructed.  The modules they pull in create QObjects (NavigationManager,
@@ -96,17 +96,6 @@ if __name__ == "__main__":
     # reading QGuiApplication.styleHints().
     from app.theme_manager import theme_manager  # noqa: F401 — triggers singleton init
     from views.main_window import MainWindow
-
-    # Importing MainWindow pulls in app_state → ConnectivityService → TauSync(),
-    # which calls pythonnet.load() and registers an atexit handler that runs
-    # Python.Runtime.Loader.Shutdown("full_shutdown") at interpreter exit.  That
-    # CLR shutdown hangs forever during Py_Finalize, wedging the process even
-    # after app.exec() returns.  We don't need the CLR unloaded — the process is
-    # exiting and the OS reclaims it — so unregister the handler for a clean exit.
-    import atexit
-    import pythonnet
-
-    atexit.unregister(pythonnet.unload)
 
     # Show a splash screen while loading the main window to avoid a black screen
     from PySide6.QtGui import QPixmap

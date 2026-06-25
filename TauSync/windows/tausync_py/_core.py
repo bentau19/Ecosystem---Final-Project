@@ -39,21 +39,6 @@ def _find_dll() -> str:
     """Walk up from this file's directory to locate the DLL automatically."""
 
     dll_file = Path(__file__).parent / "dll" / "TauSync.Lib.dll"
-    #
-    # anchor = os.path.dirname(os.path.abspath(__file__))
-    # current = anchor
-    # for _ in range(10):
-    #     candidate = os.path.join(current, _DEFAULT_DLL_RELATIVE)
-    #     if os.path.isfile(candidate):
-    #         return os.path.abspath(candidate)
-    #     parent = os.path.dirname(current)
-    #     if parent == current:
-    #         break
-    #     current = parent
-    # raise FileNotFoundError(
-    #     f"TauSync.Lib.dll not found. Searched upward from {anchor}. "
-    #     "Pass dll_path= explicitly to TauSync() if the DLL is elsewhere."
-    # )
 
     if dll_file.exists():
         return str(dll_file)
@@ -62,6 +47,34 @@ def _find_dll() -> str:
             f"TauSync.Lib.dll not found.Searched for  {dll_file}. "
             "Pass dll_path= explicitly to TauSync() if the DLL is elsewhere."
         )
+
+
+def _coreclr_runtime_spec():
+    """Resolve the newest installed ``Microsoft.NETCore.App`` runtime spec.
+
+    Enumerates the .NET install root directly instead of letting clr_loader fall
+    back to ``dotnet --list-runtimes``. That CLI call (clr_loader's default
+    whenever ``dotnet`` is on PATH) spawns a console subprocess, which flashes a
+    console window in a GUI / ``--windowed`` host process (e.g. ``pythonw`` or a
+    PyInstaller windowed build). Passing the resolved spec to
+    :func:`pythonnet.load` makes ``get_coreclr`` skip the CLI entirely.
+
+    Returns:
+        The highest-versioned ``DotnetCoreRuntimeSpec`` for
+        ``Microsoft.NETCore.App``, or ``None`` if the install root cannot be
+        enumerated (callers then fall back to clr_loader's default discovery).
+    """
+    try:
+        from clr_loader.util.find import find_dotnet_root, find_runtimes_in_root
+        root = find_dotnet_root()  # DOTNET_ROOT / ProgramFiles\dotnet; no subprocess
+        runtimes = [
+            rt for rt in find_runtimes_in_root(root)
+            if rt.name == "Microsoft.NETCore.App"
+        ]
+    except Exception:
+        return None
+    runtimes.sort(key=lambda spec: spec.version_info, reverse=True)
+    return runtimes[0] if runtimes else None
 
 
 def _ensure_clr(dll_path: Optional[str] = None) -> None:
@@ -77,7 +90,13 @@ def _ensure_clr(dll_path: Optional[str] = None) -> None:
 
         from pythonnet import load as _load_runtime
         try:
-            _load_runtime("coreclr")
+            # Pin the runtime spec so clr_loader does not probe via
+            # `dotnet --list-runtimes` (a console-spawning subprocess).
+            _spec = _coreclr_runtime_spec()
+            if _spec is not None:
+                _load_runtime("coreclr", runtime_spec=_spec)
+            else:
+                _load_runtime("coreclr")
         except Exception:
             pass
 

@@ -1133,3 +1133,138 @@
 2026-06-25 15:44:17 [DEBUG] services.connectivity: _stop: tearing down transport and draining workers
 2026-06-25 15:44:21 [DEBUG] services.connectivity: _listen: listen timed out — retrying
 2026-06-25 15:44:22 [DEBUG] services.connectivity: _stop: teardown complete — device_disconnected emitted
+2026-06-25 18:59:57 [DEBUG] app.single_instance: Single-instance lock acquired (mutex=Local\SyncDose-SingleInstance-9F2C1A6E).
+2026-06-25 19:01:36 [DEBUG] app.single_instance: Single-instance lock acquired (mutex=Local\SyncDose-SingleInstance-9F2C1A6E).
+2026-06-25 19:01:37 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:01:47 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:01:48 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:01:50 [DEBUG] services.connectivity: _stop: tearing down transport and draining workers
+2026-06-25 19:01:58 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:01:59 [DEBUG] services.connectivity: _stop: teardown complete — device_disconnected emitted
+2026-06-25 19:02:01 [DEBUG] app.single_instance: Single-instance lock acquired (mutex=Local\SyncDose-SingleInstance-9F2C1A6E).
+2026-06-25 19:02:02 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:02:12 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:02:13 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:02:23 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:02:24 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:02:34 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:02:35 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:02:45 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:02:46 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:02:56 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:02:57 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:03:06 [DEBUG] services.connectivity: _stop: tearing down transport and draining workers
+2026-06-25 19:03:07 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:03:08 [DEBUG] services.connectivity: _stop: teardown complete — device_disconnected emitted
+2026-06-25 19:04:00 [DEBUG] app.single_instance: Single-instance lock acquired (mutex=Local\SyncDose-SingleInstance-9F2C1A6E).
+2026-06-25 19:04:00 [INFO] services.dependency: Found .NET 8 at C:\Program Files\dotnet\shared\Microsoft.NETCore.App\8.0.16
+2026-06-25 19:04:05 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:04:15 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:04:16 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:04:26 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:04:27 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:04:37 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:04:38 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:04:48 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:04:49 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:04:59 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:05:00 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:05:10 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:05:11 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:05:21 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:05:22 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:05:32 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:05:33 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:05:43 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:05:44 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:05:54 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:05:55 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:06:05 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:06:06 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:06:16 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:06:17 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:06:27 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:06:28 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:06:38 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:06:39 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:06:49 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:06:50 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:07:00 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:07:01 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:07:11 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:07:12 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:07:19 [INFO] app.single_instance: Another SyncDose instance is already running; this launch will exit.
+2026-06-25 19:07:22 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:07:23 [DEBUG] services.connectivity: _stop: tearing down transport and draining workers
+2026-06-25 19:07:23 [DEBUG] services.connectivity: _stop: teardown complete — device_disconnected emitted
+2026-06-25 19:07:27 [DEBUG] app.single_instance: Single-instance lock acquired (mutex=Local\SyncDose-SingleInstance-9F2C1A6E).
+2026-06-25 19:07:27 [INFO] services.dependency: Found .NET 8 at C:\Program Files\dotnet\shared\Microsoft.NETCore.App\8.0.16
+2026-06-25 19:07:32 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:07:42 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:07:43 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:07:53 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:07:54 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:08:04 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:08:05 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:08:15 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:08:16 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:08:26 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:08:27 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:08:37 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:08:38 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:08:41 [INFO] app.single_instance: Another SyncDose instance is already running; this launch will exit.
+2026-06-25 19:08:44 [DEBUG] services.connectivity: _stop: tearing down transport and draining workers
+2026-06-25 19:08:48 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:08:49 [DEBUG] services.connectivity: _stop: teardown complete — device_disconnected emitted
+2026-06-25 19:08:50 [DEBUG] app.single_instance: Single-instance lock acquired (mutex=Local\SyncDose-SingleInstance-9F2C1A6E).
+2026-06-25 19:08:50 [INFO] services.dependency: Found .NET 8 at C:\Program Files\dotnet\shared\Microsoft.NETCore.App\8.0.16
+2026-06-25 19:08:53 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:08:58 [DEBUG] services.connectivity: _stop: tearing down transport and draining workers
+2026-06-25 19:09:03 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:09:04 [DEBUG] services.connectivity: _stop: teardown complete — device_disconnected emitted
+2026-06-25 19:12:11 [DEBUG] app.single_instance: Single-instance lock acquired (mutex=Local\SyncDose-SingleInstance-9F2C1A6E).
+2026-06-25 19:12:11 [INFO] services.dependency: Found .NET 8 at C:\Program Files\dotnet\shared\Microsoft.NETCore.App\8.0.16
+2026-06-25 19:12:14 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:12:18 [DEBUG] services.connectivity: _stop: tearing down transport and draining workers
+2026-06-25 19:12:24 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:12:25 [DEBUG] services.connectivity: _stop: teardown complete — device_disconnected emitted
+2026-06-25 19:12:47 [DEBUG] app.single_instance: Single-instance lock acquired (mutex=Local\SyncDose-SingleInstance-9F2C1A6E).
+2026-06-25 19:12:47 [INFO] services.dependency: Found .NET 8 at C:\Program Files\dotnet\shared\Microsoft.NETCore.App\8.0.16
+2026-06-25 19:12:50 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:13:00 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:13:01 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:13:11 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:13:12 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:13:22 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:13:23 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:13:33 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:13:34 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:13:44 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:13:45 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:13:46 [INFO] app.single_instance: Another SyncDose instance is already running; this launch will exit.
+2026-06-25 19:13:51 [DEBUG] services.connectivity: _stop: tearing down transport and draining workers
+2026-06-25 19:13:55 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:13:56 [DEBUG] services.connectivity: _stop: teardown complete — device_disconnected emitted
+2026-06-25 19:13:58 [DEBUG] app.single_instance: Single-instance lock acquired (mutex=Local\SyncDose-SingleInstance-9F2C1A6E).
+2026-06-25 19:13:58 [INFO] services.dependency: Found .NET 8 at C:\Program Files\dotnet\shared\Microsoft.NETCore.App\8.0.16
+2026-06-25 19:14:01 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:14:08 [DEBUG] services.connectivity: _stop: tearing down transport and draining workers
+2026-06-25 19:14:11 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:14:12 [DEBUG] services.connectivity: _stop: teardown complete — device_disconnected emitted
+2026-06-25 19:27:18 [DEBUG] app.single_instance: Single-instance lock acquired (mutex=Local\SyncDose-SingleInstance-9F2C1A6E).
+2026-06-25 19:27:18 [INFO] services.dependency: Found .NET 8 at C:\Program Files\dotnet\shared\Microsoft.NETCore.App\8.0.16
+2026-06-25 19:27:20 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:27:30 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:27:31 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:27:41 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:27:42 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:27:52 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:27:53 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:28:03 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:28:04 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:28:14 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:28:15 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:28:25 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:28:26 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
+2026-06-25 19:28:36 [DEBUG] services.connectivity: _listen: listen timed out — retrying
+2026-06-25 19:28:37 [DEBUG] services.connectivity: _listen: waiting for connection (running=True, connected=False)
