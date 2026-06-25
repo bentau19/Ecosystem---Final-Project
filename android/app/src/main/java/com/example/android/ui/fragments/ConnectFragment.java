@@ -2,6 +2,8 @@ package com.example.android.ui.fragments;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -216,29 +218,41 @@ public class ConnectFragment extends Fragment {
         }
     }
 
-    /** Shows the "TauSync PC found — connect?" confirm dialog; confirms or cancels pairing. */
+    /** Shows the styled "PC found" confirm dialog (custom dark layout); confirms or cancels pairing. */
     private void showPcFoundDialog() {
         if (pcFoundDialogShown) return;
         DiscoveredPc pc = viewModel.getDiscoveredPc().getValue();
         if (pc == null) return;
         pcFoundDialogShown = true;
-        new AlertDialog.Builder(requireContext())
-                .setTitle("TauSync PC found")
-                .setMessage("Found \"" + pc.getName() + "\"\n" + pc.getMacAddress()
-                        + "\n\nConnect over Bluetooth?")
-                .setPositiveButton("Connect", (d, w) -> {
-                    pcFoundDialogShown = false;
-                    viewModel.confirmPairing(pc.getMacAddress());
-                })
-                .setNegativeButton("Cancel", (d, w) -> {
-                    pcFoundDialogShown = false;
-                    viewModel.cancelDiscovery();
-                })
+
+        View view = LayoutInflater.from(requireContext())
+                .inflate(R.layout.dialog_pc_found, null);
+        ((TextView) view.findViewById(R.id.dlgPcName)).setText(pc.getName());
+        ((TextView) view.findViewById(R.id.dlgPcMac)).setText(pc.getMacAddress());
+
+        AlertDialog dialog = new AlertDialog.Builder(requireContext())
+                .setView(view)
                 .setOnCancelListener(d -> {
                     pcFoundDialogShown = false;
                     viewModel.cancelDiscovery();
                 })
-                .show();
+                .create();
+        // Make the window transparent so the layout's rounded card corners show.
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        }
+
+        view.findViewById(R.id.dlgConnect).setOnClickListener(v -> {
+            pcFoundDialogShown = false;
+            dialog.dismiss();
+            viewModel.confirmPairing(pc.getMacAddress());
+        });
+        view.findViewById(R.id.dlgCancel).setOnClickListener(v -> {
+            pcFoundDialogShown = false;
+            dialog.dismiss();
+            viewModel.cancelDiscovery();
+        });
+        dialog.show();
     }
 
     /**

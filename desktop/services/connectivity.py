@@ -54,6 +54,11 @@ class ConnectivityService(QObject):
     device_disconnecting: Signal = Signal()
     device_disconnected: Signal = Signal()
     connection_error: Signal = Signal(str)
+    #: Emitted (with the phone's name) when a new phone asks to connect over Bluetooth and the
+    #: user must approve it. A view shows a dialog on the main thread and calls
+    #: :meth:`resolve_phone_approval`. Emitted from a TauSync background thread, so the connection
+    #: is a queued (cross-thread) signal — the dialog is never opened off the UI thread.
+    phone_approval_requested: Signal = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         """Initialize the service and inject the device repository.
@@ -72,6 +77,13 @@ class ConnectivityService(QObject):
         self._is_running: threading.Event = threading.Event()
 
         self._lifecycle_lock: threading.Lock = threading.Lock()
+
+        # Phone-approval handshake state. The TauSync callback blocks on _approval_event until a
+        # view resolves the decision on the main thread. _approved_devices remembers phones
+        # accepted this session so repeat connections are silent (persistence is a future step).
+        self._approval_event: threading.Event = threading.Event()
+        self._approval_result: bool = False
+        self._approved_devices: set[str] = set()
 
     # ── Public read-only access to the transport ──────────────────────────────
 
@@ -289,18 +301,43 @@ class ConnectivityService(QObject):
                 # never hot-spins the listener thread.
                 time.sleep(1)
 
+    #: Max time to wait for the user's accept/reject decision before defaulting to reject.
+    _APPROVAL_TIMEOUT_S = 30.0
+
     def _on_phone_approval(self, phone_name: str | None) -> bool:
         """Decide whether to accept a phone requesting a hybrid connection.
 
-        Invoked by ``connect_hybrid`` on a TauSync background thread when a phone
-        connects over Bluetooth, before the session completes. Returns ``True`` to
-        accept or ``False`` to reject.
+        Invoked by ``connect_hybrid`` on a TauSync background thread when a phone connects over
+        Bluetooth, before the session completes. A previously approved phone is auto-accepted
+        (silent); a new one fires :attr:`phone_approval_requested` so a view shows an accept/reject
+        dialog on the main thread, then blocks here until :meth:`resolve_phone_approval` is called.
 
-        TODO (step 6): replace this auto-approve stub with a PySide6 dialog (and a
-        remembered-devices list so repeat connections are silent).
+        Returns ``True`` to accept or ``False`` to reject. Runs on a TauSync background thread —
+        it never touches the UI directly; the dialog is opened by the slot on the UI thread.
         """
-        logger.info(
-            "Phone '%s' requesting hybrid connection — auto-approving (TODO: UI dialog)",
-            phone_name,
-        )
-        return True
+        device = (phone_name or "").strip() or "Unknown phone"
+        if device in self._approved_devices:
+            logger.info("Auto-approving known phone '%s'", device)
+            return True
+
+        # Arm the handshake, ask the UI (cross-thread queued signal), and block for the decision.
+        self._approval_result = False
+        self._approval_event.clear()
+        self.phone_approval_requested.emit(device)
+
+        if not self._approval_event.wait(timeout=self._APPROVAL_TIMEOUT_S):
+            logger.warning("Phone approval for '%s' timed out — rejecting", device)
+            return False
+
+        if self._approval_result:
+            self._approved_devices.add(device)
+            logger.info("Phone '%s' approved", device)
+        else:
+            logger.info("Phone '%s' rejected", device)
+        return self._approval_result
+
+    def resolve_phone_approval(self, accepted: bool) -> None:
+        """Resolve a pending :meth:`_on_phone_approval` decision. Called by the view (main thread)
+        after the user accepts/rejects, unblocking the waiting TauSync thread."""
+        self._approval_result = accepted
+        self._approval_event.set()
