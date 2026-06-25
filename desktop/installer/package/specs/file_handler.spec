@@ -2,10 +2,10 @@ import os
 
 a = Analysis(
     ['../../../core/file_handler.py'],
-    # SPECPATH = desktop/installer/Package/specs  →  ../../ = desktop/
+    # SPECPATH = desktop/installer/Package/specs  →  ../../../ = desktop/
     # Needed so PyInstaller can find the `native`, `views`, etc. packages
     # whose root is desktop/, not desktop/core/ (the entry-script dir).
-    pathex=[os.path.normpath(os.path.join(SPECPATH, '..', '..'))],
+    pathex=[os.path.normpath(os.path.join(SPECPATH, '..', '..', '..'))],
     binaries=[("../../../native/windows/pipe/*.pyd", "native/windows/pipe")],
 
     datas=[("../../../resources/", "resources/"),
