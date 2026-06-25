@@ -1,10 +1,12 @@
 package com.example.android.network.transport;
 
+import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
 import com.example.android.domain.entities.RemoteDeviceInfo;
+import com.example.android.domain.enums.ConnectionType;
 import com.example.android.utils.NetworkHandler;
 import com.example.tausync_lib.sdk.TauSync;
 
@@ -39,6 +41,12 @@ public class TauSyncTransportManager implements TransportManager {
     // 10 ms instead of 50 ms; 5×
     // faster virtual-drive op pickup
 
+    // Hybrid (Bluetooth) connect timeouts. Bluetooth is slower than Wi-Fi, and the device is
+    // already bonded by the discovery flow, so the link + handshake take a few seconds. The inner
+    // timeout is shorter than the outer Future timeout so the inner thread always exits first.
+    private static final int BT_CONNECT_INNER_TIMEOUT_SECONDS = 10;
+    private static final int BT_CONNECT_OUTER_TIMEOUT_SECONDS = 11;
+
     // State management
     private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
     // volatile: written on sendDisconnectToPC / PeerRequestHandler threads, read on the
@@ -48,6 +56,11 @@ public class TauSyncTransportManager implements TransportManager {
     private TransportListener listener;
     private TauSync tauSync;
     private RemoteDeviceInfo currentRemoteDevice;
+
+    // Application context for the hybrid connectHybrid(context, mac) call. Stored as the
+    // application context (not the Service) so this long-lived manager can never pin a
+    // destroyed Service in memory.
+    private final Context applicationContext;
 
     // Threading
     private final ExecutorService connectionExecutor = Executors.newSingleThreadExecutor(runnable -> {
@@ -71,6 +84,14 @@ public class TauSyncTransportManager implements TransportManager {
     // Reconnection tracking
     private int currentRetryAttempt = 0;
     private long nextRetryDelayMs = INITIAL_RETRY_DELAY_MS;
+
+    /**
+     * @param context any Context; the application context is extracted defensively so a Service
+     *                context can never be retained by this long-lived manager.
+     */
+    public TauSyncTransportManager(Context context) {
+        this.applicationContext = context.getApplicationContext();
+    }
 
     @Override
     public void connect(RemoteDeviceInfo remoteDevice, TransportListener transportListener) {
@@ -122,24 +143,40 @@ public class TauSyncTransportManager implements TransportManager {
                 tauSync = new TauSync();
                 Log.d(TAG, "🔵 TauSync created, calling connectTo...");
 
-                // connect to PC with tauSync.
-                // Inner TauSync timeout (4 s) is intentionally shorter than the outer
-                // Java Future timeout (5 s) so the inner thread always exits before
-                // Future.get() times out.  This prevents an orphaned native thread from
-                // lingering and later connecting to the PC's next listener session.
+                // connect to PC with tauSync. The inner TauSync timeout is intentionally shorter
+                // than the outer Java Future timeout so the inner thread always exits before
+                // Future.get() times out.  This prevents an orphaned native thread from lingering
+                // and later connecting to the PC's next listener session.
+                //
+                // Route by connection type: BLUETOOTH runs the hybrid connect (Bluetooth primary +
+                // lazy Wi-Fi) by MAC; everything else is the existing Wi-Fi connect by IP. The
+                // hybrid call gets the application context so this manager can't pin a Service.
+                final boolean hybrid =
+                        currentRemoteDevice.getConnectionType() == ConnectionType.BLUETOOTH;
+                final int outerTimeoutSeconds = hybrid ? BT_CONNECT_OUTER_TIMEOUT_SECONDS : 5;
+
                 java.util.concurrent.Future<?> connectFuture = java.util.concurrent.Executors
                         .newSingleThreadExecutor()
-                        .submit(() -> tauSync.connectTo(currentRemoteDevice.getPcIp(), 4));
+                        .submit(() -> {
+                            if (hybrid) {
+                                tauSync.connectHybrid(
+                                        applicationContext,
+                                        currentRemoteDevice.getMacAddress(),
+                                        BT_CONNECT_INNER_TIMEOUT_SECONDS);
+                            } else {
+                                tauSync.connectTo(currentRemoteDevice.getPcIp(), 4);
+                            }
+                        });
 
                 try {
-                    connectFuture.get(5, java.util.concurrent.TimeUnit.SECONDS);
+                    connectFuture.get(outerTimeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
                 } catch (java.util.concurrent.TimeoutException e) {
                     connectFuture.cancel(true);
-                    throw new Exception("Connection timed out after 5 seconds");
+                    throw new Exception("Connection timed out after " + outerTimeoutSeconds + " seconds");
                 }
 
                 // connect success
-                Log.d(TAG, "🟢 connectTo returned successfully");
+                Log.d(TAG, "🟢 connect returned successfully (hybrid=" + hybrid + ")");
 
                 currentRetryAttempt = 0;
                 nextRetryDelayMs = INITIAL_RETRY_DELAY_MS;

@@ -203,6 +203,9 @@ class ConnectivityService(QObject):
             # Swallow it so teardown always completes.
             logger.warning("Peer appears to have disconnected unexpectedly: %s", e)
         finally:
+            # connect_hybrid stops the BLE beacon itself (on connect, timeout, or error),
+            # so no explicit stop_advertising is needed here — disconnect() closes the
+            # transport and resets the role.
             try:
                 tau.disconnect()
             except Exception as e:
@@ -244,11 +247,23 @@ class ConnectivityService(QObject):
                 self.connected,
             )
             try:
-                self._tau.listen(timeout_seconds=10)
-                # listen() returning does NOT guarantee a live peer: a stale transport can
+                # Hybrid server: Bluetooth is the always-on primary link (Wi-Fi is brought up
+                # lazily for large payloads). connect_hybrid advertises a BLE beacon so the phone
+                # can discover this PC, runs the encrypted BT handshake, and invokes on_approve
+                # when a phone asks to connect.
+                # device_name is the label shown in the phone's discovery dialog. Computed
+                # on demand from the same single source (utils.network.get_pc_name) that
+                # DeviceInfoService sends over the PC_NAME channel — one consistent name,
+                # no cached state here. TODO (future): user-overridable custom name.
+                self._tau.connect_hybrid(
+                    timeout_seconds=10,
+                    device_name=utils.network.get_pc_name(),
+                    on_approve=self._on_phone_approval,
+                )
+                # A returning call does NOT guarantee a live peer: a stale transport can
                 # return instantly with is_connected still False (the "phantom connect").
                 # Never emit a phantom device_connected — reset the role so the next
-                # listen() re-arms a real accept, then back off and retry.
+                # attempt re-arms a real accept, then back off and retry.
                 if not self.connected:
                     logger.warning("_listen: listen() returned with no live peer — resetting")
                     self._reset_transport()
@@ -273,3 +288,19 @@ class ConnectivityService(QObject):
                 # Brief backoff so a persistent failure (e.g. port in use)
                 # never hot-spins the listener thread.
                 time.sleep(1)
+
+    def _on_phone_approval(self, phone_name: str | None) -> bool:
+        """Decide whether to accept a phone requesting a hybrid connection.
+
+        Invoked by ``connect_hybrid`` on a TauSync background thread when a phone
+        connects over Bluetooth, before the session completes. Returns ``True`` to
+        accept or ``False`` to reject.
+
+        TODO (step 6): replace this auto-approve stub with a PySide6 dialog (and a
+        remembered-devices list so repeat connections are silent).
+        """
+        logger.info(
+            "Phone '%s' requesting hybrid connection — auto-approving (TODO: UI dialog)",
+            phone_name,
+        )
+        return True

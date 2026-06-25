@@ -42,7 +42,7 @@ def _gated_tau(gate: threading.Event) -> MagicMock:
         gate.wait(timeout=5)
         mock_tau.is_connected = True  # while-guard becomes False → loop exits
 
-    mock_tau.listen.side_effect = _listen_side_effect
+    mock_tau.connect_hybrid.side_effect = _listen_side_effect
     return mock_tau
 
 
@@ -94,7 +94,7 @@ def test_connection_error_emitted_when_listen_raises_while_running(qtbot: QtBot)
             raise RuntimeError("connection refused")
         park.wait(timeout=5)
 
-    mock_tau.listen.side_effect = _raise_once
+    mock_tau.connect_hybrid.side_effect = _raise_once
 
     # Wire the signal BEFORE _start() so the emission is never missed.
     # _start_service() connects and starts in the wrong order — by the time
@@ -124,11 +124,11 @@ def test_no_connection_error_when_listen_aborted_by_stop(qtbot: QtBot) -> None:
         abort.wait(timeout=5)
         raise RuntimeError("listen aborted by disconnect")
 
-    mock_tau.listen.side_effect = _blocking_listen
+    mock_tau.connect_hybrid.side_effect = _blocking_listen
     mock_tau.disconnect.side_effect = lambda: abort.set()
 
     svc = _start_service(mock_tau)
-    qtbot.waitUntil(lambda: mock_tau.listen.called, timeout=2000)
+    qtbot.waitUntil(lambda: mock_tau.connect_hybrid.called, timeout=2000)
 
     errors: list[str] = []
     disconnected: list[bool] = []
@@ -194,7 +194,7 @@ def test_stop_emits_disconnected_when_tau_already_disconnected(qtbot: QtBot) -> 
         park.wait(timeout=5)
         raise TimeoutError()
 
-    mock_tau.listen.side_effect = _parked_listen
+    mock_tau.connect_hybrid.side_effect = _parked_listen
     mock_tau.disconnect.side_effect = lambda: park.set()
     svc = _start_service(mock_tau)
 
@@ -261,12 +261,12 @@ def test_stop_then_start_listens_again_with_fresh_tausync(qtbot: QtBot) -> None:
                 abort.wait(timeout=5)
                 raise RuntimeError("listen aborted by disconnect")
 
-            mock_tau.listen.side_effect = _blocking_listen
+            mock_tau.connect_hybrid.side_effect = _blocking_listen
             mock_tau.disconnect.side_effect = lambda: abort.set()
         else:
             # Restarted transport: listen parks until disconnect() releases it.
             park = threading.Event()
-            mock_tau.listen.side_effect = lambda **kwargs: park.wait(timeout=5)
+            mock_tau.connect_hybrid.side_effect = lambda **kwargs: park.wait(timeout=5)
             mock_tau.disconnect.side_effect = lambda: park.set()
         created.append(mock_tau)
         return mock_tau
@@ -275,7 +275,7 @@ def test_stop_then_start_listens_again_with_fresh_tausync(qtbot: QtBot) -> None:
         svc = ConnectivityService()  # consumes created[0] (constructor default)
         svc._start()  # consumes created[1] — the first session transport
 
-        qtbot.waitUntil(lambda: created[1].listen.called, timeout=2000)
+        qtbot.waitUntil(lambda: created[1].connect_hybrid.called, timeout=2000)
 
         disconnected: list[bool] = []
         # Mirror production wiring: restart is triggered by device_disconnected,
@@ -288,7 +288,7 @@ def test_stop_then_start_listens_again_with_fresh_tausync(qtbot: QtBot) -> None:
         qtbot.waitUntil(lambda: len(disconnected) > 0, timeout=2000)
         # The restart must produce a fresh transport that is actively listening.
         qtbot.waitUntil(lambda: len(created) >= 3, timeout=2000)
-        qtbot.waitUntil(lambda: created[2].listen.called, timeout=2000)
+        qtbot.waitUntil(lambda: created[2].connect_hybrid.called, timeout=2000)
 
     assert created[2] is not created[1]
     assert svc._is_running.is_set()

@@ -1,16 +1,22 @@
 package com.example.android.viewmodel;
 
+import androidx.annotation.Nullable;
 import androidx.lifecycle.LiveData;
+import androidx.lifecycle.MutableLiveData;
 import androidx.lifecycle.ViewModel;
 
 import com.example.android.domain.entities.DeviceConnectionState;
 import com.example.android.domain.entities.DeviceStorageStats;
+import com.example.android.domain.entities.DiscoveredPc;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionStatus;
+import com.example.android.domain.enums.ConnectionType;
+import com.example.android.domain.enums.DiscoveryStatus;
 import com.example.android.repositories.BackupRepository;
 import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
 import com.example.android.domain.usecases.DisconnectDeviceUseCase;
+import com.example.android.domain.usecases.PairWithPcUseCase;
 import com.example.android.domain.usecases.ParseQrDataUseCase;
 import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
 
@@ -24,20 +30,30 @@ public class MainViewModel extends ViewModel {
     private final ConnectToDeviceUseCase connectToDevice;
     private final DisconnectDeviceUseCase disconnectDevice;
     private final ParseQrDataUseCase parseQr;
+    private final PairWithPcUseCase pairWithPc;
 
     private final DeviceRepository repository;
+
+    // Bluetooth discovery/pairing state, observed by ConnectFragment.
+    private final MutableLiveData<DiscoveryStatus> discoveryStatus =
+            new MutableLiveData<>(DiscoveryStatus.IDLE);
+    private final MutableLiveData<DiscoveredPc> discoveredPc = new MutableLiveData<>();
+    private final MutableLiveData<String> discoveryError = new MutableLiveData<>();
+    private volatile String pairedMac;
 //    private android.content.BroadcastReceiver batteryReceiver;
 
     public MainViewModel(DeviceRepository repository,
                          RefreshLocalStatsUseCase refreshStats,
                          ConnectToDeviceUseCase connectToDevice,
                          ParseQrDataUseCase parseQr,
-                         DisconnectDeviceUseCase disconnectDevice) {
+                         DisconnectDeviceUseCase disconnectDevice,
+                         PairWithPcUseCase pairWithPc) {
         this.repository = repository;
         this.refreshStats = refreshStats;
         this.connectToDevice = connectToDevice;
         this.parseQr = parseQr;
         this.disconnectDevice = disconnectDevice;
+        this.pairWithPc = pairWithPc;
     }
 
     /**
@@ -71,6 +87,105 @@ public class MainViewModel extends ViewModel {
         if (info == null) return false;
         connectToDevice.execute(info);
         return true;
+    }
+
+    // ── Bluetooth discovery & pairing ────────────────────────────────────────
+
+    /** Discovery/pairing phase, observed by the UI to render progress and react to results. */
+    public LiveData<DiscoveryStatus> getDiscoveryStatus() {
+        return discoveryStatus;
+    }
+
+    /** The PC found over BLE — drives the "connect to this PC?" confirm dialog. */
+    public LiveData<DiscoveredPc> getDiscoveredPc() {
+        return discoveredPc;
+    }
+
+    /** Human-readable reason for the latest discovery/pairing failure. */
+    public LiveData<String> getDiscoveryError() {
+        return discoveryError;
+    }
+
+    /** The MAC bonded in the last successful pairing — used to start the hybrid connection. */
+    @Nullable
+    public String getPairedMac() {
+        return pairedMac;
+    }
+
+    /** The remembered PC MAC from a previous pairing, or {@code null} on first run. */
+    @Nullable
+    public String getSavedAddress() {
+        return pairWithPc.savedAddress();
+    }
+
+    /**
+     * Starts scanning for the PC over BLE. On a known device the caller should connect directly
+     * with {@link #getSavedAddress()} instead of scanning.
+     */
+    public void startDiscovery() {
+        discoveryStatus.postValue(DiscoveryStatus.SCANNING);
+        pairWithPc.discover(new PairWithPcUseCase.DiscoveryListener() {
+            @Override
+            public void onPcFound(DiscoveredPc pc) {
+                discoveredPc.postValue(pc);
+                discoveryStatus.postValue(DiscoveryStatus.PC_FOUND);
+            }
+
+            @Override
+            public void onDiscoveryFailed(String reason) {
+                discoveryError.postValue(reason);
+                discoveryStatus.postValue(DiscoveryStatus.FAILED);
+            }
+        });
+    }
+
+    /** Bonds with the discovered PC after the user accepts the confirm dialog. */
+    public void confirmPairing(String macAddress) {
+        discoveryStatus.postValue(DiscoveryStatus.PAIRING);
+        pairWithPc.pair(macAddress, new PairWithPcUseCase.PairingListener() {
+            @Override
+            public void onPaired(String mac) {
+                pairedMac = mac;
+                discoveryStatus.postValue(DiscoveryStatus.PAIRED);
+            }
+
+            @Override
+            public void onPairingFailed(String reason) {
+                discoveryError.postValue(reason);
+                discoveryStatus.postValue(DiscoveryStatus.FAILED);
+            }
+        });
+    }
+
+    /** Cancels an in-progress scan and returns to idle. */
+    public void cancelDiscovery() {
+        pairWithPc.stopDiscovery();
+        discoveryStatus.postValue(DiscoveryStatus.IDLE);
+    }
+
+    /** Forgets the saved PC so the next attempt re-discovers (after a lost bond). */
+    public void forgetSavedDevice() {
+        pairWithPc.clearSaved();
+    }
+
+    /**
+     * Records a hybrid (Bluetooth) connection to the bonded PC in the repository — the Bluetooth
+     * sibling of {@link #handleQr}. The real {@code connectHybrid} runs in {@code ConnectivityService};
+     * this only updates the connection state so the UI reflects the attempt. The PC name is taken
+     * from the discovered device when available and is later refined by the {@code pc_name} channel.
+     */
+    public void connectHybrid(String macAddress) {
+        DiscoveredPc pc = discoveredPc.getValue();
+        String pcName = (pc != null && macAddress.equals(pc.getMacAddress())) ? pc.getName() : "PC";
+        RemoteDeviceInfo info =
+                new RemoteDeviceInfo(pcName, null, macAddress, ConnectionType.BLUETOOTH);
+        connectToDevice.execute(info);
+
+        // Hand-off complete: reset the discovery phase so PAIRED is a one-shot. Otherwise the
+        // status stays PAIRED and LiveData re-delivers it to a freshly created ConnectFragment
+        // (e.g. after a disconnect navigates back here), which would re-trigger the connection —
+        // an endless disconnect→reconnect loop.
+        discoveryStatus.postValue(DiscoveryStatus.IDLE);
     }
 
     /**

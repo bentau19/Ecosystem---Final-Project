@@ -1,21 +1,31 @@
 package com.example.android.ui.fragments;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.TextView;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
+import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.R;
+import com.example.android.domain.entities.DiscoveredPc;
 import com.example.android.domain.enums.ConnectionStatus;
+import com.example.android.domain.enums.DiscoveryStatus;
 import com.example.android.ui.MainActivity;
 import com.example.android.viewmodel.MainViewModel;
 
@@ -41,10 +51,40 @@ public class ConnectFragment extends Fragment {
 
     // Connection-progress UI
     private Button btnConnect;
+    private Button btnConnectBluetooth;
     private TextView waitingText;
     private View progressConnecting;
     private TextView tvConnectingStatus;
     private TextView tvConnectError;
+
+    // Guards against the "PC found" dialog re-showing when LiveData re-delivers PC_FOUND
+    // (e.g. on rotation) while the dialog is already up.
+    private boolean pcFoundDialogShown = false;
+
+    // Runtime Bluetooth permission request (API 31+). Registered in onCreate.
+    private ActivityResultLauncher<String[]> btPermissionLauncher;
+
+    @Override
+    public void onCreate(@Nullable Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        // Must register before the fragment reaches STARTED, so onCreate (not onViewCreated).
+        btPermissionLauncher = registerForActivityResult(
+                new ActivityResultContracts.RequestMultiplePermissions(),
+                result -> {
+                    boolean allGranted = true;
+                    for (Boolean granted : result.values()) {
+                        if (!Boolean.TRUE.equals(granted)) {
+                            allGranted = false;
+                            break;
+                        }
+                    }
+                    if (allGranted) {
+                        proceedWithBluetoothConnect();
+                    } else {
+                        showErrorUI("Bluetooth permission is required to find your PC.");
+                    }
+                });
+    }
 
     private final Handler timeoutHandler = new Handler(Looper.getMainLooper());
     private final Runnable timeoutRunnable = this::onConnectTimeout;
@@ -65,6 +105,7 @@ public class ConnectFragment extends Fragment {
         // 2. Initialize UI components
         TextView ipDisplayText = view.findViewById(R.id.ipDisplayText);
         btnConnect = view.findViewById(R.id.btnConnect);
+        btnConnectBluetooth = view.findViewById(R.id.btnConnectBluetooth);
         waitingText = view.findViewById(R.id.waitingText);
         progressConnecting = view.findViewById(R.id.progressConnecting);
         tvConnectingStatus = view.findViewById(R.id.tvConnectingStatus);
@@ -81,13 +122,137 @@ public class ConnectFragment extends Fragment {
         // 4. Observer: Drives the connection spinner / error UI off the status machine.
         viewModel.getConnectionStatus().observe(getViewLifecycleOwner(), this::renderConnectionStatus);
 
-        // 5. Connection Button: Triggers the PC discovery/scan process in MainActivity
+        // 5. QR Button: Triggers the QR scan process in MainActivity (existing Wi-Fi path)
         if (btnConnect != null) {
             btnConnect.setOnClickListener(v -> {
                 if (getActivity() instanceof MainActivity) {
                     ((MainActivity) getActivity()).handleConnection();
                 }
             });
+        }
+
+        // 6. Bluetooth Button: starts BLE discovery (or reuses a remembered PC)
+        if (btnConnectBluetooth != null) {
+            btnConnectBluetooth.setOnClickListener(v -> onBluetoothConnectClicked());
+        }
+
+        // 7. Observe the discovery/pairing state machine to drive progress, the confirm
+        //    dialog, errors, and the hand-off to the hybrid connection.
+        viewModel.getDiscoveryStatus().observe(getViewLifecycleOwner(), this::renderDiscoveryStatus);
+    }
+
+    // ── Bluetooth discovery flow ─────────────────────────────────────────────
+
+    /** Connect over Bluetooth: ensure runtime permissions, then discover or reuse a saved PC. */
+    private void onBluetoothConnectClicked() {
+        if (hasBluetoothPermissions()) {
+            proceedWithBluetoothConnect();
+        } else {
+            btPermissionLauncher.launch(requiredBluetoothPermissions());
+        }
+    }
+
+    /** Reuse a remembered PC if any, otherwise scan for one. Called once permissions are granted. */
+    private void proceedWithBluetoothConnect() {
+        String saved = viewModel.getSavedAddress();
+        if (saved != null) {
+            startHybridConnection(saved);
+        } else {
+            viewModel.startDiscovery();
+        }
+    }
+
+    /**
+     * The Bluetooth permissions that must be granted at runtime before scanning/bonding.
+     *
+     * <p>API 31+ uses the granular BLUETOOTH_SCAN/CONNECT. On API ≤ 30 those don't exist as runtime
+     * permissions — the install-time BLUETOOTH/BLUETOOTH_ADMIN cover the radio, but a BLE <b>scan</b>
+     * additionally requires location (ACCESS_FINE_LOCATION), so we request that instead. (minSdk is
+     * 29, so the older path is a real device target, not dead code.)
+     */
+    private static String[] requiredBluetoothPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return new String[]{
+                    Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.BLUETOOTH_CONNECT
+            };
+        }
+        return new String[]{Manifest.permission.ACCESS_FINE_LOCATION};
+    }
+
+    private boolean hasBluetoothPermissions() {
+        for (String permission : requiredBluetoothPermissions()) {
+            if (ContextCompat.checkSelfPermission(requireContext(), permission)
+                    != PackageManager.PERMISSION_GRANTED) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Maps the discovery phase to the connect screen's visual state. */
+    private void renderDiscoveryStatus(@Nullable DiscoveryStatus status) {
+        if (status == null) return;
+        switch (status) {
+            case SCANNING:
+                showConnectingUI("Scanning for PC over Bluetooth...");
+                break;
+            case PC_FOUND:
+                showPcFoundDialog();
+                break;
+            case PAIRING:
+                showConnectingUI("Pairing...");
+                break;
+            case PAIRED:
+                startHybridConnection(viewModel.getPairedMac());
+                break;
+            case FAILED:
+                String reason = viewModel.getDiscoveryError().getValue();
+                showErrorUI(reason != null ? reason : getString(R.string.connection_failed_error));
+                break;
+            case IDLE:
+            default:
+                break;
+        }
+    }
+
+    /** Shows the "TauSync PC found — connect?" confirm dialog; confirms or cancels pairing. */
+    private void showPcFoundDialog() {
+        if (pcFoundDialogShown) return;
+        DiscoveredPc pc = viewModel.getDiscoveredPc().getValue();
+        if (pc == null) return;
+        pcFoundDialogShown = true;
+        new AlertDialog.Builder(requireContext())
+                .setTitle("TauSync PC found")
+                .setMessage("Found \"" + pc.getName() + "\"\n" + pc.getMacAddress()
+                        + "\n\nConnect over Bluetooth?")
+                .setPositiveButton("Connect", (d, w) -> {
+                    pcFoundDialogShown = false;
+                    viewModel.confirmPairing(pc.getMacAddress());
+                })
+                .setNegativeButton("Cancel", (d, w) -> {
+                    pcFoundDialogShown = false;
+                    viewModel.cancelDiscovery();
+                })
+                .setOnCancelListener(d -> {
+                    pcFoundDialogShown = false;
+                    viewModel.cancelDiscovery();
+                })
+                .show();
+    }
+
+    /**
+     * Hands the bonded PC's MAC to {@link MainActivity} to start the hybrid (Bluetooth + lazy
+     * Wi-Fi) session — the Bluetooth counterpart of the QR button delegating to
+     * {@code handleConnection()}.
+     */
+    private void startHybridConnection(@Nullable String macAddress) {
+        if (macAddress == null) {
+            Log.w("ConnectFragment", "startHybridConnection called with null MAC — ignoring");
+            return;
+        }
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).startHybridConnection(macAddress);
         }
     }
 
@@ -123,32 +288,35 @@ public class ConnectFragment extends Fragment {
         }
     }
 
-    /** Spinner + status label visible; connect button and idle hint hidden. */
+    /** Spinner + status label visible; connect buttons and idle hint hidden. */
     private void showConnectingUI(String label) {
         if (tvConnectingStatus != null) tvConnectingStatus.setText(label);
         setVisible(progressConnecting, true);
         setVisible(tvConnectingStatus, true);
         setVisible(tvConnectError, false);
         setVisible(btnConnect, false);
+        setVisible(btnConnectBluetooth, false);
         setVisible(waitingText, false);
     }
 
-    /** Error message visible; connect button re-enabled so the user can retry. */
+    /** Error message visible; connect buttons re-enabled so the user can retry. */
     private void showErrorUI(String message) {
         if (tvConnectError != null) tvConnectError.setText(message);
         setVisible(progressConnecting, false);
         setVisible(tvConnectingStatus, false);
         setVisible(tvConnectError, true);
         setVisible(btnConnect, true);
+        setVisible(btnConnectBluetooth, true);
         setVisible(waitingText, true);
     }
 
-    /** Default resting state: just the connect button and its hint. */
+    /** Default resting state: just the connect buttons and their hint. */
     private void showIdleUI() {
         setVisible(progressConnecting, false);
         setVisible(tvConnectingStatus, false);
         setVisible(tvConnectError, false);
         setVisible(btnConnect, true);
+        setVisible(btnConnectBluetooth, true);
         setVisible(waitingText, true);
     }
 

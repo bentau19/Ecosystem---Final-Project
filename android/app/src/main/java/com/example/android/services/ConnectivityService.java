@@ -175,7 +175,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             );
         }
 
-        transportManager = new TauSyncTransportManager();
+        transportManager = new TauSyncTransportManager(getApplicationContext());
         handlerRegistry = new ChannelHandlerRegistry();
 
         // Initialize file transfer UseCases before registering handlers —
@@ -365,22 +365,26 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         }
 
         String targetIp = (intent != null) ? intent.getStringExtra("TARGET_IP") : null;
-        Log.d(TAG, "Target IP: " + targetIp);
+        String targetMac = (intent != null) ? intent.getStringExtra("TARGET_MAC") : null;
+        Log.d(TAG, "Target IP: " + targetIp + ", Target MAC: " + targetMac);
 
-        if (targetIp == null) {
-            Log.e(TAG, "No TARGET_IP provided, stopping service");
+        // Route by which extra was provided: TARGET_MAC = hybrid (Bluetooth), TARGET_IP = Wi-Fi.
+        // The repository is updated with the initial (pre-handshake) state for the chosen path.
+        RemoteDeviceInfo remoteDevice;
+        if (targetMac != null) {
+            // Hybrid path — the Wi-Fi IP is discovered over Bluetooth at connect time, so none here.
+            remoteDevice = new RemoteDeviceInfo("PC", null, targetMac, ConnectionType.BLUETOOTH);
+            deviceRepository.connectHybrid(remoteDevice.getPcName(), remoteDevice.getMacAddress());
+        } else if (targetIp != null) {
+            // Wi-Fi path (existing).
+            remoteDevice = new RemoteDeviceInfo("PC", targetIp, ConnectionType.WIFI);
+            deviceRepository.connect(remoteDevice.getPcName(), remoteDevice.getPcIp(),
+                    remoteDevice.getConnectionType());
+        } else {
+            Log.e(TAG, "No TARGET_IP or TARGET_MAC provided, stopping service");
             stopSelf();
             return START_NOT_STICKY;
         }
-
-        RemoteDeviceInfo remoteDevice = new RemoteDeviceInfo(
-                "PC",
-                targetIp,
-                ConnectionType.WIFI
-        );
-
-        // Update the repository with the remote device info (initial state before handshake)
-        deviceRepository.connect(remoteDevice.getPcName(), remoteDevice.getPcIp(), remoteDevice.getConnectionType());
 
         deviceRepository.updateConnectionStatus(ConnectionStatus.CONNECTING);
         transportManager.connect(remoteDevice, this);

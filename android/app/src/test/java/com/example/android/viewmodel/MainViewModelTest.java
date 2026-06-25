@@ -16,6 +16,7 @@ import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionType;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
 import com.example.android.domain.usecases.DisconnectDeviceUseCase;
+import com.example.android.domain.usecases.PairWithPcUseCase;
 import com.example.android.domain.usecases.ParseQrDataUseCase;
 import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
 
@@ -51,6 +52,9 @@ public class MainViewModelTest {
     @Mock
     private DisconnectDeviceUseCase mockDisconnectUseCase;
 
+    @Mock
+    private PairWithPcUseCase mockPairWithPcUseCase;
+
     private MainViewModel viewModel;
 
     @Before
@@ -61,7 +65,8 @@ public class MainViewModelTest {
                 mockRefreshUseCase,
                 mockConnectUseCase,
                 mockParseQrUseCase,
-                mockDisconnectUseCase
+                mockDisconnectUseCase,
+                mockPairWithPcUseCase
         );
     }
 
