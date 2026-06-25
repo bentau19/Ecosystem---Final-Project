@@ -3,13 +3,6 @@
 # Bootstraps QApplication, defers all QObject-dependent imports until after
 # the application instance exists, then shows the main window.
 import sys
-import os  # [diag] temporary — for SYNCDOSE_DIAG_AUTOQUIT env gate
-import faulthandler  # [diag] temporary
-
-# import os
-
-# sys.path.insert(0, os.path.join(os.path.dirname(__file__), "domain"))
-
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -32,11 +25,18 @@ if str(_FILE_DETECTION_DIR) not in sys.path:
     sys.path.insert(0, str(_FILE_DETECTION_DIR))
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Standard stream guard (PyInstaller --windowed)
+# ---------------------------------------------------------------------------
+# A windowed (no-console) frozen build has no stdio attached, so Python sets
+# sys.stdout / sys.stderr to None.  Anything that writes to them then crashes —
+# logging StreamHandler in configure_logging() would silently fail on every emit.
+# Redirect both to a real, line-buffered file so those diagnostics survive
+# instead of taking down the app.  This MUST run before configure_logging() and
+
 from app.logging_config import configure_logging
 
 configure_logging()
-
-faulthandler.enable()  # [diag] temporary — dump Python stacks on fatal signal
 
 from PySide6.QtWidgets import QApplication
 
@@ -49,7 +49,7 @@ if __name__ == "__main__":
     # before QApplication exists causes Qt to emit the
     # "startTimer: event dispatcher already destroyed" warning.
 
-    # ThemeManager must be initialised before any widget is constructed so
+    # ThemeManager must be initialized before any widget is constructed so
     # that theme_manager.is_dark is already correct when the first _setup_style()
     # runs.  It is a lightweight QObject singleton — no side-effects beyond
     # reading QGuiApplication.styleHints().
