@@ -84,7 +84,13 @@ public final class TauSync {
         }
 
         try {
-            ConnectionContext.getInstance().initializeTransports(null, timeoutSeconds);
+            ConnectionContext ctx = ConnectionContext.getInstance();
+            ctx.initializeTransports(null, timeoutSeconds);
+            // Drive the ECDH key exchange (send our public key, await the peer's, derive the
+            // session key) before any data flows. initializeTransports only arms it via
+            // beginKeyExchange(); without this the peer blocks awaiting our key and the encrypted
+            // session never establishes.
+            ctx.completeKeyExchange(ctx.getWifiTransport());
             manager = new ConnectionManager();
         } catch (Exception e) {
             synchronized (roleLock) {
@@ -152,7 +158,13 @@ public final class TauSync {
         }
 
         try {
-            ConnectionContext.getInstance().initializeTransports(trimmed, timeoutSeconds);
+            ConnectionContext ctx = ConnectionContext.getInstance();
+            ctx.initializeTransports(trimmed, timeoutSeconds);
+            // Drive the ECDH key exchange (send our public key, await the peer's, derive the
+            // session key) before any data flows. initializeTransports only arms it via
+            // beginKeyExchange(); without this the peer blocks awaiting our key and the encrypted
+            // session never establishes.
+            ctx.completeKeyExchange(ctx.getWifiTransport());
             manager = new ConnectionManager();
         } catch (Exception e) {
             synchronized (roleLock) {
