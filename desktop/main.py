@@ -92,6 +92,30 @@ if __name__ == "__main__":
 
     main_window = MainWindow()
     splash.finish(main_window)
+
+    # Check if required dependencies are installed: .NET 8, WinFSP, OBS Studio.
+    # If any are missing, show a dialog offering to reinstall/download them.
+    from app.obs_checker import (
+        is_obs_installed,
+        is_dotnet8_installed,
+        is_winfsp_installed,
+    )
+    from views.widgets.dialogs.missing_dependencies_dialog import (
+        MissingDependenciesDialog,
+    )
+
+    missing_deps = []
+    if not is_dotnet8_installed():
+        missing_deps.append("dotnet8")
+    if not is_winfsp_installed():
+        missing_deps.append("winfsp")
+    if not is_obs_installed():
+        missing_deps.append("obs")
+
+    if missing_deps:
+        deps_dialog = MissingDependenciesDialog(missing_deps, main_window)
+        deps_dialog.exec()
+
     main_window.show()
     main_window.raise_()
     main_window.activateWindow()

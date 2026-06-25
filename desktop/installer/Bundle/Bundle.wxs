@@ -71,28 +71,26 @@
       <!-- WinFSP (required for the Virtual Drive feature via VirtualDrive.exe).
            MsiPackage auto-detects via the MSI ProductCode captured at build
            time, so it is skipped automatically if already installed — no
-           DetectCondition needed (unlike the ExePackages above). -->
+           DetectCondition needed (unlike the ExePackages above).
+           Permanent="yes" because WinFSP is a shared library that other apps
+           might depend on; removing it when SyncDose uninstalls could break
+           those apps. -->
       <MsiPackage Id="WinFspMsi"
                   SourceFile="winfsp-2.0.23075.msi"
+                  Permanent="yes"
                   Vital="yes" />
 
       <!-- OBS Studio with Virtual Camera plugin (required for phone camera streaming).
            DetectCondition (ObsFound, set by SearchObsStudio) skips install if already
-           present. Permanent so it's not removed when SyncDose uninstalls. Vital="no"
-           allows SyncDose to install even if OBS fails (user can fix manually).
-
-           Post-install, we rename the registry DisplayName so it appears as a
-           dependency, not a standalone app. This prevents users from accidentally
-           deleting it thinking it's unrelated bloatware. -->
+           present. Permanent="no" means OBS is removed when SyncDose uninstalls.
+           Vital="no" allows SyncDose to install even if OBS fails (user can fix manually).
+           OBS appears in Add/Remove Programs so users can see it's installed. -->
       <ExePackage Id="ObsStudio"
                   SourceFile="OBS-Studio-32.1.2-Windows-x64-Installer.exe"
                   InstallArguments="/S /D=C:\Program Files\obs-studio"
-                  Permanent="yes"
+                  Permanent="no"
                   Vital="no"
-                  DetectCondition="ObsFound">
-        <!-- After OBS installs, rename its DisplayName in Add/Remove Programs -->
-        <ExitCode Value="0" Behavior="success" />
-      </ExePackage>
+                  DetectCondition="ObsFound" />
 
       <!-- Main SyncDose application installer (Package.msi, built earlier in CI). -->
       <MsiPackage SourceFile="..\Package\bin\Release\Package.msi"
