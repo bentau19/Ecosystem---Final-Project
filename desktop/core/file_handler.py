@@ -5,8 +5,9 @@ from typing import Final
 
 # Add the desktop/ root to sys.path so imports work both when run directly
 # and when bundled by PyInstaller (which sets pathex correctly in the spec).
-if str(Path(__file__).parent.parent) not in sys.path:
-    sys.path.insert(0, str(Path(__file__).parent.parent))
+_DESKTOP_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
+if str(_DESKTOP_ROOT) not in sys.path:
+    sys.path.insert(0, str(_DESKTOP_ROOT))
 
 from PySide6.QtCore import QCoreApplication
 from PySide6.QtWidgets import QApplication, QDialog

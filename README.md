@@ -34,7 +34,7 @@ Ecosystem/
 │   ├── viewmodels/             # Qt Signals + DTOs consumed by Views
 │   ├── views/                  # PySide6 widgets and screens
 │   ├── native/windows/pipe/    # C++ pybind11 named-pipe module (IPC with FileHandler)
-│   ├── core/pipe_client.py     # FileHandler.exe entry point
+│   ├── core/file_handler.py    # FileHandler.exe entry point
 │   ├── resources/              # Colors, spacing tokens, QSS, icons
 │   ├── tests/                  # pytest suite
 │   ├── main.py                 # App entry point (fast launch)
@@ -88,6 +88,7 @@ cd desktop/
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r ../TauSync/windows/requirements.txt
+pip install -r ../FileDetection/requirements.txt
 pip install -r requirements.txt
 pip install ../TauSync/windows
 
@@ -144,7 +145,7 @@ they are missing before running the MSI — end users only need this one file.
 
 ## Android App
 
-**Min SDK:** 29 (Android 10.0) · **Target SDK:** 36 · **JDK:** 21 · **Gradle:** 8.13+
+**Min SDK:** 29 (Android 10.0) · **Target SDK:** 36 · **JDK:** 21 · **Gradle:** 9.5.1
 
 Open `android/` in Android Studio. The app uses manual DI via `MainViewModelFactory` — no
 Hilt or Dagger. `ConnectivityService` is a Foreground Service that keeps the TauSync socket

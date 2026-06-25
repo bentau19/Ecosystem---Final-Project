@@ -73,16 +73,16 @@ if __name__ == "__main__":
         MissingDependenciesDialog,
     )
 
-    _dependency_service = DependencyService()
-    _missing_dependencies = _dependency_service.check_missing()
-    if _missing_dependencies:
-        _dependency_viewmodel = DependencyViewModel(
-            _dependency_service, _missing_dependencies
-        )
-        _dependency_dialog = MissingDependenciesDialog(_dependency_viewmodel)
-        _dependency_dialog.exec()
-        if not _dependency_dialog.should_launch:
-            sys.exit(0)
+    # _dependency_service = DependencyService()
+    # _missing_dependencies = _dependency_service.check_missing()
+    # if _missing_dependencies:
+    #     _dependency_viewmodel = DependencyViewModel(
+    #         _dependency_service, _missing_dependencies
+    #     )
+    #     _dependency_dialog = MissingDependenciesDialog(_dependency_viewmodel)
+    #     _dependency_dialog.exec()
+    #     if not _dependency_dialog.should_launch:
+    #         sys.exit(0)
 
     # These imports are intentionally deferred until after QApplication is
     # constructed.  The modules they pull in create QObjects (NavigationManager,
