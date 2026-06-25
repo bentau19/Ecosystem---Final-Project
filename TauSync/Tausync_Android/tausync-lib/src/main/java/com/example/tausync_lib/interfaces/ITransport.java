@@ -45,10 +45,27 @@ public interface ITransport extends AutoCloseable {
     boolean isConnected();
 
     /**
+     * Explicitly tears down the connection (intentional close): the transport does not auto-reconnect
+     * after this. Implemented by both transports; declared here to match C# {@code ITransport}.
+     */
+    void disconnect();
+
+    /**
      * @return true when this transport accepted a connection (server mode),
      *         false when it initiated one (client mode)
      */
     boolean isServerMode();
+
+    /**
+     * @return the physical medium this transport carries bytes over
+     */
+    TransportKind getTransportType();
+
+    /**
+     * Identifies which physical medium a transport carries bytes over.
+     * Lets higher layers (e.g. HybridConnectionManager) tell the two transports apart.
+     */
+    enum TransportKind { WIFI, BLUETOOTH }
 
     /**
      * Registers the listener that receives unhandled control frames.

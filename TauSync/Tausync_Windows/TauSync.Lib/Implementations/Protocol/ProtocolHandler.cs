@@ -2,6 +2,7 @@ using System;
 using System.Text;
 using System.Threading.Tasks;
 using TauSync.Core;
+using TauSync.Implementations.Management;
 using TauSync.Interfaces;
 using TauSync.Models;
 
@@ -19,6 +20,11 @@ namespace TauSync.Implementations.Protocol
                 throw new ArgumentNullException(nameof(payload));
             if (targetId < 0 || targetId > 0xFFFFFF)
                 throw new ArgumentOutOfRangeException(nameof(targetId), "TargetID must fit in 3 bytes (0..0xFFFFFF).");
+
+            // Encrypt the payload only (no-op until the session key is active, and for empty payloads /
+            // the key-exchange frames). The header is built over the resulting ciphertext length and
+            // always stays plaintext, so the receiver routes by TargetID/flags without decrypting.
+            payload = ConnectionContext.Instance.EncryptPayload(payload);
 
             byte[] header = new byte[CoreConfig.TPackHeaderSize];
             int len = payload.Length;

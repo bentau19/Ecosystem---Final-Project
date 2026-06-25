@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Channels;
 using TauSync.Core;
 using TauSync.Implementations.Protocol;
+using TauSync.Implementations.Transport;
 using TauSync.Interfaces;
 using TauSync.Models;
 
@@ -16,7 +17,18 @@ namespace TauSync.Implementations.Management
     /// </summary>
     public class ConnectionManager : IConnectionManager
     {
-        private ITransport? _wifiTransport;
+        /// <summary>
+        /// Primary transport: control traffic and small payloads. In Wi-Fi-only mode this is the
+        /// <see cref="SocketTransport"/>; in hybrid mode it is the always-on Bluetooth transport.
+        /// </summary>
+        private ITransport? _primaryTransport;
+
+        /// <summary>Secondary (lazy Wi-Fi) transport in hybrid mode; null in single-transport mode.</summary>
+        private readonly ITransport? _secondaryTransport;
+
+        /// <summary>Hybrid session orchestrator; null in single-transport mode (no routing/handshake).</summary>
+        private readonly HybridSessionCoordinator? _hybrid;
+
         private readonly IProtocolHandler _protocolHandler;
         /// <summary>Per-word queue of incoming connections (when the other side sent REQ first).</summary>
         private readonly ConcurrentDictionary<string, Channel<Stream>> _incomingByWord = new();
@@ -27,17 +39,53 @@ namespace TauSync.Implementations.Management
         /// case-sensitive — matching how <see cref="ConnectionContext.RegisterService"/> keys.
         /// </summary>
         private readonly ConcurrentDictionary<string, byte> _inFlightWords = new();
+        /// <summary>
+        /// The last transport each stream actually sent data over. Routing is decided per send by the
+        /// caller's Wi-Fi flag, so a stream may use Bluetooth for one write and Wi-Fi for the next — but
+        /// a single send is never split across both links (its frames all ride the one chosen link,
+        /// staying ordered). This map lets <see cref="CompleteStream"/> send the FIN over the same link
+        /// as the stream's final data, so the FIN cannot overtake that data on the other transport.
+        /// </summary>
+        private readonly ConcurrentDictionary<int, ITransport> _lastTransportByStream = new();
+
+        /// <summary>
+        /// Pending transport-switch barriers, keyed by local channel id. When a stream switches the link
+        /// it sends on, the sender parks a <see cref="TaskCompletionSource"/> here and waits for the
+        /// peer's BARRIER_ACK before sending on the new link, so the new (faster) link's data cannot
+        /// overtake the old link's still-in-flight data at the receiver.
+        /// </summary>
+        private readonly ConcurrentDictionary<int, TaskCompletionSource> _pendingBarriers = new();
         private bool _disposed;
 
         public event EventHandler<Exception>? ErrorOccurred;
 
-        public ConnectionManager()
+        public ConnectionManager(bool hybrid = true)
         {
             _protocolHandler = new ProtocolHandler();
-            ITransport? transport = ConnectionContext.Instance.GetWifiTransport();
-            if (transport == null)
-                throw new InvalidOperationException("ConnectionContext has no transport.");
-            Initialize(transport);
+            var ctx = ConnectionContext.Instance;
+            if (hybrid)
+            {
+                var bt   = ctx.GetBluetoothTransport();
+                var wifi = ctx.GetWifiTransportAsSocket();
+                _primaryTransport   = bt;
+                _secondaryTransport = wifi;
+                _hybrid = new HybridSessionCoordinator(bt, wifi, _protocolHandler);
+                ctx.RegisterSessionControlListener(_hybrid.OnSessionControl);
+                ctx.RegisterChannelControlListener(OnChannelControl);
+            }
+            else
+            {
+                // Single-transport manager — used directly in Wi-Fi-only mode and by new_manager() to
+                // multiplex extra channels on the existing session. Bind to whichever transport is
+                // actually connected: in a hybrid session that is the always-on Bluetooth primary
+                // (Wi-Fi is lazy and usually down), otherwise the Wi-Fi socket. Binding to the lazy
+                // Wi-Fi link here is what made new_manager() fail with "Transport not connected"
+                // during a hybrid session.
+                ITransport bluetooth = ctx.GetBluetoothTransport();
+                Initialize(bluetooth != null && bluetooth.IsConnected()
+                    ? bluetooth
+                    : ctx.GetWifiTransport());
+            }
         }
 
         /// <inheritdoc />
@@ -46,29 +94,59 @@ namespace TauSync.Implementations.Management
 
             if (transport == null)
                 throw new ArgumentNullException(nameof(transport));
-            if (_wifiTransport != null)
+            if (_primaryTransport != null)
                 throw new InvalidOperationException("Already initialized.");
-            _wifiTransport = transport;
+            _primaryTransport = transport;
+        }
+
+        /// <summary>
+        /// Sets the Bluetooth connection-approval gate for a hybrid manager (no-op otherwise). The
+        /// callback runs on the server (PC) right after a client connects and before the session
+        /// completes; given the client's device name it returns true to accept or false to reject.
+        /// Must be set before <see cref="ConnectTransport"/>.
+        /// </summary>
+        public void SetBtApprovalCallback(Func<string?, bool>? approve)
+        {
+            if (_hybrid != null)
+                _hybrid.ApprovalCallback = approve;
         }
 
         /// <inheritdoc />
         public async Task ConnectTransport(string? targetId, int? timeoutSeconds = null)
         {
+            if (_hybrid != null)
+            {
+                // Hybrid: connect the Bluetooth primary directly (the manager owns its transports, so
+                // the singleton's internal transport is bypassed), then derive the session key, then
+                // run the BT_MAGIC handshake (now encrypted). Wi-Fi is connected lazily later.
+                ConnectionContext.Instance.Reset();
+                ConnectionContext.Instance.BeginKeyExchange();
+                await _primaryTransport!.Connect(targetId, timeoutSeconds).ConfigureAwait(false);
+                await ConnectionContext.Instance.CompleteKeyExchangeAsync(_primaryTransport).ConfigureAwait(false);
+                await _hybrid.StartBtSessionAsync().ConfigureAwait(false);
+                return;
+            }
+            // Wi-Fi-only: BeginKeyExchange before connecting so a peer KEY_EXCHANGE arriving immediately
+            // is handled synchronously; InitializeTransports calls Reset() then connects.
             await ConnectionContext.Instance.InitializeTransports(targetId, timeoutSeconds).ConfigureAwait(false);
+            await ConnectionContext.Instance.CompleteKeyExchangeAsync(ConnectionContext.Instance.GetWifiTransport()).ConfigureAwait(false);
         }
 
         /// <inheritdoc />
-        public bool IsConnected() => _wifiTransport?.IsConnected() ?? false;
+        public bool IsConnected() => _primaryTransport?.IsConnected() ?? false;
 
 
         public void Disconnect()  {
-            if (_disposed || !IsConnected()) {
+            if (_disposed) {
                     return;
             }
-            _wifiTransport!.Disconnect();
-            // Tear down routing/discovery state when the session ends so it cannot leak
-            // into a later reconnect (matches the Reset() done on InitializeTransports).
-            ConnectionContext.Instance.Reset();
+            // Disconnect every live transport. With ref-counting in ConnectionContext, channels are
+            // aborted and state reset only once the LAST transport drops — so a hybrid session ends
+            // cleanly when both Bluetooth and Wi-Fi are torn down.
+            if (_secondaryTransport?.IsConnected() == true)
+                _secondaryTransport.Disconnect();
+            if (_primaryTransport?.IsConnected() == true)
+                _primaryTransport.Disconnect();
         }
 
         /// <inheritdoc />
@@ -85,7 +163,21 @@ namespace TauSync.Implementations.Management
                     "Wait for it to resolve or use a distinct word.");
             try
             {
-                return await ConnectCore(wordTrimmed, timeoutSeconds).ConfigureAwait(false);
+                // Retry on timeout up to CoreConfig.ConnectRetryCount times. ConnectCore's finally
+                // cleans up all per-word state on each attempt, so each retry starts fresh.
+                // The in-flight guard stays held across retries so no concurrent same-word call slips in.
+                for (int attempt = 0; ; attempt++)
+                {
+                    try
+                    {
+                        return await ConnectCore(wordTrimmed, timeoutSeconds).ConfigureAwait(false);
+                    }
+                    catch (TimeoutException) when (attempt < CoreConfig.ConnectRetryCount && !_disposed)
+                    {
+                        // ConnectCore's finally already unregistered the service and removed the
+                        // word channel — retry from scratch.
+                    }
+                }
             }
             finally
             {
@@ -131,7 +223,7 @@ namespace TauSync.Implementations.Management
         {
             if (string.IsNullOrWhiteSpace(word))
                 throw new ArgumentException("Word cannot be null or empty.", nameof(word));
-            if (_wifiTransport == null || !_wifiTransport.IsConnected())
+            if (_primaryTransport == null || !_primaryTransport.IsConnected())
                 throw new InvalidOperationException("Transport not connected. ConnectTransport first.");
             if (_disposed)
                 throw new ObjectDisposedException(nameof(ConnectionManager));
@@ -186,7 +278,10 @@ namespace TauSync.Implementations.Management
             // here means Connect() could hang indefinitely despite the caller's timeout.
             Task<Stream> streamFromPeerRequest = ReadPeerStreamAsync(channel, timeoutCts.Token);
 
-            bool preferOwnPath = !ctx.IsTransportServerMode;
+            // The meeting-word handshake runs over the primary transport (Wi-Fi in single mode,
+            // Bluetooth in hybrid), so the race tiebreaker reads the primary's role, not the
+            // singleton context's internal transport.
+            bool preferOwnPath = !(_primaryTransport?.IsServerMode ?? ctx.IsTransportServerMode);
 
             if (preferOwnPath)
             {
@@ -286,7 +381,7 @@ namespace TauSync.Implementations.Management
 
                 byte[] body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(cancel));
                 byte[] frame = _protocolHandler.BuildFrame(CoreConfig.ControlChannelId, body, CoreConfig.FlagControl);
-                _ = _wifiTransport?.SendRaw(frame);
+                _ = _primaryTransport?.SendRaw(frame);
             }
             catch
             {
@@ -311,7 +406,7 @@ namespace TauSync.Implementations.Management
             try
             {
                 byte[] frame = BuildOkFrame(word, localId, peerSenderId);
-                _wifiTransport!.SendRaw(frame).GetAwaiter().GetResult();
+                _primaryTransport!.SendRaw(frame).GetAwaiter().GetResult();
 
                 var duplex = new DuplexStream(stream, localId, this);
                 channel.Writer.TryWrite(duplex);
@@ -352,7 +447,7 @@ namespace TauSync.Implementations.Management
 
             byte[] reqBody = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request));
             byte[] reqFrame = _protocolHandler.BuildFrame(CoreConfig.ControlChannelId, reqBody, CoreConfig.FlagControl);
-            await _wifiTransport!.SendRaw(reqFrame).ConfigureAwait(false);
+            await _primaryTransport!.SendRaw(reqFrame).ConfigureAwait(false);
         }
 
         private async Task<Stream> WaitForOkAndBuildStreamAsync(Task<byte[]> responseTask, ConnectionContext ctx, int localId, BackBufferedStream backStream)
@@ -370,12 +465,111 @@ namespace TauSync.Implementations.Management
             return new DuplexStream(backStream, localId, this);
         }
 
+        /// <summary>
+        /// Returns the transport for a single send, routing by the explicit <paramref name="preferWifi"/>
+        /// flag. A Wi-Fi send brings the link up on demand (running the WIFI_CONNECT handshake, or
+        /// reviving a link torn down for idle) and falls back to Bluetooth only if Wi-Fi cannot be
+        /// established; a Bluetooth send always uses the primary link. The chosen link is recorded as
+        /// the stream's last-used transport so its FIN follows the same socket (see
+        /// <see cref="CompleteStream"/>). Routing is per send by design — a stream may use Bluetooth for
+        /// one write and Wi-Fi for the next — but a single send is never split across both links.
+        /// </summary>
+        private ITransport ResolveSendTransport(int localId, bool preferWifi) =>
+            ResolveSendTransport(localId, preferWifi, async: false).GetAwaiter().GetResult();
+
+        private async Task<ITransport> ResolveSendTransportAsync(int localId, bool preferWifi) =>
+            await ResolveSendTransport(localId, preferWifi, async: true).ConfigureAwait(false);
+
+        private async Task<ITransport> ResolveSendTransport(int localId, bool preferWifi, bool async)
+        {
+            if (_hybrid == null)
+                return _primaryTransport!;  // single transport (Wi-Fi-only or Bluetooth-only)
+
+            ITransport chosen = preferWifi
+                ? (async ? await _hybrid.AcquireWifiOrFallbackAsync().ConfigureAwait(false)
+                         : _hybrid.AcquireWifiOrFallback())
+                : _primaryTransport!;
+
+            // If this stream is switching the link it sends on, drain the old link first so its
+            // in-flight data cannot be overtaken by the new (faster) link at the receiver.
+            if (_lastTransportByStream.TryGetValue(localId, out ITransport? last)
+                && !ReferenceEquals(last, chosen) && last.IsConnected())
+            {
+                await BarrierBeforeSwitchAsync(localId, last).ConfigureAwait(false);
+            }
+
+            // Record the link this stream last used so its FIN follows the same socket.
+            _lastTransportByStream[localId] = chosen;
+            return chosen;
+        }
+
+        /// <summary>
+        /// Drains the channel's <paramref name="oldTransport"/> before the stream starts sending on a
+        /// different link: emits a BARRIER on the old link (so it is ordered after that link's data) and
+        /// waits for the peer's BARRIER_ACK. Best-effort — a missing ACK times out
+        /// (<see cref="CoreConfig.BarrierAckTimeoutMs"/>) and the send proceeds rather than hanging.
+        /// </summary>
+        private async Task BarrierBeforeSwitchAsync(int localId, ITransport oldTransport)
+        {
+            int? peerId = ConnectionContext.Instance.GetPeerIdFor(localId);
+            if (peerId == null)
+                return;
+
+            var ack = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pendingBarriers[localId] = ack;
+            try
+            {
+                byte[] frame = _protocolHandler.BuildFrame(peerId.Value, Array.Empty<byte>(), CoreConfig.FlagBarrier);
+                await oldTransport.SendRaw(frame).ConfigureAwait(false);
+                await ack.Task.WaitAsync(TimeSpan.FromMilliseconds(CoreConfig.BarrierAckTimeoutMs)).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Timeout or send failure — proceed anyway (degrade to unordered, never hang).
+            }
+            finally
+            {
+                _pendingBarriers.TryRemove(localId, out _);
+            }
+        }
+
+        /// <summary>
+        /// Handles an inbound transport-switch barrier frame (dispatched out-of-band by
+        /// <see cref="ConnectionContext"/>). A BARRIER asks us to confirm we have drained this channel's
+        /// data on the link it arrived over: we reply BARRIER_ACK over the always-on Bluetooth primary
+        /// (the ACK only needs to arrive — its ordering versus data is irrelevant). A BARRIER_ACK
+        /// completes the sender's pending switch.
+        /// </summary>
+        private void OnChannelControl(int targetId, byte flags)
+        {
+            if ((flags & CoreConfig.FlagBarrierAck) != 0)
+            {
+                if (_pendingBarriers.TryGetValue(targetId, out TaskCompletionSource? ack))
+                    ack.TrySetResult();
+                return;
+            }
+            if ((flags & CoreConfig.FlagBarrier) != 0)
+            {
+                int? peerId = ConnectionContext.Instance.GetPeerIdFor(targetId);
+                if (peerId == null)
+                    return;
+                byte[] frame = _protocolHandler.BuildFrame(peerId.Value, Array.Empty<byte>(), CoreConfig.FlagBarrierAck);
+                _ = _primaryTransport?.SendRaw(frame);  // fire-and-forget; never block the receive loop
+            }
+        }
+
         /// <inheritdoc />
-        public void SendStreamData(int localId, byte[] buffer, int offset, int count)
+        public void SendStreamData(int localId, byte[] buffer, int offset, int count) =>
+            // No explicit hint (e.g. a raw DuplexStream write with no semantics): fall back to size —
+            // a payload at or above a full wire chunk is treated as large and routed over Wi-Fi.
+            SendStreamData(localId, buffer, offset, count, count > CoreConfig.HybridSmallThresholdBytes);
+
+        /// <inheritdoc />
+        public void SendStreamData(int localId, byte[] buffer, int offset, int count, bool preferWifi)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(ConnectionManager));
-            if (_wifiTransport == null)
+            if (_primaryTransport == null)
                 throw new InvalidOperationException("Transport not initialized.");
             if (buffer == null)
                 throw new ArgumentNullException(nameof(buffer));
@@ -388,6 +582,10 @@ namespace TauSync.Implementations.Management
             if (peerId == null)
                 throw new InvalidOperationException(
                     $"No peer route for localId {localId}. Handshake may not have completed; do not write before Connect(word) finishes.");
+
+            // Route this send to one transport (Wi-Fi when flagged, else Bluetooth) and send every wire
+            // frame over it, so the send is never split across links and its frames stay ordered.
+            ITransport transport = ResolveSendTransport(localId, preferWifi);
 
             int sent = 0;
             while (sent < count)
@@ -396,17 +594,22 @@ namespace TauSync.Implementations.Management
                 byte[] chunk = new byte[sliceLen];
                 Buffer.BlockCopy(buffer, offset + sent, chunk, 0, sliceLen);
                 byte[] frame = _protocolHandler.BuildFrame(peerId.Value, chunk, 0);
-                _wifiTransport.SendRaw(frame).GetAwaiter().GetResult();
+                transport.SendRaw(frame).GetAwaiter().GetResult();
                 sent += sliceLen;
             }
         }
 
         /// <inheritdoc />
-        public async Task SendStreamDataAsync(int localId, byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        public Task SendStreamDataAsync(int localId, byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            SendStreamDataAsync(localId, buffer, offset, count,
+                count > CoreConfig.HybridSmallThresholdBytes, cancellationToken);
+
+        /// <inheritdoc />
+        public async Task SendStreamDataAsync(int localId, byte[] buffer, int offset, int count, bool preferWifi, CancellationToken cancellationToken)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(ConnectionManager));
-            if (_wifiTransport == null)
+            if (_primaryTransport == null)
                 throw new InvalidOperationException("Transport not initialized.");
             if (buffer == null)
                 throw new ArgumentNullException(nameof(buffer));
@@ -419,6 +622,9 @@ namespace TauSync.Implementations.Management
             if (peerId == null)
                 throw new InvalidOperationException(
                     $"No peer route for localId {localId}. Handshake may not have completed; do not write before Connect(word) finishes.");
+
+            // Route this send to one transport and send every chunk over it (see SendStreamData).
+            ITransport transport = await ResolveSendTransportAsync(localId, preferWifi).ConfigureAwait(false);
 
             int sent = 0;
             while (sent < count)
@@ -428,7 +634,7 @@ namespace TauSync.Implementations.Management
                 byte[] chunk = new byte[sliceLen];
                 Buffer.BlockCopy(buffer, offset + sent, chunk, 0, sliceLen);
                 byte[] frame = _protocolHandler.BuildFrame(peerId.Value, chunk, 0);
-                await _wifiTransport.SendRaw(frame).ConfigureAwait(false);
+                await transport.SendRaw(frame).ConfigureAwait(false);
                 sent += sliceLen;
             }
         }
@@ -438,15 +644,30 @@ namespace TauSync.Implementations.Management
         {
             if (_disposed)
                 return;
-            if (_wifiTransport == null)
+            if (_primaryTransport == null)
                 return;
 
             int? peerId = ConnectionContext.Instance.GetPeerIdFor(localId);
             if (peerId != null)
             {
+                // Send FIN over the same link the stream last sent data on, so it cannot overtake that
+                // data on the other transport. Falls back to primary for a stream that was never written
+                // (empty close) or whose last link is gone (idle-disconnected and already drained).
+                ITransport finTransport = _lastTransportByStream.TryGetValue(localId, out ITransport? last) && last.IsConnected()
+                    ? last
+                    : _primaryTransport;
                 byte[] finFrame = _protocolHandler.BuildFrame(peerId.Value, Array.Empty<byte>(), CoreConfig.FlagFin);
-                _wifiTransport.SendRaw(finFrame).GetAwaiter().GetResult();
+                try
+                {
+                    finTransport.SendRaw(finFrame).GetAwaiter().GetResult();
+                }
+                catch
+                {
+                    // Best-effort: close must never throw. If the FIN cannot be delivered (link
+                    // dropping mid-close), the peer tears the channel down on its own.
+                }
             }
+            _lastTransportByStream.TryRemove(localId, out _);
             ConnectionContext.Instance.ReleaseId(localId);
         }
 
@@ -499,7 +720,14 @@ namespace TauSync.Implementations.Management
             foreach (Channel<Stream> ch in _incomingByWord.Values)
                 ch.Writer.Complete();
             _incomingByWord.Clear();
-            _wifiTransport?.Dispose();
+            if (_hybrid != null)
+            {
+                ConnectionContext.Instance.UnregisterSessionControlListener();
+                ConnectionContext.Instance.UnregisterChannelControlListener();
+                _hybrid.Dispose();
+            }
+            _secondaryTransport?.Dispose();
+            _primaryTransport?.Dispose();
         }
     }
 
@@ -507,7 +735,7 @@ namespace TauSync.Implementations.Management
     /// Duplex stream: read from a backing stream (e.g. BackBufferedStream), write sends TPack with TargetID = peer for the given localId.
     /// On dispose, sends FIN and releases the local ID.
     /// </summary>
-    internal sealed class DuplexStream : Stream
+    public sealed class DuplexStream : Stream
     {
         private readonly Stream _readStream;
         private readonly int _localId;
@@ -548,28 +776,35 @@ namespace TauSync.Implementations.Management
         public override void Write(byte[] buffer, int offset, int count)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
-            if (_finSent) return;
-            int sent = 0;
-            while (sent < count)
-            {
-                int slice = Math.Min(CoreConfig.StreamChunkSize, count - sent);
-                _connectionManager.SendStreamData(_localId, buffer, offset + sent, slice);
-                sent += slice;
-            }
+            if (_finSent || count <= 0) return;
+            // A raw stream write carries no file/string semantics — route by size: a payload at or
+            // above a full wire chunk is large → Wi-Fi, smaller → Bluetooth. The manager chunks for
+            // the wire after choosing the link.
+            _connectionManager.SendStreamData(_localId, buffer, offset, count,
+                count > CoreConfig.HybridSmallThresholdBytes);
+        }
+
+        /// <summary>
+        /// Sends over an explicitly chosen transport in hybrid mode: <paramref name="preferWifi"/>
+        /// true → Wi-Fi, false → Bluetooth. The Python SDK calls this so each high-level method routes
+        /// by its own semantics (write_file → Wi-Fi, write_string → Bluetooth) instead of by payload
+        /// size; the plain <see cref="Write(byte[],int,int)"/> stays size-based for raw byte writes.
+        /// </summary>
+        public void Write(byte[] buffer, int offset, int count, bool preferWifi)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
+            if (_finSent || count <= 0) return;
+            _connectionManager.SendStreamData(_localId, buffer, offset, count, preferWifi);
         }
 
         public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(DuplexStream));
-            if (_finSent) return;
-            int sent = 0;
-            while (sent < count)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                int slice = Math.Min(CoreConfig.StreamChunkSize, count - sent);
-                await _connectionManager.SendStreamDataAsync(_localId, buffer, offset + sent, slice, cancellationToken).ConfigureAwait(false);
-                sent += slice;
-            }
+            if (_finSent || count <= 0) return;
+            // Same rationale as Write — route by size, chunk inside SendStreamDataAsync.
+            await _connectionManager.SendStreamDataAsync(_localId, buffer, offset, count,
+                    count > CoreConfig.HybridSmallThresholdBytes, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         public override void Flush() => _readStream?.Flush();

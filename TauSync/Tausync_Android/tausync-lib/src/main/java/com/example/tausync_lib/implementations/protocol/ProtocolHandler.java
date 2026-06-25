@@ -1,6 +1,7 @@
 package com.example.tausync_lib.implementations.protocol;
 
 import com.example.tausync_lib.core.CoreConfig;
+import com.example.tausync_lib.implementations.management.ConnectionContext;
 import com.example.tausync_lib.interfaces.IProtocolHandler;
 import com.example.tausync_lib.models.TransferRequest;
 import com.google.gson.Gson;
@@ -26,6 +27,11 @@ public class ProtocolHandler implements IProtocolHandler {
         if (targetId < 0 || targetId > 0xFFFFFF) {
             throw new IllegalArgumentException("TargetID must fit in 3 bytes (0..0xFFFFFF), got: " + targetId);
         }
+
+        // Encrypt the payload only (no-op until the session key is active, and for empty payloads / the
+        // key-exchange frames). The header is built over the resulting ciphertext length and always stays
+        // plaintext, so the receiver routes by TargetID/flags without decrypting.
+        payload = ConnectionContext.getInstance().encryptPayload(payload);
 
         int len = payload.length;
         byte[] frame = new byte[CoreConfig.TPACK_HEADER_SIZE + len];

@@ -2,12 +2,15 @@ package com.example.tausync_lib.sdk;
 
 import static android.content.ContentValues.TAG;
 
+import android.content.Context;
 import android.util.Log;
 
 import com.example.tausync_lib.core.CoreConfig;
 import com.example.tausync_lib.implementations.management.ConnectionContext;
 import com.example.tausync_lib.implementations.management.ConnectionManager;
 import com.example.tausync_lib.implementations.management.TauSyncStream;
+import com.example.tausync_lib.implementations.transport.BluetoothTransport;
+import com.example.tausync_lib.implementations.transport.SocketTransport;
 
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -81,7 +84,13 @@ public final class TauSync {
         }
 
         try {
-            ConnectionContext.getInstance().initializeTransports(null, timeoutSeconds);
+            ConnectionContext ctx = ConnectionContext.getInstance();
+            ctx.initializeTransports(null, timeoutSeconds);
+            // Drive the ECDH key exchange (send our public key, await the peer's, derive the
+            // session key) before any data flows. initializeTransports only arms it via
+            // beginKeyExchange(); without this the peer blocks awaiting our key and the encrypted
+            // session never establishes.
+            ctx.completeKeyExchange(ctx.getWifiTransport());
             manager = new ConnectionManager();
         } catch (Exception e) {
             synchronized (roleLock) {
@@ -149,7 +158,13 @@ public final class TauSync {
         }
 
         try {
-            ConnectionContext.getInstance().initializeTransports(trimmed, timeoutSeconds);
+            ConnectionContext ctx = ConnectionContext.getInstance();
+            ctx.initializeTransports(trimmed, timeoutSeconds);
+            // Drive the ECDH key exchange (send our public key, await the peer's, derive the
+            // session key) before any data flows. initializeTransports only arms it via
+            // beginKeyExchange(); without this the peer blocks awaiting our key and the encrypted
+            // session never establishes.
+            ctx.completeKeyExchange(ctx.getWifiTransport());
             manager = new ConnectionManager();
         } catch (Exception e) {
             synchronized (roleLock) {
@@ -158,6 +173,95 @@ public final class TauSync {
             }
             throw new RuntimeException("Failed to connect to " + trimmed, e);
         }
+    }
+
+    /**
+     * Connects in hybrid Bluetooth + Wi-Fi mode (client side, blocking, no timeout).
+     *
+     * @see #connectHybrid(Context, String, Integer)
+     */
+    public void connectHybrid(Context context, String bluetoothMac) {
+        connectHybrid(context, bluetoothMac, null);
+    }
+
+    /**
+     * Connects in hybrid Bluetooth + Wi-Fi mode (client side, blocking).
+     *
+     * <p>Bluetooth is the always-on primary link (control traffic + small payloads); Wi-Fi is
+     * brought up lazily only when a large payload needs it. The Wi-Fi server IP is discovered over
+     * Bluetooth during the BT_MAGIC handshake, so the caller never has to supply it — read it back
+     * with {@link #getPeerWifiIp()} once this returns.
+     *
+     * <p>Android is always the Bluetooth RFCOMM client, so {@code bluetoothMac} is the paired
+     * Windows server's MAC address. The device must already be bonded.
+     *
+     * @param context        Android context used to obtain the Bluetooth adapter
+     * @param bluetoothMac   the server's Bluetooth MAC address (e.g. "AA:BB:CC:DD:EE:FF")
+     * @param timeoutSeconds max seconds to wait for the BT connect + handshake; null = library default
+     * @throws IllegalArgumentException if the MAC is null/blank
+     * @throws IllegalStateException    if the transport is already established in another role/mode
+     * @throws RuntimeException         if the Bluetooth connect or handshake fails
+     */
+    public void connectHybrid(Context context, String bluetoothMac, Integer timeoutSeconds) {
+        checkNotDisposed();
+        if (context == null) {
+            throw new IllegalArgumentException("context must not be null");
+        }
+        if (bluetoothMac == null || bluetoothMac.trim().isEmpty()) {
+            throw new IllegalArgumentException("bluetoothMac must not be null or blank");
+        }
+        String trimmedMac = bluetoothMac.trim();
+
+        synchronized (roleLock) {
+            if (globalRole == ROLE_SERVER) {
+                throw new IllegalStateException(
+                        "Cannot connectHybrid() -- transport is already in server mode. "
+                                + "The transport is a singleton; you cannot switch roles.");
+            }
+            if (globalRole == ROLE_CLIENT) {
+                throw new IllegalStateException(
+                        "Cannot connectHybrid() -- transport is already connected (to "
+                                + globalTarget + "). The transport is a singleton.");
+            }
+            globalRole = ROLE_CLIENT;
+            globalTarget = "bt:" + trimmedMac;
+        }
+
+        try {
+            // Bluetooth is the primary (always-on) link; the singleton's Wi-Fi SocketTransport is the
+            // lazy secondary. The hybrid ConnectionManager connects BT itself and runs the BT_MAGIC
+            // handshake — which is also where the peer's Wi-Fi IP is discovered.
+            BluetoothTransport bluetooth = new BluetoothTransport(context);
+            SocketTransport wifi = ConnectionContext.getInstance().getWifiTransportAsSocket();
+            ConnectionManager hybridManager = new ConnectionManager(bluetooth, wifi);
+            hybridManager.connectTransport(trimmedMac, timeoutSeconds).get();
+            manager = hybridManager;
+        } catch (Exception e) {
+            synchronized (roleLock) {
+                globalRole = ROLE_NONE;
+                globalTarget = null;
+            }
+            throw new RuntimeException("Failed to connect over Bluetooth to " + trimmedMac, e);
+        }
+    }
+
+    /**
+     * Returns the peer's Wi-Fi IPv4 address as discovered over Bluetooth during the hybrid
+     * handshake, or {@code null} if it is not (yet) known. Available right after
+     * {@link #connectHybrid(Context, String)} completes — no manual IP entry required.
+     */
+    public String getPeerWifiIp() {
+        return ConnectionContext.getInstance().getPeerWifiHost();
+    }
+
+    /**
+     * Returns true when the lazy Wi-Fi link is currently up. In hybrid mode this flips to true
+     * after the first large payload brings Wi-Fi online and back to false after the idle teardown,
+     * so tests can assert size-based routing. Always reflects the singleton's Wi-Fi transport.
+     */
+    public boolean isWifiActive() {
+        SocketTransport wifi = ConnectionContext.getInstance().getWifiTransportAsSocket();
+        return wifi != null && wifi.isConnected();
     }
 
     /**

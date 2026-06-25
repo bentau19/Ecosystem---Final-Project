@@ -1,9 +1,21 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <!-- Windows 10 build 19041 target so the WinRT Bluetooth/RFCOMM APIs used by
+         BluetoothTransport and BleAdvertiser are projected and reachable. -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Output directly into the Python package's dll/ folder so that
+         'dotnet build' + 'pip install TauSync/windows' is the full workflow
+         with no manual DLL copying step. -->
+    <OutputPath>..\..\windows\tausync_py\dll</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <!-- Copy all NuGet runtime assemblies (including WinRT projection DLLs) to
+         OutputPath so the CLR can resolve them when pythonnet loads TauSync.Lib.dll. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
 </Project>

@@ -13,7 +13,7 @@ the two files stay in lock-step:
 
 | Side | File |
 |------|------|
-| PC (server) | `desktop/tau_sync_tests/tests/cursor_test/android_test_server.py` |
+| PC (server) | `TauSync\windows\tau_sync_tests\tests\cursor_test\android_test_server.py` |
 | Android (client) | `android/app/src/main/java/com/example/android/testing/TestTauSyncActivity.java` |
 
 ---
@@ -23,8 +23,12 @@ the two files stay in lock-step:
 Run from the project root:
 
 ```
-python desktop/tau_sync_tests/tests/cursor_test/android_test_server.py
+python TauSync\windows\tau_sync_tests\tests\cursor_test\android_test_server.py
 ```
+RESET:
+& "C:\Users\User\AppData\Local\Android\Sdk\platform-tools\adb.exe" shell pm clear com.example.android
+approved_devices.json
+
 
 A **GUI window** opens ("TauSync PC Test Console") — no command-line needed. It
 is the TauSync **server**. The status line shows `Waiting for Android client to
@@ -65,6 +69,92 @@ on the console to run the whole suite again.
 2. The PC server prints its IP, or find it with `ipconfig` (Wi-Fi adapter).
 3. In the Android app, enter the PC's IP address in the **Server IP** field.
 4. Tap **Connect**.
+
+---
+
+## Hybrid (Bluetooth) Mode — Pairing over Bluetooth (Phase 4)
+
+Hybrid mode connects over **Bluetooth** first (always-on link for control + small payloads) and
+brings **Wi-Fi** up lazily only for large payloads. The Wi-Fi IP is discovered over Bluetooth, so you
+never type it. Phase 4 also removes the need to type the PC's Bluetooth MAC — the phone finds the PC
+by scanning for a BLE beacon that the PC broadcasts.
+
+### PC side
+1. Start the test console and click **"Hybrid (Bluetooth) Server"** (mutually exclusive with
+   "Wi-Fi Server" — the transport is a process-wide singleton).
+2. Optionally set **"Device name shown on phone"** before clicking the button — this is the label that
+   will appear in the phone's confirm dialog. Defaults to the PC's computer name.
+3. Selecting this mode starts a **BLE beacon** (manufacturer-specific data carrying the PC's Classic
+   Bluetooth MAC + name). The beacon stops once the phone connects.
+4. **First connection from a new phone:** a pop-up appears — **"Accept / Reject"**. Click Accept to
+   allow. The phone is then remembered and future connections are silent (no prompt).
+
+### Android side — first launch (no saved device)
+1. Leave the **Bluetooth MAC** field **blank**.
+2. Tap **"Connect (Hybrid BT)"**. The app scans for nearby TauSync PCs (up to 15 s).
+3. A dialog appears: **"Found '<PC name>'? Connect over Bluetooth?"** — tap **Connect**.
+4. The OS may show a numeric comparison prompt on both devices to confirm the bond (first pair only).
+5. The PC console shows the **Accept / Reject** prompt — click **Accept**.
+6. The app bonds the device, **saves its MAC**, and connects. Done.
+
+### Android side — later launches
+- The saved device is reused automatically — **no scan, no dialog**. Just tap **"Connect (Hybrid BT)"**.
+- The PC skips its approval prompt for remembered phones.
+
+### Bond lost / re-pairing
+- If you unpair the PC from Android's system Bluetooth settings, the next connect detects the missing
+  bond, clears the saved address, and **re-starts the BLE scan automatically** so you can re-pair.
+
+### Manual override / fallback
+- Type the PC's Bluetooth MAC (`AA:BB:CC:DD:EE:FF`) into the field to **skip BLE discovery** and
+  connect directly. Useful when the PC lacks a BLE radio or for scripted testing.
+
+### Running the hybrid tests
+Once connected, tap **"Run Hybrid Tests (Phase 3)"** to run the H1–H7 suite over the paired link
+(BLE pairing is the precondition for this run). H6 is slow (~65 s); H7 is semi-manual (disrupt
+Bluetooth during the announced 30 s drop window).
+
+### Resetting saved state — re-test the full BLE discovery pipeline
+
+The app and console remember paired devices so day-to-day use is seamless. To force the full
+first-time flow (BLE scan → in-app dialog → bond → PC approval) again, clear their memory:
+
+#### 1. Clear the phone's saved MAC (so it scans instead of connecting directly)
+
+**Quickest — via adb** (phone connected via USB, USB debugging on):
+```
+adb shell pm clear com.example.android
+```
+This clears all app data for the test app (SharedPreferences, cached files). The system-level
+Bluetooth bond is NOT affected — the OS still considers the devices paired.
+
+**Alternative — on the phone itself:**
+Settings → Apps → [TauSync test app] → Storage → **Clear Data**
+
+#### 2. Clear the PC's approved-devices list (so the Accept/Reject prompt shows again)
+
+Delete (or empty) the file next to the test console script:
+```
+TauSync\windows\tau_sync_tests\tests\cursor_test\approved_devices.json
+```
+You can just delete it — the console recreates it on the next approval.
+
+#### 3. (Optional) Remove the Bluetooth bond — to re-test the OS pairing confirmation
+
+Only needed if you want to see the numeric comparison prompt again. Without this step the devices
+are still bonded, so `createBond()` succeeds silently — the BLE scan and in-app dialogs still
+run normally, only the OS passkey step is skipped.
+
+- **Phone:** Settings → Bluetooth → find the PC → **Forget** (or "Unpair")
+- **PC:** Settings → Bluetooth & devices → Devices → find the phone → **Remove device**
+
+#### Summary table
+
+| What to reset | Command / action | Effect |
+|---|---|---|
+| Phone saved MAC | `adb shell pm clear com.example.android` | Forces BLE scan + in-app dialog on next tap |
+| PC approved list | Delete `approved_devices.json` | Forces the Accept/Reject prompt on PC |
+| Bluetooth bond | Forget on both sides (Settings) | Forces the OS numeric-comparison prompt |
 
 ---
 

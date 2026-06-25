@@ -35,6 +35,23 @@ namespace TauSync.Implementations.Transport
         private readonly object _stateLock = new object();
         private readonly IProtocolHandler _protocolHandler;
 
+        /// <summary>True only while an explicit <see cref="Disconnect"/> is tearing the transport down. Distinguishes a deliberate close (ends the session) from an unexpected drop (triggers reconnect).</summary>
+        private volatile bool _intentionalClose;
+
+        /// <summary>True once this transport has been counted in <see cref="ConnectionContext"/>, so the matching disconnect decrements exactly once.</summary>
+        private bool _counted;
+
+        /// <summary>Cancels the background reconnect loop when the app explicitly disconnects.</summary>
+        private CancellationTokenSource? _reconnectCts;
+
+        /// <summary>
+        /// Completed while a live connection exists; reset to an incomplete state during a
+        /// reconnect so a send issued mid-drop waits for the link to come back instead of
+        /// failing. <see cref="SendRaw"/> awaits this before writing.
+        /// </summary>
+        private volatile TaskCompletionSource _sendGate =
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public static readonly int DefaultPort = CoreConfig.DefaultPort;
 
         public int Port { get; set; } = DefaultPort;
@@ -45,7 +62,22 @@ namespace TauSync.Implementations.Transport
         /// <summary>Whether this transport accepted a connection (server) rather than initiated one (client).</summary>
         public bool IsServerMode => _isServerMode;
 
+        /// <summary>
+        /// UTC ticks of the last frame sent or received. The hybrid coordinator reads this to decide
+        /// when the Wi-Fi link has been idle long enough to disconnect. Initialised to "now" so a
+        /// freshly connected link is not immediately considered idle.
+        /// </summary>
+        private long _lastActivityTicks = DateTime.UtcNow.Ticks;
+
+        /// <summary>UTC ticks of the last send or receive on this transport (see <see cref="_lastActivityTicks"/>).</summary>
+        public long LastActivityTicks => Volatile.Read(ref _lastActivityTicks);
+
+        private void MarkActivity() => Volatile.Write(ref _lastActivityTicks, DateTime.UtcNow.Ticks);
+
         public event EventHandler<byte[]>? OnDataReceived;
+
+        /// <inheritdoc />
+        public TransportKind TransportType => TransportKind.WiFi;
 
         /// <summary>Uses the given protocol handler for framing; if null, uses default <see cref="ProtocolHandler"/>.</summary>
         public SocketTransport(IProtocolHandler? protocolHandler = null)
@@ -61,6 +93,11 @@ namespace TauSync.Implementations.Transport
 
             if (_isConnected)
                 Disconnect();
+
+            // Re-arm for a fresh session: a prior Disconnect() left _intentionalClose set,
+            // and the gate must start incomplete until this connection succeeds.
+            _intentionalClose = false;
+            _sendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
             bool wantServer = string.IsNullOrWhiteSpace(targetId);
             _isServerMode = wantServer;
@@ -165,6 +202,7 @@ namespace TauSync.Implementations.Transport
                     _isConnected = true;
                     _receiveCts = new CancellationTokenSource();
                     _receiveTask = Task.Run(() => ReceiveLoopAsync(_receiveCts.Token));
+                    MarkInitialConnection();
                     connectedTcs.TrySetResult();
                 }
                 catch (SocketException)
@@ -242,6 +280,10 @@ namespace TauSync.Implementations.Transport
                 throw new ArgumentNullException(nameof(data));
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SocketTransport));
+
+            // Block briefly if an unexpected drop is being healed, so a write issued during
+            // the reconnect window resumes on the new link instead of failing.
+            await WaitForConnectionAsync().ConfigureAwait(false);
             if (!_isConnected || _stream == null)
                 throw new InvalidOperationException("Not connected.");
 
@@ -250,6 +292,7 @@ namespace TauSync.Implementations.Transport
             {
                 await _stream.WriteAsync(data, 0, data.Length).ConfigureAwait(false);
                 await _stream.FlushAsync().ConfigureAwait(false);
+                MarkActivity();
             }
             finally
             {
@@ -263,31 +306,55 @@ namespace TauSync.Implementations.Transport
             return _isConnected && !_disposed && _tcpClient?.Connected == true;
         }
 
+        /// <summary>
+        /// Marks this transport connected exactly once and counts it in
+        /// <see cref="ConnectionContext"/>. Called only on the FIRST successful connect —
+        /// reconnects after a drop reuse the same count, so the session is never double-counted.
+        /// </summary>
+        private void MarkInitialConnection()
+        {
+            if (!_counted)
+            {
+                _counted = true;
+                ConnectionContext.Instance.NotifyTransportConnected();
+            }
+            _sendGate.TrySetResult();
+        }
+
+        /// <summary>
+        /// Explicit, app-initiated teardown. Ends the session for this transport: stops any
+        /// reconnect attempt and notifies <see cref="ConnectionContext"/>, which aborts the
+        /// open channels and resets state only if this was the last live transport.
+        /// </summary>
         public void Disconnect()
         {
-            // Capture every disposable into locals and null the fields up front —
-            // atomically with clearing _isConnected — so a concurrent server-mode
-            // Connect() can never observe _isConnected==false while _tcpListener /
-            // _connectionTcs are still the stale (completed) ones from the previous
-            // accept. That stale pair is what let ConnectTransport("") return instantly
-            // with no live socket (the "phantom connect"). The slow Stop/close/wait then
-            // runs on the locals, outside the lock.
+            // Explicit close ends the session (an unexpected drop reconnects instead). Guard on
+            // _intentionalClose so a second call — or one racing a mid-reconnect window where
+            // _isConnected is already false — is a no-op yet still cancels the reconnect loop.
+            if (_intentionalClose) return;
+            _intentionalClose = true;
+
+            // Capture every disposable into locals and null the fields up front, atomically under
+            // _stateLock, so a concurrent server-mode Connect() can never observe a stale completed
+            // _connectionTcs / still-bound _tcpListener from the previous accept (the "phantom
+            // connect"). The slow drains then run on the locals, outside the lock.
             TcpClient? client;
             TcpListener? listener;
             Stream? stream;
             CancellationTokenSource? receiveCts;
             CancellationTokenSource? timeoutCts;
+            CancellationTokenSource? reconnectCts;
             Task? receiveTask;
             Task? acceptTask;
             lock (_stateLock)
             {
-                if (!_isConnected) return;
                 _isConnected = false;
                 client = _tcpClient;
                 listener = _tcpListener;
                 stream = _stream;
                 receiveCts = _receiveCts;
                 timeoutCts = _timeoutCts;
+                reconnectCts = _reconnectCts;
                 receiveTask = _receiveTask;
                 acceptTask = _acceptTask;
                 _tcpClient = null;
@@ -295,33 +362,156 @@ namespace TauSync.Implementations.Transport
                 _stream = null;
                 _receiveCts = null;
                 _timeoutCts = null;
+                _reconnectCts = null;
                 _receiveTask = null;
                 _acceptTask = null;
                 _connectionTcs = null;
 
-                // Free the port and unblock the accept loop INSIDE the lock (non-blocking
-                // ops only) so a re-arm (StartListeningInternal, which takes the same lock)
-                // can never bind port 8888 while this listener still holds it
-                // (WSAEADDRINUSE / 10048).  Deferring Stop() to after the drains below left
-                // a window where _tcpListener was null but the socket was still bound.
+                // Cancel reconnect + receive and free the port INSIDE the lock (non-blocking ops
+                // only) so a re-arm (StartListeningInternal, same lock) can never bind port 8888
+                // while this listener still holds it (WSAEADDRINUSE / 10048).
+                reconnectCts?.Cancel();
                 receiveCts?.Cancel();
                 listener?.Stop();
             }
 
-            // Slow drains run on the captured locals, OUTSIDE the lock — never block while
-            // holding it, or a listen() parked waiting for a peer would deadlock disconnect().
+            // Release any sender parked on the gate; it will see _isConnected == false and throw.
+            _sendGate.TrySetResult();
+
+            // Slow drains run on the captured locals, OUTSIDE the lock — never block while holding
+            // it, or a listen() parked waiting for a peer would deadlock disconnect().
             try { receiveTask?.Wait(TimeSpan.FromSeconds(2)); } catch { }
             try { acceptTask?.Wait(TimeSpan.FromSeconds(1)); } catch { }
             stream?.Close();
             client?.Close();
 
-            // Unblock every reader stuck on an open channel stream. The peer is gone, so no
-            // FIN will ever arrive — deliver a synthetic FIN to each handler so blocked
-            // Read() calls return EOF instead of hanging forever.
-            ConnectionContext.Instance.AbortAllChannels();
+            // Decrement the transport count exactly once. Channels are aborted (synthetic FIN
+            // so blocked Read() calls return EOF) and state reset only when the count hits zero.
+            if (_counted)
+            {
+                _counted = false;
+                ConnectionContext.Instance.NotifyTransportDisconnected();
+            }
 
             receiveCts?.Dispose();
             timeoutCts?.Dispose();
+            reconnectCts?.Dispose();
+        }
+
+        /// <summary>
+        /// Handles the receive loop exiting on a broken link. An explicit disconnect ends the
+        /// session; an unexpected drop instead tears down only the dead socket — keeping the
+        /// channels, handlers, and transport count intact — and starts reconnecting so the
+        /// session resumes transparently.
+        /// </summary>
+        private void HandleConnectionDropped()
+        {
+            if (_intentionalClose || _disposed) return;
+            if (!_isConnected) return;
+            _isConnected = false;
+
+            // Fresh incomplete gate so sends block until the link is back.
+            _sendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            try { _stream?.Close(); } catch { }
+            try { _tcpClient?.Close(); } catch { }
+            _stream = null;
+            _tcpClient = null;
+
+            StartReconnectLoop();
+        }
+
+        private void StartReconnectLoop()
+        {
+            _reconnectCts?.Dispose();
+            _reconnectCts = new CancellationTokenSource();
+            CancellationToken ct = _reconnectCts.Token;
+            _ = Task.Run(() => ReconnectLoopAsync(ct));
+        }
+
+        /// <summary>
+        /// Retries the connection with exponential back-off until it succeeds or an explicit
+        /// disconnect cancels it. On success it restarts the receive loop and opens the send
+        /// gate, all on the same channel handlers — the layers above never see the gap.
+        /// </summary>
+        private async Task ReconnectLoopAsync(CancellationToken ct)
+        {
+            int delayMs = CoreConfig.ReconnectInitialDelayMs;
+            while (!ct.IsCancellationRequested && !_disposed && !_intentionalClose)
+            {
+                try
+                {
+                    bool reconnected = _isServerMode
+                        ? await TryReListenAsync(ct).ConfigureAwait(false)
+                        : await TryReconnectClientAsync(ct).ConfigureAwait(false);
+
+                    if (reconnected)
+                    {
+                        _isConnected = true;
+                        _receiveCts = new CancellationTokenSource();
+                        _receiveTask = Task.Run(() => ReceiveLoopAsync(_receiveCts.Token));
+                        _sendGate.TrySetResult();
+                        return;
+                    }
+                }
+                catch (OperationCanceledException) { return; }
+                catch { /* transient failure — fall through to back-off and retry */ }
+
+                try { await Task.Delay(delayMs, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
+                delayMs = Math.Min(delayMs * 2, CoreConfig.ReconnectMaxDelayMs);
+            }
+        }
+
+        private async Task<bool> TryReconnectClientAsync(CancellationToken ct)
+        {
+            var client = new TcpClient();
+            try
+            {
+                await client.ConnectAsync(_targetId!, Port).WaitAsync(ct).ConfigureAwait(false);
+                _tcpClient = client;
+                _stream = client.GetStream();
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                client.Close();
+                throw;
+            }
+            catch
+            {
+                client.Close();
+                return false;
+            }
+        }
+
+        private async Task<bool> TryReListenAsync(CancellationToken ct)
+        {
+            // The listener opened for the initial accept stays bound for the transport's
+            // lifetime, so reuse it. Re-binding a fresh listener to the same port would
+            // fail with "address already in use".
+            if (_tcpListener == null)
+            {
+                _tcpListener = new TcpListener(System.Net.IPAddress.Any, Port);
+                _tcpListener.Start();
+            }
+
+            try
+            {
+                TcpClient client = await _tcpListener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
+                _tcpClient = client;
+                _stream = client.GetStream();
+                return true;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch { return false; }
+        }
+
+        private async Task WaitForConnectionAsync()
+        {
+            Task gate = _sendGate.Task;
+            if (gate.IsCompleted) return;
+            await gate.WaitAsync(TimeSpan.FromMilliseconds(CoreConfig.SendReconnectWaitMs)).ConfigureAwait(false);
         }
 
         private async Task AcceptLoopAsync(CancellationToken ct)
@@ -335,6 +525,7 @@ namespace TauSync.Implementations.Transport
                     _isConnected = true;
                     _receiveCts = new CancellationTokenSource();
                     _receiveTask = Task.Run(() => ReceiveLoopAsync(_receiveCts.Token));
+                    MarkInitialConnection();
                     _connectionTcs?.TrySetResult();
                     break;
                 }
@@ -399,14 +590,14 @@ namespace TauSync.Implementations.Transport
                     if (!result.success)
                         break;
 
+                    MarkActivity();
                     DispatchFrame(result.targetId, result.payload, result.flags, result.rawFrame);
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception) { break; }
             }
 
-            if (_isConnected)
-                Disconnect();
+            HandleConnectionDropped();
         }
 
         private async Task<ReadFrameResult> TryReadNextFrameAsync(CancellationToken ct, int headerSize, byte[] headerBuffer)

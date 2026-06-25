@@ -53,6 +53,18 @@ namespace TauSync.Interfaces
         Task SendStreamDataAsync(int localId, byte[] buffer, int offset, int count, CancellationToken cancellationToken);
 
         /// <summary>
+        /// Sends data over a logical stream, choosing the transport explicitly in hybrid
+        /// (Bluetooth + Wi-Fi) mode. <paramref name="preferWifi"/> true routes this send over the
+        /// Wi-Fi link — brought up on demand (and revived after an idle teardown), falling back to
+        /// Bluetooth only if Wi-Fi cannot connect; false routes it over Bluetooth. Ignored in
+        /// single-transport mode. Routing is per send: a single send is never split across links.
+        /// </summary>
+        void SendStreamData(int localId, byte[] buffer, int offset, int count, bool preferWifi);
+
+        /// <summary>Async variant of <see cref="SendStreamData(int, byte[], int, int, bool)"/>.</summary>
+        Task SendStreamDataAsync(int localId, byte[] buffer, int offset, int count, bool preferWifi, CancellationToken cancellationToken);
+
+        /// <summary>
         /// Completes a logical stream by sending FIN and releasing local resources.
         /// </summary>
         void CompleteStream(int localId);
