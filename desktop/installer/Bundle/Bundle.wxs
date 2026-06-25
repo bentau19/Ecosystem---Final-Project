@@ -30,16 +30,18 @@
                      Path="[ProgramFiles64Folder]dotnet\shared\Microsoft.NETCore.App\8.0.16\System.Private.CoreLib.dll"
                      Result="exists" />
 
-    <!-- OBS Studio: Inno Setup registers uninstall info under the literal
-         '<AppId>_is1' subkey in the native 64-bit registry view, so Bitness must be
-         always64 or the search reads the wrong (32-bit) hive and never matches. -->
+    <!-- OBS Studio: the OBS installer is NSIS, which registers its uninstall info
+         under the product-name subkey 'OBS Studio' (NOT the Inno-style
+         '<AppId>_is1'). The NSIS installer is a 32-bit process, so on 64-bit
+         Windows the key lands in the WOW6432Node (32-bit) view — Bitness must be
+         always32 or the search reads the wrong hive and never matches. -->
     <util:RegistrySearch Id="SearchObsStudio"
                          Variable="ObsFound"
                          Root="HKLM"
-                         Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OBS-Studio_is1"
+                         Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OBS Studio"
                          Value="DisplayName"
                          Result="exists"
-                         Bitness="always64" />
+                         Bitness="always32" />
 
     <!--
       OFFLINE INSTALLER.

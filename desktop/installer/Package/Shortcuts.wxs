@@ -42,9 +42,17 @@
         <!--
             Registry key — required as KeyPath for shortcut components.
             Tracks this component for clean install/repair/uninstall.
+
+            MUST be HKMU (not HKCU): this is a perMachine package, and the bundle
+            uninstalls the MSI elevated as LocalSystem. With an HKCU keypath the
+            value would be written under the installing user's hive but looked up
+            under SYSTEM's hive at uninstall — not found — so MSI would treat the
+            component as absent and LEAVE the desktop/Start-Menu shortcuts behind.
+            HKMU resolves to HKLM for perMachine (and HKCU for perUser), so the
+            keypath is found in any context and the shortcuts are removed cleanly.
         -->
         <RegistryValue
-          Root="HKCU"
+          Root="HKMU"
           Key="Software\SyncDose"
           Name="installed"
           Type="integer"
