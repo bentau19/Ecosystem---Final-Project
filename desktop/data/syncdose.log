@@ -1327,3 +1327,4 @@
 2026-06-25 19:33:49 [DEBUG] services.connectivity: _stop: tearing down transport and draining workers
 2026-06-25 19:33:56 [DEBUG] services.connectivity: _listen: listen timed out — retrying
 2026-06-25 19:33:57 [DEBUG] services.connectivity: _stop: teardown complete — device_disconnected emitted
+2026-06-26 11:31:41 [INFO] app.single_instance: Another SyncDose instance is already running; this launch will exit.

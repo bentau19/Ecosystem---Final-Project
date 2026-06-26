@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -206,6 +207,25 @@ def make_service(tmp_path):
         mock_conn.tau = tau
         svc = BackupService(connectivity=mock_conn)
         services.append(svc)
+
+        # BackupService.start() flips _is_running on a daemon thread, so a
+        # receive_manifest() called immediately afterwards can race ahead of that
+        # thread and hit the _is_running guard — silently no-opping, leaving the
+        # coordinator unstarted and backup_complete never firing.  On a fast dev
+        # box the worker thread always wins; on a constrained CI runner it
+        # intermittently loses, surfacing as a waitUntil timeout.  Wrap start()
+        # so it blocks until the service is actually active (is_active flips to
+        # True immediately after _is_running.set()), making every
+        # start()->receive_manifest() test deterministic regardless of host speed.
+        original_start = svc.start
+
+        def start_and_wait() -> None:
+            original_start()
+            deadline = time.monotonic() + 5.0
+            while not svc.is_active and time.monotonic() < deadline:
+                time.sleep(0.005)
+
+        svc.start = start_and_wait  # type: ignore[method-assign]
         return svc
 
     yield factory

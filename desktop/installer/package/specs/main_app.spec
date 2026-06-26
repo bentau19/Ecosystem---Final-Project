@@ -11,8 +11,7 @@ a = Analysis(
         ("../../../native/windows/virtual_drive/build/Release/VirtualDrive.exe",
          "native/windows/virtual_drive"),
     ],
-    datas=[("../../../data/", "data/"),
-           ("../../../resources/", "resources/"),
+    datas=[("../../../resources/", "resources/"),
            ("../../../serializers/schemas/", "serializers/schemas/"),
            # See file_handler.spec: ship native/* __init__.py on disk next to
            # pipe_module.pyd so native.windows.pipe is a real package at runtime
