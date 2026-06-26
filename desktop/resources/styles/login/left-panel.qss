@@ -69,3 +69,36 @@
     font-size: 12px;
     font-weight: 400;
 }
+
+/* ── Bluetooth waiting panel ─────────────────────────────────────────── */
+
+/* Use #LeftPanel #BtIconCircle (specificity 200) to override the blanket
+   #LeftPanel QWidget { background: transparent } rule (specificity 101). */
+#LeftPanel #BtIconCircle {
+    background-color: rgba(34, 211, 238, 0.12);
+    border: 1px solid rgba(34, 211, 238, 0.33);
+    border-radius: 50px;
+    color: {{ACCENT_PRIMARY}};
+    font-size: 44px;
+    font-family: "Segoe UI Symbol", "Segoe UI", sans-serif;
+}
+
+#BtTitle {
+    color: {{TEXT_TERTIARY}};
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+#SwitchModeButton {
+    color: {{ACCENT_PRIMARY}};
+    font-family: "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 12px;
+    background: transparent;
+    border: none;
+    padding: 4px 8px;
+}
+
+#SwitchModeButton:hover {
+    color: {{TEXT_TERTIARY}};
+}

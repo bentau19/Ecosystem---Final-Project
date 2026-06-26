@@ -55,6 +55,8 @@ class DeviceViewModel(QObject):
     """Emitted when device-info channel reads fail — forwarded from DeviceInfoService.read_error."""
     connection_error: Signal = Signal(str)
     """Emitted when the TCP listener crashes — forwarded from ConnectivityService.connection_error."""
+    mode_changed: Signal = Signal(bool)
+    """Forwarded from ConnectivityService.mode_changed. True = Bluetooth, False = WiFi."""
 
     _ONE_MINUTES: int = 60 * 1000
 
@@ -82,6 +84,7 @@ class DeviceViewModel(QObject):
         self._connectivity_service.device_disconnecting.connect(self.device_disconnecting)
         self._connectivity_service.device_disconnected.connect(self._on_device_disconnected)
         self._connectivity_service.connection_error.connect(self.connection_error)
+        self._connectivity_service.mode_changed.connect(self.mode_changed)
         self._device_info_service.device_info_ready.connect(self._on_device_info_ready)
         self._device_info_service.device_fetched.connect(self._on_device_fetched)
         self._device_info_service.all_devices_fetched.connect(self._on_all_devices_fetched)
@@ -154,6 +157,20 @@ class DeviceViewModel(QObject):
         """
         self.device_connecting.emit()
         self._connectivity_service.connect_to_device(device.name)
+
+    @property
+    def is_device_info_loaded(self) -> bool:
+        """``True`` once device info has been fetched at least once this session."""
+        return bool(self._current_device_connected_id)
+
+    @property
+    def is_bluetooth_mode(self) -> bool:
+        """``True`` when the service is in Bluetooth mode, ``False`` for WiFi (QR)."""
+        return self._connectivity_service.is_bluetooth_mode
+
+    def toggle_connection_mode(self) -> None:
+        """Switch between Bluetooth and WiFi connection modes."""
+        self._connectivity_service.set_mode(not self._connectivity_service.is_bluetooth_mode)
 
     def disconnect_device(self) -> None:
         """Disconnect the currently connected device via the connectivity service.

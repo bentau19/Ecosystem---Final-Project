@@ -21,6 +21,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.example.android.R;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionStatus;
+import com.example.android.domain.enums.ConnectionType;
 import com.example.android.ui.MainActivity;
 import com.example.android.ui.adapters.ToolsAdapter;
 import com.example.android.ui.models.ToolItem;
@@ -80,7 +81,7 @@ public class ActionsFragment extends Fragment {
                 statusRow.setVisibility(pcInfoLoaded ? View.VISIBLE : View.GONE);
 
                 deviceNameText.setText(pcInfoLoaded ? pc.getPcName() : "");
-                statusText.setText("Connected via " + pc.getConnectionType() + " (" + pc.getPcIp()+")");
+                statusText.setText(formatConnectionStatus(pc));
                 statusDot.setBackgroundResource(R.drawable.green_dot);
                 updateUIState(view, true);
             } else {
@@ -240,6 +241,18 @@ public class ActionsFragment extends Fragment {
         if (getActivity() instanceof MainActivity) {
             ((MainActivity) getActivity()).sendClipboard();
         }
+    }
+
+    /**
+     * Builds the connection status line: Wi-Fi shows IP, Bluetooth shows MAC.
+     */
+    private static String formatConnectionStatus(RemoteDeviceInfo pc) {
+        String typeLabel = pc.getConnectionType() == ConnectionType.BLUETOOTH ? "Bluetooth" : "WiFi";
+        String endpoint = pc.getConnectionEndpointDisplay();
+        if (endpoint == null || endpoint.isEmpty()) {
+            return "Connected via " + typeLabel;
+        }
+        return "Connected via " + typeLabel + " (" + endpoint + ")";
     }
 
     /**

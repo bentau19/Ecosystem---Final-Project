@@ -45,6 +45,16 @@ public class RemoteDeviceInfo {
     /** The Bluetooth MAC for the hybrid path, or {@code null} for Wi-Fi. */
     public String getMacAddress() { return macAddress; }
     public ConnectionType getConnectionType() { return connectionType; }
+
+    /**
+     * Returns the address shown in the connection status line: MAC for Bluetooth, IP for Wi-Fi.
+     */
+    public String getConnectionEndpointDisplay() {
+        if (connectionType == ConnectionType.BLUETOOTH) {
+            return macAddress;
+        }
+        return ipAddress;
+    }
     /**
      * Updates the PC name once it is retrieved via the network handshake.
      * @param pcName The hostname sent by the desktop client.
