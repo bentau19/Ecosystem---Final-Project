@@ -1,45 +1,85 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<com.google.android.material.card.MaterialCardView
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/toolCard"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginHorizontal="24dp"
-    android:layout_marginVertical="6dp">
+    android:layout_marginHorizontal="20dp"
+    android:layout_marginVertical="6dp"
+    android:clickable="true"
+    android:focusable="true"
+    app:cardBackgroundColor="#0D1117"
+    app:cardCornerRadius="20dp"
+    app:strokeColor="@color/border_color"
+    app:strokeWidth="1dp"
+    app:cardElevation="4dp"
+    app:rippleColor="#142196F3">
 
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/btnTool"
-        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="68dp"
-        android:paddingStart="16dp"
-        android:paddingEnd="48dp"
-        app:backgroundTint="#1A1A2E"
-        app:strokeColor="#30475E"
-        app:strokeWidth="1dp"
-        app:cornerRadius="18dp"
-        android:text="Tool Name"
-        android:textColor="#FFFFFF"
-        android:textSize="15sp"
-        android:textStyle="bold"
-        android:textAllCaps="false"
-        android:textAlignment="viewStart"
-        app:icon="@drawable/ic_backup"
-        app:iconTint="#4592AF"
-        app:iconSize="24dp"
-        app:iconPadding="16dp"
-        app:iconGravity="textStart"
-        app:rippleColor="#15FFFFFF"
-        app:elevation="0dp" />
+        android:layout_height="wrap_content"
+        android:paddingVertical="16dp"
+        android:paddingHorizontal="16dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
 
-    <ImageView
-        android:layout_width="18dp"
-        android:layout_height="18dp"
-        android:layout_gravity="end|center_vertical"
-        android:layout_marginEnd="20dp"
-        android:alpha="0.3"
-        android:src="@drawable/ic_chevron_right"
-        app:tint="@color/white"
-        android:clickable="false"
-        android:focusable="false" />
+        <!-- Coloured icon circle -->
+        <FrameLayout
+            android:layout_width="50dp"
+            android:layout_height="50dp">
 
-</FrameLayout>
+            <View
+                android:id="@+id/iconBg"
+                android:layout_width="50dp"
+                android:layout_height="50dp"
+                android:background="@drawable/icon_circle_cyan" />
+
+            <ImageView
+                android:id="@+id/toolIcon"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_backup"
+                app:tint="@color/accent_cyan" />
+        </FrameLayout>
+
+        <!-- Title + subtitle -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginStart="14dp">
+
+            <TextView
+                android:id="@+id/toolTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_primary"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:text="Tool Name" />
+
+            <TextView
+                android:id="@+id/toolSubtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp"
+                android:text="Description" />
+        </LinearLayout>
+
+        <!-- Chevron -->
+        <ImageView
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:src="@drawable/ic_chevron_right"
+            app:tint="@color/text_muted"
+            android:alpha="0.4"
+            android:clickable="false"
+            android:focusable="false" />
+    </LinearLayout>
+
+</com.google.android.material.card.MaterialCardView>

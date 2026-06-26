@@ -150,7 +150,7 @@ Open `android/` in Android Studio. The app uses manual DI via `MainViewModelFact
 Hilt or Dagger. `ConnectivityService` is a Foreground Service that keeps the TauSync socket
 alive while the app is in the background.
 
-Connection is established by scanning a QR code displayed on the SyncDose desktop app.
+Connection is established either by scanning a QR code (Wi-Fi) or via Bluetooth pairing (BLE discovery + hybrid BT/Wi-Fi). The desktop app lets the user switch between modes from the login screen; a first-time Bluetooth pairing is remembered for instant reconnect on subsequent sessions.
 
 ---
 

@@ -153,6 +153,30 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
+     * Starts a hybrid (Bluetooth) connection to the bonded PC.
+     *
+     * <p>The Bluetooth sibling of {@link #processScannedData} + {@link #startConnectivityService}:
+     * records the device in the repository (so the UI shows the attempt) and starts the foreground
+     * service with the MAC, which then runs {@code connectHybrid}. Called by {@code ConnectFragment}
+     * once a PC has been bonded over BLE.
+     *
+     * @param macAddress The bonded PC's Bluetooth MAC address.
+     */
+    public void startHybridConnection(String macAddress) {
+        viewModel.connectHybrid(macAddress);
+        checkNotificationPermission();
+
+        Intent serviceIntent = new Intent(this, ConnectivityService.class);
+        serviceIntent.putExtra("TARGET_MAC", macAddress);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(this, serviceIntent);
+        } else {
+            startService(serviceIntent);
+        }
+    }
+
+    /**
      * Request POST_NOTIFICATIONS permission for Android 13+.
      */
     private void checkNotificationPermission() {

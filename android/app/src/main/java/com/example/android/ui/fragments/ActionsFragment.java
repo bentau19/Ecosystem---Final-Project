@@ -21,6 +21,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.example.android.R;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionStatus;
+import com.example.android.domain.enums.ConnectionType;
 import com.example.android.ui.MainActivity;
 import com.example.android.ui.adapters.ToolsAdapter;
 import com.example.android.ui.models.ToolItem;
@@ -80,7 +81,7 @@ public class ActionsFragment extends Fragment {
                 statusRow.setVisibility(pcInfoLoaded ? View.VISIBLE : View.GONE);
 
                 deviceNameText.setText(pcInfoLoaded ? pc.getPcName() : "");
-                statusText.setText("Connected via " + pc.getConnectionType() + " (" + pc.getPcIp()+")");
+                statusText.setText(formatConnectionStatus(pc));
                 statusDot.setBackgroundResource(R.drawable.green_dot);
                 updateUIState(view, true);
             } else {
@@ -113,6 +114,7 @@ public class ActionsFragment extends Fragment {
 
         // 6. Disconnect Button: Requests termination of the active session
         btnDisconnect.setOnClickListener(v -> {
+            viewModel.setJustDisconnected();
             if (getActivity() instanceof MainActivity) {
                 ((MainActivity) getActivity()).disconnect();
             }
@@ -144,9 +146,12 @@ public class ActionsFragment extends Fragment {
         toolsRecyclerView.setLayoutManager(new LinearLayoutManager(getContext()));
 
         toolList = new ArrayList<>();
-        toolList.add(new ToolItem("backup", "File Backup", R.drawable.ic_backup));
-        toolList.add(new ToolItem("clipboard", "Send Clipboard to PC", R.drawable.ic_clipboard));
-        toolList.add(new ToolItem("camera", "Camera Mirror", R.drawable.ic_camera));
+        toolList.add(new ToolItem("backup",    "File Backup",       "Sync your files to the PC",
+                R.drawable.ic_backup,    R.drawable.icon_circle_cyan, R.color.accent_cyan));
+        toolList.add(new ToolItem("clipboard", "Send Clipboard",    "Transfer clipboard text to desktop",
+                R.drawable.ic_clipboard, R.drawable.icon_bg_purple,   R.color.accent_purple));
+        toolList.add(new ToolItem("camera",    "Camera Mirror",     "Stream your camera live to PC",
+                R.drawable.ic_camera,    R.drawable.icon_bg_pink,     R.color.accent_pink));
 
         toolsAdapter = new ToolsAdapter(toolList, tool -> {
             // Only execute tools if a connection is currently active
@@ -240,6 +245,18 @@ public class ActionsFragment extends Fragment {
         if (getActivity() instanceof MainActivity) {
             ((MainActivity) getActivity()).sendClipboard();
         }
+    }
+
+    /**
+     * Builds the connection status line: Wi-Fi shows IP, Bluetooth shows MAC.
+     */
+    private static String formatConnectionStatus(RemoteDeviceInfo pc) {
+        String typeLabel = pc.getConnectionType() == ConnectionType.BLUETOOTH ? "Bluetooth" : "WiFi";
+        String endpoint = pc.getConnectionEndpointDisplay();
+        if (endpoint == null || endpoint.isEmpty()) {
+            return "Connected via " + typeLabel;
+        }
+        return "Connected via " + typeLabel + " (" + endpoint + ")";
     }
 
     /**

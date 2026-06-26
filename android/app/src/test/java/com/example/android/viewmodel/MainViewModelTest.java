@@ -1,7 +1,9 @@
 package com.example.android.viewmodel;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -14,8 +16,10 @@ import com.example.android.domain.entities.DeviceConnectionState;
 import com.example.android.domain.entities.LocalDeviceInfo;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionType;
+import com.example.android.domain.enums.DiscoveryStatus;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
 import com.example.android.domain.usecases.DisconnectDeviceUseCase;
+import com.example.android.domain.usecases.PairWithPcUseCase;
 import com.example.android.domain.usecases.ParseQrDataUseCase;
 import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
 
@@ -51,6 +55,9 @@ public class MainViewModelTest {
     @Mock
     private DisconnectDeviceUseCase mockDisconnectUseCase;
 
+    @Mock
+    private PairWithPcUseCase mockPairWithPcUseCase;
+
     private MainViewModel viewModel;
 
     @Before
@@ -61,7 +68,8 @@ public class MainViewModelTest {
                 mockRefreshUseCase,
                 mockConnectUseCase,
                 mockParseQrUseCase,
-                mockDisconnectUseCase
+                mockDisconnectUseCase,
+                mockPairWithPcUseCase
         );
     }
 
@@ -130,5 +138,86 @@ public class MainViewModelTest {
 
         // Assert: Ensure failure is reported and no connection is attempted
         assertEquals(false, result);
+    }
+
+    // ── justDisconnected flag ─────────────────────────────────────────────────
+
+    @Test
+    public void disconnect_setsJustDisconnectedFlag() {
+        // Act: user-initiated disconnect
+        viewModel.disconnect();
+
+        // Assert: the one-shot flag is armed so onResume skips auto-reconnect
+        assertTrue(viewModel.consumeJustDisconnected());
+    }
+
+    @Test
+    public void consumeJustDisconnected_isOneShot() {
+        viewModel.disconnect();
+
+        // First consume clears the flag
+        assertTrue(viewModel.consumeJustDisconnected());
+        // Second consume returns false — no duplicate skips on the next resume
+        assertFalse(viewModel.consumeJustDisconnected());
+    }
+
+    @Test
+    public void setJustDisconnected_thenConsumeReturnsTrue() {
+        // Used by ActionsFragment before calling MainActivity.disconnect()
+        viewModel.setJustDisconnected();
+
+        assertTrue(viewModel.consumeJustDisconnected());
+        assertFalse(viewModel.consumeJustDisconnected());
+    }
+
+    @Test
+    public void consumeJustDisconnectedByPc_delegatesToRepository() {
+        when(mockRepository.consumeJustDisconnectedByPc()).thenReturn(true);
+
+        assertTrue(viewModel.consumeJustDisconnectedByPc());
+        verify(mockRepository).consumeJustDisconnectedByPc();
+    }
+
+    // ── Bluetooth discovery & hybrid connection ───────────────────────────────
+
+    @Test
+    public void connectHybrid_callsConnectUseCase() {
+        // Act: initiate a hybrid BT connection to a bonded PC
+        viewModel.connectHybrid("AA:BB:CC:DD:EE:FF");
+
+        // Assert: ConnectToDeviceUseCase.execute() is called with a BT-typed device
+        verify(mockConnectUseCase).execute(any(RemoteDeviceInfo.class));
+    }
+
+    @Test
+    public void connectHybrid_resetsDiscoveryStatusToIdle() {
+        // After handing off to ConnectToDeviceUseCase, discovery state must be reset
+        // so re-creating ConnectFragment doesn't re-trigger the PAIRED→connect path.
+        viewModel.connectHybrid("AA:BB:CC:DD:EE:FF");
+
+        assertEquals(DiscoveryStatus.IDLE, viewModel.getDiscoveryStatus().getValue());
+    }
+
+    @Test
+    public void startDiscovery_setsScanningStatus() {
+        viewModel.startDiscovery();
+
+        assertEquals(DiscoveryStatus.SCANNING, viewModel.getDiscoveryStatus().getValue());
+    }
+
+    @Test
+    public void cancelDiscovery_callsStopDiscovery() {
+        viewModel.cancelDiscovery();
+
+        verify(mockPairWithPcUseCase).stopDiscovery();
+    }
+
+    @Test
+    public void cancelDiscovery_resetsStatusToIdle() {
+        // After cancel, the discovery state machine must return to rest so buttons re-appear.
+        viewModel.startDiscovery();
+        viewModel.cancelDiscovery();
+
+        assertEquals(DiscoveryStatus.IDLE, viewModel.getDiscoveryStatus().getValue());
     }
 }

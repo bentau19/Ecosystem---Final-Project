@@ -41,6 +41,9 @@ public class DisconnectChannelHandler implements ChannelHandler {
             String disconnectSignal = transportManager.readFromChannel(SessionChannels.DISCONNECT_FROM_PC.getValue());
             Log.d(TAG, "[Disconnect] Signal received from PC: '" + disconnectSignal + "'");
 
+            // Mark PC-initiated disconnect so ConnectFragment.onResume skips auto-reconnect.
+            repository.setJustDisconnectedByPc();
+
             // Stop the polling executor NOW — before the PC closes the TCP socket.
             // After this read the PC will immediately close the connection; the next
             // polling tick would throw → handlePollingFailure() sees status==CONNECTED

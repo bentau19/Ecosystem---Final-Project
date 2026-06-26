@@ -49,6 +49,20 @@ public class DeviceRepository {
         }
     }
 
+    // Set to true when the PC initiates the disconnect so ConnectFragment.onResume
+    // can skip auto-reconnect (mirroring justDisconnected for the PC-initiated path).
+    private volatile boolean justDisconnectedByPc = false;
+
+    public void setJustDisconnectedByPc() {
+        justDisconnectedByPc = true;
+    }
+
+    public boolean consumeJustDisconnectedByPc() {
+        boolean v = justDisconnectedByPc;
+        justDisconnectedByPc = false;
+        return v;
+    }
+
     private DeviceRepository(String deviceId, String modelName) {
         // Initialize local device data with REAL values
         LocalDeviceInfo initialLocal = new LocalDeviceInfo(
@@ -129,6 +143,25 @@ public class DeviceRepository {
             current.setRemotePC(remote);
 
             // Notify all observers
+            connectionState.postValue(current);
+        }
+    }
+
+    /**
+     * Establish session data for a remote computer reached over Bluetooth (hybrid path).
+     *
+     * <p>The Wi-Fi IP is discovered over Bluetooth at connect time, so none is provided here —
+     * only the PC's Bluetooth MAC.
+     *
+     * @param pcName     The name of the remote PC.
+     * @param macAddress The PC's Bluetooth Classic MAC address.
+     */
+    public void connectHybrid(String pcName, String macAddress) {
+        DeviceConnectionState current = connectionState.getValue();
+        if (current != null) {
+            RemoteDeviceInfo remote =
+                    new RemoteDeviceInfo(pcName, null, macAddress, ConnectionType.BLUETOOTH);
+            current.setRemotePC(remote);
             connectionState.postValue(current);
         }
     }
