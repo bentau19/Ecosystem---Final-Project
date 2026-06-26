@@ -29,6 +29,7 @@ from views.widgets.backup.backup_review_dialog import BackupReviewDialog
 from views.widgets.dialogs.file_handler import TransferErrorDialog
 from views.widgets.loading.overlay import LoadingOverlay
 from views.widgets.toasts.file_received import FileReceivedToast
+from viewmodels.webcam import WebcamViewModel
 
 
 class MainWindow(QMainWindow):
@@ -68,12 +69,14 @@ class MainWindow(QMainWindow):
 
         self._file_transfer_vm: FileTransferViewModel = app_state.file_transfer_viewmodel
         self._backup_vm: BackupViewModel = app_state.backup_viewmodel
+        self._webcam_vm: WebcamViewModel = app_state.webcam_viewmodel
         # Holds the BackupProgressWindow alive for the duration of a session.
         self._backup_progress_win: BackupProgressWindow | None = None
 
         self._device_vm: DeviceViewModel = app_state.device_viewmodel
         # Holds the FileReceivedToast alive while it's on screen.
         self._toast: FileReceivedToast | None = None
+        self._clipboard_service = app_state.clipboard_service
 
         # App-exit shutdown state (loading overlay + service-teardown poll).
         self._shutting_down: bool = False
@@ -119,7 +122,7 @@ class MainWindow(QMainWindow):
         # Tray icon visibility is managed reactively by showEvent/hideEvent.
 
     def _connect_signals(self) -> None:
-        # Wire navigation, file-transfer, backup, and theme signals to their slots.
+        # Wire navigation, file-transfer, backup, theme, and clipboard signals to their slots.
         self._navigation_manager.navigate.connect(self._change_page)
         self._file_transfer_vm.receive_error.connect(self._on_file_receive_error)
         self._file_transfer_vm.send_error.connect(self._on_file_send_error)
@@ -129,10 +132,14 @@ class MainWindow(QMainWindow):
         self._backup_vm.backup_session_result.connect(self._on_backup_session_result)
         self._backup_vm.device_ready_changed.connect(self._on_backup_device_ready_changed)
         app_state.device_viewmodel.connection_error.connect(self._on_connection_error)
+        self._clipboard_service.clipboard_text_received.connect(self._on_clipboard_text_received)
+        self._webcam_vm.webcam_active_changed.connect(self._on_webcam_active_changed)
+        self._webcam_vm.webcam_error_occurred.connect(self._on_webcam_error)
         theme_manager.theme_changed.connect(self._restyle_tray)
-        # Exit paths (X button + tray Quit) both route through _begin_shutdown,
-        # which shows the spinner, fires app_state.stop_all(), and polls
-        # app_state.any_active() before quitting.
+        # PC → Android: delegate clipboard changes entirely to the service.
+        QApplication.clipboard().dataChanged.connect(self._on_clipboard_changed)
+        # Stop all services on any exit path (X button, tray Quit, sys.exit, …).
+        # aboutToQuit fires as the last act of app.exec() before it returns.
 
     def changeEvent(self, event: QEvent) -> None:
         """Intercept minimize events and hide the window to the system tray.
@@ -388,6 +395,32 @@ class MainWindow(QMainWindow):
         # Mirror of _on_file_receive_error for the outbound direction.
         TransferErrorDialog()
 
+    @Slot(bool)
+    def _on_webcam_active_changed(self, active: bool) -> None:
+        if active:
+            self._tray_icon.showMessage(
+                "Webcam Connected",
+                "Phone camera is now streaming to OBS Virtual Camera.",
+                QSystemTrayIcon.MessageIcon.Information,
+                4000,
+            )
+        else:
+            self._tray_icon.showMessage(
+                "Webcam Disconnected",
+                "Phone camera stream has ended.",
+                QSystemTrayIcon.MessageIcon.Information,
+                3000,
+            )
+
+    @Slot(str)
+    def _on_webcam_error(self, error: str) -> None:
+        self._tray_icon.showMessage(
+            "Webcam Error",
+            error,
+            QSystemTrayIcon.MessageIcon.Warning,
+            4000,
+        )
+
     @Slot(str)
     def _on_connection_error(self, error: str) -> None:
         # Non-blocking tray notification — the listener retries automatically
@@ -398,3 +431,15 @@ class MainWindow(QMainWindow):
             QSystemTrayIcon.MessageIcon.Warning,
             4000,
         )
+
+    @Slot(str)
+    def _on_clipboard_text_received(self, text: str) -> None:
+        # Always called on the main thread via Qt's queued connection — safe to touch QClipboard.
+        # Hash management is handled inside ClipboardService._receive() before this signal
+        # was emitted, so no logic needed here.
+        QApplication.clipboard().setText(text)
+
+    @Slot()
+    def _on_clipboard_changed(self) -> None:
+        # Thin relay — all sync logic (hash guard, send decision) lives in ClipboardService.
+        self._clipboard_service.on_clipboard_changed(QApplication.clipboard().text())

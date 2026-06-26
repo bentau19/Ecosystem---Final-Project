@@ -1,4 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Legacy Bluetooth permissions for API < 31. maxSdkVersion 30 because API 31+
+         replaces them with the runtime BLUETOOTH_CONNECT / BLUETOOTH_SCAN permissions. -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+
+    <!-- API 31+ runtime permissions. BLUETOOTH_CONNECT: open the RFCOMM socket / read bond
+         state. BLUETOOTH_SCAN: cancelDiscovery() before connecting. neverForLocation since
+         BluetoothTransport does not derive physical location from BT. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+
+    <!-- Bluetooth is optional so the library still installs on devices without BT hardware. -->
+    <uses-feature
+        android:name="android.hardware.bluetooth"
+        android:required="false" />
+
+    <!-- BLE is optional too — used only for first-time discovery/pairing (CompanionDeviceManager
+         scans for the PC's BLE beacon). Devices without BLE fall back to manual MAC entry. -->
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="false" />
+
 </manifest>

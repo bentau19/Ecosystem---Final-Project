@@ -748,7 +748,10 @@ public class IntegrationTest {
     public void tauSyncStream_concurrentClose_completeStreamCalledExactlyOnce() throws Exception {
         AtomicInteger completeStreamCalls = new AtomicInteger(0);
 
-        IConnectionManager noopManager = new IConnectionManager() {
+        IConnectionManager noopManager = new IConnectionManager()
+
+
+        {
             @Override public void initialize(ITransport t) {}
             @Override public CompletableFuture<Void> connectTransport(String id) { return CompletableFuture.completedFuture(null); }
             @Override public boolean isConnected() { return true; }
@@ -813,18 +816,20 @@ public class IntegrationTest {
         assertEquals("Sequential double-close must call completeStream exactly once", 1, calls.get());
     }
 
-    // ── Auto-chunking: large write is split into ≤ STREAM_CHUNK_SIZE frames ─
+    // ── Auto-chunking: large write is split into ≤ LARGE_TRANSFER_CHUNK_SIZE slices ─
 
     /**
-     * Writing a buffer larger than STREAM_CHUNK_SIZE through TauSyncStream must result
-     * in multiple sendStreamData calls — each with a slice ≤ STREAM_CHUNK_SIZE — rather
-     * than one giant frame that would exceed MAX_PAYLOAD_SIZE.
+     * Writing a buffer larger than LARGE_TRANSFER_CHUNK_SIZE through TauSyncStream must result
+     * in multiple sendStreamData calls — each with a slice ≤ LARGE_TRANSFER_CHUNK_SIZE — rather
+     * than one giant call. The OutputStream slices at LARGE_TRANSFER_CHUNK_SIZE (above the hybrid
+     * routing threshold) so large transfers are still routed over Wi-Fi; the manager then splits
+     * each slice into STREAM_CHUNK_SIZE wire frames internally.
      *
      * This test hooks sendStreamData on a spy manager to count call sizes.
      */
     @Test
     public void tauSyncStream_largeWrite_isAutoChunked() throws Exception {
-        int writeSize = CoreConfig.STREAM_CHUNK_SIZE * 3 + 1024; // 3 full chunks + a tail
+        int writeSize = CoreConfig.LARGE_TRANSFER_CHUNK_SIZE * 3 + 1024; // 3 full chunks + a tail
         AtomicInteger callCount = new AtomicInteger(0);
         AtomicBoolean oversizedChunkSeen = new AtomicBoolean(false);
 
@@ -835,7 +840,7 @@ public class IntegrationTest {
             @Override public CompletableFuture<TauSyncStream> connect(String word) { return null; }
             @Override public void sendStreamData(int id, byte[] buf, int off, int cnt) {
                 callCount.incrementAndGet();
-                if (cnt > CoreConfig.STREAM_CHUNK_SIZE) oversizedChunkSeen.set(true);
+                if (cnt > CoreConfig.LARGE_TRANSFER_CHUNK_SIZE) oversizedChunkSeen.set(true);
             }
             @Override public CompletableFuture<Void> sendStreamDataAsync(int id, byte[] buf, int off, int cnt) { return CompletableFuture.completedFuture(null); }
             @Override public void completeStream(int id) {}
@@ -850,8 +855,8 @@ public class IntegrationTest {
         Arrays.fill(bigBuffer, (byte) 0x42);
         stream.getOutputStream().write(bigBuffer);
 
-        assertFalse("A chunk larger than STREAM_CHUNK_SIZE was sent — auto-chunking is broken",
+        assertFalse("A slice larger than LARGE_TRANSFER_CHUNK_SIZE was sent — auto-chunking is broken",
                 oversizedChunkSeen.get());
-        assertEquals("Expected 4 chunks (3 full + 1 tail) for a " + writeSize + "-byte write",
+        assertEquals("Expected 4 slices (3 full + 1 tail) for a " + writeSize + "-byte write",
                 4, callCount.get());
     }}

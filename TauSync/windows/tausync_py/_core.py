@@ -28,6 +28,9 @@ _Byte = None
 _GCHandle = None
 _GCHandleType = None
 _ConnectionManagerCls = None
+_SocketTransportCls = None
+_ConnectionContextCls = None
+_BleAdvertiserCls = None
 
 _DEFAULT_DLL_RELATIVE = os.path.join(
     "TauSync", "Tausync_Windows", "TauSync.Lib",
@@ -80,6 +83,7 @@ def _coreclr_runtime_spec():
 def _ensure_clr(dll_path: Optional[str] = None) -> None:
     """Load CoreCLR + TauSync.Lib.dll exactly once (thread-safe)."""
     global _clr_ready, _Array, _Byte, _GCHandle, _GCHandleType, _ConnectionManagerCls
+    global _SocketTransportCls, _ConnectionContextCls, _BleAdvertiserCls
 
     if _clr_ready:
         return
@@ -110,6 +114,9 @@ def _ensure_clr(dll_path: Optional[str] = None) -> None:
         from System import Array, Byte  # pyright: ignore[reportMissingImports]
         from System.Runtime.InteropServices import GCHandle, GCHandleType  # pyright: ignore[reportMissingImports]
         from TauSync.Implementations.Management import ConnectionManager as _CM  # pyright: ignore[reportMissingImports]
+        from TauSync.Implementations.Management import ConnectionContext as _CTX  # pyright: ignore[reportMissingImports]
+        from TauSync.Implementations.Transport import SocketTransport as _ST  # pyright: ignore[reportMissingImports]
+        from TauSync.Implementations.Discovery import BleAdvertiser as _BLE  # pyright: ignore[reportMissingImports]
         from System import Nullable, Int32, TimeoutException
 
         _Array = Array
@@ -117,6 +124,9 @@ def _ensure_clr(dll_path: Optional[str] = None) -> None:
         _GCHandle = GCHandle
         _GCHandleType = GCHandleType
         _ConnectionManagerCls = _CM
+        _ConnectionContextCls = _CTX
+        _SocketTransportCls = _ST
+        _BleAdvertiserCls = _BLE
         _clr_ready = True
 
 
@@ -387,11 +397,32 @@ class TauSyncStream:
             return 0
         raw = bytes(data)
         arr = _to_dotnet_bytes(raw)
+        # Raw byte write carries no file/string semantics — let the library route by size
+        # (small → Bluetooth, large → Wi-Fi) in hybrid mode.
         self._stream.Write(arr, 0, len(raw))
+        return len(raw)
+
+    def _write_over(self, data: bytes, prefer_wifi: bool) -> int:
+        """Write *data* over an explicitly chosen transport (hybrid mode).
+
+        ``prefer_wifi`` True routes over Wi-Fi, False over Bluetooth.  This lets each
+        high-level method pick the link by its own semantics (``write_file`` → Wi-Fi,
+        ``write_string`` → Bluetooth) rather than by payload size.  In single-transport
+        mode (Wi-Fi-only or Bluetooth-only) the flag is ignored.
+        """
+        self._check_open()
+        if not data:
+            return 0
+        raw = bytes(data)
+        arr = _to_dotnet_bytes(raw)
+        self._stream.Write(arr, 0, len(raw), prefer_wifi)
         return len(raw)
 
     def write_string(self, text: str, encoding: str = "utf-8") -> int:
         """Encode *text* and write to the stream.
+
+        Strings are control/text traffic and are always sent over Bluetooth in hybrid
+        mode (never over Wi-Fi), regardless of length.
 
         Args:
             text: String to send.
@@ -408,7 +439,7 @@ class TauSyncStream:
             raise TypeError(
                 f"write_string() argument must be str, not {type(text).__name__}"
             )
-        return self.write(text.encode(encoding))
+        return self._write_over(text.encode(encoding), prefer_wifi=False)
 
     def flush(self) -> None:
         """Flush the underlying .NET stream's write buffer.
@@ -421,11 +452,16 @@ class TauSyncStream:
 
     # -- file transfer helpers ---------------------------------------------
 
-    def write_file(self, path: str, chunk_size: int = 65536) -> int:
+    def write_file(self, path: str, chunk_size: int = 262144) -> int:
         """Stream a local file into the TauSync channel.
 
         Uses a single pinned .NET buffer for the whole transfer so memory
         stays constant regardless of file size.
+
+        A file is bulk data and is always sent over the high-throughput Wi-Fi
+        link in hybrid Bluetooth+Wi-Fi mode (each chunk is flagged for Wi-Fi
+        explicitly, so routing no longer depends on ``chunk_size``).  In
+        single-transport mode the one available link is used.
 
         Args:
             path: Path to the file to send.
@@ -453,7 +489,7 @@ class TauSyncStream:
                     if not piece:
                         break
                     ctypes.memmove(buf_addr, piece, len(piece))
-                    self._stream.Write(buf, 0, len(piece))
+                    self._stream.Write(buf, 0, len(piece), True)  # files → Wi-Fi
                     total += len(piece)
             self._stream.Flush()
         finally:
@@ -584,8 +620,10 @@ class TauSync:
 
     def __init__(self, dll_path: Optional[str] = None) -> None:
         _ensure_clr(dll_path)
-        self._manager = _ConnectionManagerCls()
+        self._manager = _ConnectionManagerCls(False)
         self._disposed = False
+        self._ble_advertiser = None
+        self._approve_delegate = None  # keeps the .NET approval delegate alive (GC guard)
 
     def get_peer_waiting_words(self) -> list[str]:
         """Get a snapshot of the peer's pending discovery words.
@@ -725,6 +763,123 @@ class TauSync:
                 TauSync._global_target = None
             raise
 
+    def connect_hybrid(
+        self,
+        timeout_seconds: int | None = None,
+        device_name: str | None = None,
+        on_approve=None,
+    ) -> None:
+        """Start a hybrid Bluetooth + Wi-Fi session as the server (Windows side).
+
+        Windows is always the Bluetooth RFCOMM **server** (and the Wi-Fi server). This
+        starts the RFCOMM listener, waits for the Android client to connect, and runs the
+        BT_MAGIC handshake. Bluetooth is the always-on primary link; Wi-Fi is brought up
+        lazily only when a large payload needs it.
+
+        During the handshake the peer's Wi-Fi IP is exchanged over Bluetooth, so neither
+        side needs the address typed in — read it back from :pyattr:`peer_wifi_ip`.
+
+        Args:
+            timeout_seconds: Max seconds to wait for the Bluetooth client to connect.
+                ``None`` (default) waits forever.
+            device_name: Name shown to the phone in its "connect to this PC?" dialog
+                during first-time BLE discovery. ``None``/blank uses the Windows computer
+                name. Truncated to fit the BLE advertisement (~14 bytes).
+            on_approve: Optional ``callable(phone_name: str | None) -> bool`` run when a
+                phone connects, before the session completes. Return ``True`` to accept or
+                ``False`` to decline (the phone is told and aborts). ``None`` accepts all.
+                Called on a background thread — marshal any UI to your main thread.
+
+        Raises:
+            TimeoutError: If no Bluetooth client connected within *timeout_seconds*.
+            RuntimeError: If the transport was already established in another role/mode.
+        """
+        from System import TimeoutException
+
+        self._check_not_disposed()
+        with TauSync._global_role_lock:
+            if TauSync._global_role == _ROLE_CLIENT:
+                raise RuntimeError(
+                    "Cannot connect_hybrid() - transport is already connected in "
+                    f"client mode (to {TauSync._global_target!r}). "
+                    "The transport is a singleton; you cannot switch roles."
+                )
+            if TauSync._global_role == _ROLE_SERVER:
+                return  # already serving, idempotent
+            TauSync._global_role = _ROLE_SERVER
+            TauSync._global_target = "bt:0.0.0.0 (listening)"
+
+        try:
+            # Advertise a BLE beacon (UUID only) so a first-time Android client can discover this PC
+            # without anyone typing a MAC. It runs during the listen window and is stopped once a
+            # client connects. No-op on hardware without BLE peripheral support — the phone then
+            # falls back to manual MAC entry.
+            self._ble_advertiser = _BleAdvertiserCls(device_name)
+            try:
+                self._ble_advertiser.StartAsync().GetAwaiter().GetResult()
+            except Exception:
+                pass  # BLE peripheral unsupported — manual MAC entry still works
+
+            # Bluetooth is the primary (RFCOMM server) link; the singleton's Wi-Fi
+            # SocketTransport is the lazy secondary. The hybrid ConnectionManager starts the
+            # BT listener itself and runs the BT_MAGIC handshake (where the peer's Wi-Fi IP
+            # is discovered).
+            self._manager = _ConnectionManagerCls()
+            if on_approve is not None:
+                from System import Func, String, Boolean
+                # Keep a reference so the delegate is not garbage-collected while .NET holds it.
+                self._approve_delegate = Func[String, Boolean](on_approve)
+                self._manager.SetBtApprovalCallback(self._approve_delegate)
+            self._manager.ConnectTransport("", timeout_seconds).GetAwaiter().GetResult()
+            self._stop_ble_advertiser()  # client connected — no need to keep advertising
+        except TimeoutException as exc:
+            self._stop_ble_advertiser()
+            with TauSync._global_role_lock:
+                TauSync._global_role = _ROLE_NONE
+                TauSync._global_target = None
+            raise TimeoutError(str(exc))
+        except Exception:
+            self._stop_ble_advertiser()
+            with TauSync._global_role_lock:
+                TauSync._global_role = _ROLE_NONE
+                TauSync._global_target = None
+            raise
+
+    def _stop_ble_advertiser(self) -> None:
+        """Stop BLE advertising if it is running. Safe to call repeatedly / on non-hybrid instances."""
+        advertiser = getattr(self, "_ble_advertiser", None)
+        if advertiser is not None:
+            try:
+                advertiser.Stop()
+            except Exception:
+                pass
+            self._ble_advertiser = None
+
+    @property
+    def peer_wifi_ip(self) -> Optional[str]:
+        """The peer's Wi-Fi IPv4 address discovered over Bluetooth, or ``None``.
+
+        Populated during the hybrid BT_MAGIC handshake (see :pymeth:`connect_hybrid`), so
+        the address is available without anyone typing it in.
+        """
+        try:
+            return _ConnectionContextCls.Instance.GetPeerWifiHost()
+        except Exception:
+            return None
+
+    @property
+    def wifi_active(self) -> bool:
+        """Whether the lazy Wi-Fi link is currently up (hybrid mode).
+
+        Flips to true after the first large payload brings Wi-Fi online and back to false
+        after the idle teardown, so tests can assert size-based routing.
+        """
+        try:
+            wifi = _ConnectionContextCls.Instance.GetWifiTransportAsSocket()
+            return bool(wifi is not None and wifi.IsConnected())
+        except Exception:
+            return False
+
     @property
     def is_connected(self) -> bool:
         """Whether the underlying TCP transport is up."""
@@ -808,6 +963,7 @@ class TauSync:
         if self._disposed:
             return
         self._disposed = True
+        self._stop_ble_advertiser()
         try:
             self._manager.Dispose()
             TauSync._global_role = _ROLE_NONE
@@ -827,6 +983,7 @@ class TauSync:
             RuntimeError: If this instance has been disposed.
         """
         self._check_not_disposed()
+        self._stop_ble_advertiser()
         # Always reset the process-wide role/target, even when the socket is
         # already down.  A peer-initiated drop makes _manager.IsConnected()
         # False before we get here; leaving _global_role == _ROLE_SERVER would
@@ -861,7 +1018,7 @@ class TauSync:
                 "Call listen() or connect_to() first."
             )
         ts = TauSync.__new__(TauSync)
-        ts._manager = _ConnectionManagerCls()
+        ts._manager = _ConnectionManagerCls(False)
         ts._disposed = False
         return ts
 

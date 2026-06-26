@@ -125,6 +125,7 @@ Current use cases:
 - `ScanBackupFilesUseCase.java` - Enumerates files to back up. Supports two modes: `all_media` (images and videos via filesystem walk or MediaStore fallback) and `folder` (a user-selected SAF tree URI or filesystem path). Runs on a background thread; always synchronous.
 - `BackupTransferUseCase.java` - Sends a scanned file list to the PC one file at a time over indexed TauSync slot channels (`backup_slot_meta_N` / `backup_slot_data_N`). Waits for per-file result confirmations from the PC (`backup_file_result_N`). Supports pause, resume, and stop mid-transfer.
 - `VirtualDriveUseCase.java` - Handles all WinFsp filesystem operations forwarded by the desktop over TauSync (list, stat, read, write, create, delete, rename, truncate). Each method blocks on network I/O and must be called from a background thread.
+- `ClipboardSyncUseCase.java` - Reads the current Android clipboard via `ClipboardManager`, serialises the text as `{"type":"text","content":"..."}`, and writes it to the `clipboard_android_to_pc` TauSync channel. Must be called from a background thread.
 
 Current domain entities:
 
@@ -246,6 +247,7 @@ Important files:
 - `DisconnectChannelHandler.java` - Handles PC-initiated disconnects.
 - `FileMetadataChannelHandler.java` - Reads file metadata sent from the PC before a file transfer.
 - `FileDataChannelHandler.java` - Triggered by the polling loop when the PC opens `file_data_pc`. Calls `ReceiveFileUseCase` to stream the file bytes. Eliminates the simultaneous-connect race condition by letting the Desktop be the sole initiator of that channel.
+- `ClipboardFromPCHandler.java` - Triggered when the PC opens `clipboard_pc_to_android` (fired automatically on every PC clipboard change). Reads the JSON payload and sets the Android clipboard via `ClipboardManager`. Works in the background — Android allows clipboard writes without foreground restriction.
 - `BackupControlChannelHandler.java` - Handles PC-originated backup control commands (`pause`, `resume`, `stop`) on the `backup_ctrl_pc` channel. Forwards each command to the running `BackupTransferUseCase`. One channel connect per command.
 - `BackupReceivedChannelHandler.java` - Handles per-file transfer result tokens (`succ` / `fail`) sent by the PC on `backup_file_result_{slotIndex}` channels during an active backup session. Registered under the `BACKUP_FILE_RESULT` prefix; the registry's prefix-match fallback routes any slot-indexed channel here automatically.
 - `VirtualDriveChannelHandler.java` - Handles a single op type (list, stat, read, write, create, delete, rename, truncate) for all UUID-suffixed virtual drive channels of that type. One instance is registered per op-type prefix; the registry routes every incoming UUID-suffixed channel to the matching instance.
@@ -271,6 +273,7 @@ Important files:
 - `BackupChannels.java` - TauSync meeting-word identifiers for the backup protocol: manifest, ready ack, per-file metadata slot, per-file data slot, per-file result, and bidirectional control channels.
 - `BackupFileResult.java` - Per-file transfer result tokens (`succ` / `fail`) written by the PC on `BACKUP_FILE_RESULT` channels.
 - `VirtualDriveChannels.java` - TauSync meeting-word base prefixes for the virtual drive protocol (list, stat, read, write, create, delete, rename, truncate, paginated list, full list). The PC appends a unique 8-char hex UUID to form the actual meeting word.
+- `ClipboardChannels.java` — `CLIPBOARD_ANDROID_TO_PC` / `CLIPBOARD_PC_TO_ANDROID`
 
 These files define the shared channel names used by both Android and desktop. Many of them are generated from the shared definitions under `shared/enums/`.
 
@@ -450,6 +453,123 @@ domain/usecases/SendFileUseCase.java
 repositories/SendFileRepository.java
 ui/ShareReceiverActivity.java
 ```
+
+---
+
+## Clipboard Sync
+
+Two-directional clipboard sync between Android and the desktop PC.
+
+### Android → PC
+
+The user taps **"Send Clipboard to PC"** in the Actions screen. `ActionsFragment` reads the current clipboard via `ClipboardManager` before sending:
+
+- If the clipboard is empty, a toast is shown and nothing is sent.
+- If there is content, a preview toast shows the first 20 characters, the button switches to "Sent!" + checkmark and is disabled for 2 seconds, and `ClipboardSyncUseCase.execute()` is called on a background thread.
+
+`ClipboardSyncUseCase` serialises the text as `{"type": "text", "content": "..."}` and writes it to the `clipboard_android_to_pc` TauSync channel.
+
+### PC → Android
+
+The desktop `ClipboardService` monitors clipboard changes automatically and pushes new content to the `clipboard_pc_to_android` channel. `ClipboardFromPCHandler` reads the payload and sets the Android clipboard.
+
+### Anti-loop Guard
+
+An SHA-256 hash of the last synced content is stored on the desktop. When the desktop receives text from Android and sets its own clipboard, the resulting clipboard-change event matches the stored hash and is silently dropped — preventing an echo send back to Android.
+
+### TauSync Channels Used
+
+| Channel enum | Wire value | Direction | Purpose |
+|---|---|---|---|
+| `CLIPBOARD_ANDROID_TO_PC` | `clipboard_android_to_pc` | Android → PC | User-initiated clipboard push |
+| `CLIPBOARD_PC_TO_ANDROID` | `clipboard_pc_to_android` | PC → Android | Automatic desktop clipboard push |
+
+### New files added for this feature
+
+```text
+enums/ClipboardChannels.java
+domain/usecases/ClipboardSyncUseCase.java
+network/handlers/ClipboardFromPCHandler.java
+```
+
+---
+
+## Clipboard Sync
+
+Two-directional clipboard sync between Android and the desktop PC.
+
+### Android → PC
+
+The user taps **"Send Clipboard to PC"** in the Actions screen. `ActionsFragment` reads the current clipboard via `ClipboardManager` before sending:
+
+- If the clipboard is empty, a toast is shown and nothing is sent.
+- If there is content, a preview toast shows the first 20 characters, the button switches to "Sent!" + checkmark and is disabled for 2 seconds, and `ClipboardSyncUseCase.execute()` is called on a background thread.
+
+`ClipboardSyncUseCase` serialises the text as `{"type": "text", "content": "..."}` and writes it to the `clipboard_android_to_pc` TauSync channel.
+
+### PC → Android
+
+The desktop `ClipboardService` monitors clipboard changes automatically and pushes new content to the `clipboard_pc_to_android` channel. `ClipboardFromPCHandler` reads the payload and sets the Android clipboard.
+
+### Anti-loop Guard
+
+An SHA-256 hash of the last synced content is stored on the desktop. When the desktop receives text from Android and sets its own clipboard, the resulting clipboard-change event matches the stored hash and is silently dropped — preventing an echo send back to Android.
+
+### TauSync Channels Used
+
+| Channel enum | Wire value | Direction | Purpose |
+|---|---|---|---|
+| `CLIPBOARD_ANDROID_TO_PC` | `clipboard_android_to_pc` | Android → PC | User-initiated clipboard push |
+| `CLIPBOARD_PC_TO_ANDROID` | `clipboard_pc_to_android` | PC → Android | Automatic desktop clipboard push |
+
+### New files added for this feature
+
+```text
+enums/ClipboardChannels.java
+domain/usecases/ClipboardSyncUseCase.java
+network/handlers/ClipboardFromPCHandler.java
+```
+
+---
+
+## Camera Mirror (Webcam Streaming)
+
+Streams the phone camera to the PC as a virtual webcam over TauSync, so the phone can act as a high-quality webcam in video calls or OBS.
+
+### Flow
+
+1. The user navigates to the Camera Mirror screen. A live preview is shown immediately via CameraX `Preview`.
+2. The user taps **Start Streaming**. `WebcamViewModel` transitions to `STREAMING` status.
+3. A `CameraX ImageAnalysis` use case captures frames in `RGBA_8888` format, requesting 1280×720 (HD); devices that don't support that size fall back to the closest available resolution (e.g. 960×720).
+4. Each frame is rotated to match the device's display orientation using `getRotationDegrees()`, compressed to JPEG at 70% quality, and pushed into `WebcamRepository.frameQueue`.
+5. A 24 fps throttle gate ensures the send rate matches the desktop's `pyvirtualcam` consumption rate, preventing TCP buffer buildup and latency growth.
+6. `WebcamStreamUseCase` reads frames from the queue and sends them over the `webcam_frames` TauSync channel using a 4-byte big-endian length prefix followed by the JPEG bytes.
+7. On the desktop, `WebcamService` decodes each JPEG, pads it to 1280×720 preserving aspect ratio (pillarbox/letterbox), and pushes the frame to the OBS Virtual Camera via `pyvirtualcam`.
+
+### Camera Selection
+
+The **Flip Camera** button in the top-right corner of the screen toggles between the back camera (default) and the front camera without interrupting any active stream.
+
+### Orientation
+
+`MainActivity` declares `configChanges="orientation|screenSize|..."`, so rotation does not recreate the Activity and the stream is never interrupted. `WebcamFragment` instead re-inflates the orientation-appropriate layout in `onConfigurationChanged` — a stacked layout in portrait (`layout/fragment_webcam.xml`) and a side-by-side layout in landscape (`layout-land/fragment_webcam.xml`), where the preview fills the left region and the controls sit in a right-hand column so they never cover the viewfinder. The camera is rebound to the freshly-inflated `PreviewView`, refreshing the `ImageAnalysis` target rotation so the PC keeps receiving upright frames.
+
+### TauSync Channels Used
+
+| Channel enum | Wire value | Direction | Purpose |
+|---|---|---|---|
+| `WEBCAM_START` | `webcam_start` | Android → PC | Handshake — signals PC to open the virtual camera |
+| `WEBCAM_FRAMES` | `webcam_frames` | Android → PC | Continuous JPEG frame stream (length-prefixed) |
+
+### Frame Wire Format
+
+```
+[4 bytes big-endian uint32 = JPEG size][N bytes JPEG data]
+```
+
+### Prerequisites (Desktop)
+
+The PC must have the **OBS Virtual Camera** driver installed (`OBS-VirtualCam` or bundled with OBS Studio). `pyvirtualcam` uses this driver to expose the phone's feed as a system webcam.
 
 ---
 

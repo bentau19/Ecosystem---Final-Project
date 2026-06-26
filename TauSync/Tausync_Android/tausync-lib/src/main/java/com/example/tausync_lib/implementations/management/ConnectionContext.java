@@ -1,17 +1,25 @@
 package com.example.tausync_lib.implementations.management;
 
 import com.example.tausync_lib.core.CoreConfig;
+import com.example.tausync_lib.implementations.protocol.ProtocolHandler;
+import com.example.tausync_lib.implementations.security.SecuritySession;
 import com.example.tausync_lib.implementations.transport.SocketTransport;
+import com.example.tausync_lib.interfaces.IProtocolHandler;
 import com.example.tausync_lib.interfaces.ITransport;
+import com.example.tausync_lib.models.KeyExchangeMessage;
+import com.example.tausync_lib.models.SessionControlMessage;
 import com.example.tausync_lib.models.TransferRequest;
 import com.google.gson.Gson;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 /**
  * Central hub (singleton) for ID management and packet routing per TauSync v3.
@@ -65,8 +73,129 @@ public final class ConnectionContext {
     private final SocketTransport wifiTransport;
     private final Gson gson = new Gson();
 
+    /**
+     * Number of transports currently brought up by the app (intentional connects minus
+     * intentional disconnects). Unexpected drops do NOT change this count — they reconnect
+     * under the hood — so the session only ends when the last transport is explicitly
+     * disconnected. See {@link #notifyTransportDisconnected()}.
+     */
+    private final AtomicInteger activeTransportCount = new AtomicInteger(0);
+
+    /**
+     * Hybrid session token. Generated server-side after the BT_MAGIC exchange and shared with
+     * the client inside WIFI_CONNECT_READY; the client echoes it in SESSION_JOIN so the server
+     * can prove the incoming Wi-Fi socket belongs to the same session as the Bluetooth link.
+     * Null until a hybrid session is established; cleared by {@link #reset()}.
+     */
+    private volatile String sessionToken = null;
+
+    /**
+     * The peer's Wi-Fi IPv4 address, learned from the WifiHost field of the peer's BT_MAGIC frame
+     * during the hybrid handshake. Lets the app connect Wi-Fi (or display/pre-fill the address)
+     * without the user typing an IP — the Bluetooth link discovers it. Null until a hybrid BT_MAGIC
+     * carrying a host arrives; cleared by {@link #reset()}.
+     */
+    private volatile String peerWifiHost = null;
+
+    /**
+     * The Bluetooth (primary) transport of an active hybrid session, registered by the hybrid
+     * {@link ConnectionManager} when it connects. Lets a secondary manager from {@code newManager()}
+     * bind to the always-on Bluetooth link instead of the lazy (usually disconnected) Wi-Fi socket
+     * while a hybrid session is up — without it, {@code newManager().connect(word)} fails with
+     * "Transport not connected". Unlike {@link #wifiTransport} it is not created here (the Android
+     * {@link com.example.tausync_lib.implementations.transport.BluetoothTransport} needs a Context),
+     * so it is registered after connect and cleared by {@link #reset()}.
+     */
+    private volatile ITransport bluetoothTransport = null;
+
+    /**
+     * Per-session crypto: runs the ECDH key exchange and encrypts/decrypts frame payloads once a
+     * shared key is derived. Same lifecycle as {@link #sessionToken} — cleared by {@link #reset()}.
+     */
+    private final SecuritySession securitySession = new SecuritySession();
+
+    /** Completed when the peer's KEY_EXCHANGE public key arrives, unblocking {@link #completeKeyExchange}. */
+    private volatile CompletableFuture<String> peerKeyReceived;
+
+    /** Our ephemeral ECDH public key (base64 SPKI) for the in-flight exchange. */
+    private volatile String localPublicKey;
+
+    /** Builds the (plaintext) KEY_EXCHANGE frame; framing only, no routing state. */
+    private final IProtocolHandler keyExchangeProtocol = new ProtocolHandler();
+
     private ConnectionContext() {
         wifiTransport = new SocketTransport();
+    }
+
+    /** True once the ECDH exchange has derived a key and payload encryption is active. */
+    public boolean isEncryptionActive() {
+        return securitySession.isEncryptionActive();
+    }
+
+    /** Encrypts a frame payload (no-op while inactive or empty). Called from {@link ProtocolHandler#buildFrame}. */
+    public byte[] encryptPayload(byte[] payload) {
+        return securitySession.encryptPayload(payload);
+    }
+
+    /** Decrypts a frame payload (no-op while inactive or empty). Called from {@link #dispatch} after routing. */
+    public byte[] decryptPayload(byte[] payload) {
+        return securitySession.decryptPayload(payload);
+    }
+
+    /**
+     * Generates the local ECDH key pair and arms the peer-key awaiter. Call right after {@link #reset()}
+     * and BEFORE the transport connects, so a peer KEY_EXCHANGE that arrives immediately can be completed
+     * synchronously on the receive thread (closing the race where the peer's first encrypted frame is
+     * processed before encryption activates).
+     */
+    public void beginKeyExchange() {
+        peerKeyReceived = new CompletableFuture<>();
+        localPublicKey = securitySession.generateLocalPublicKey();
+    }
+
+    /**
+     * Sends our KEY_EXCHANGE public key over {@code transport} and awaits the peer's, then derives the
+     * shared key. The exchange is symmetric (both sides send and receive) and runs as the very first
+     * traffic on the primary transport, before BT_MAGIC / meeting-word discovery. Idempotent with the
+     * synchronous derivation done in {@link #tryHandleKeyExchange}.
+     */
+    public void completeKeyExchange(ITransport transport) throws Exception {
+        if (transport == null) throw new IllegalArgumentException("transport must not be null");
+        if (peerKeyReceived == null) beginKeyExchange();
+        CompletableFuture<String> awaiter = peerKeyReceived;
+
+        KeyExchangeMessage message = new KeyExchangeMessage();
+        message.setMagicBytes(CoreConfig.MAGIC_BYTES);
+        message.setType(KeyExchangeMessage.TYPE_KEY_EXCHANGE);
+        message.setPublicKey(localPublicKey);
+        byte[] body = gson.toJson(message).getBytes(StandardCharsets.UTF_8);
+        byte[] frame = keyExchangeProtocol.buildFrame(CoreConfig.CONTROL_CHANNEL_ID, body, CoreConfig.FLAG_CONTROL);
+        transport.sendRaw(frame).get();
+
+        String peerKey = awaiter.get(CoreConfig.KEY_EXCHANGE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        // Safety net: the dispatch path normally derives the key synchronously when the peer frame
+        // arrives. completeExchange is idempotent, so this is a no-op if that already happened.
+        securitySession.completeExchange(peerKey);
+    }
+
+    /** Stores the hybrid session token (see {@link #sessionToken}). */
+    public void setSessionToken(String token) {
+        this.sessionToken = token;
+    }
+
+    /** Returns the hybrid session token, or null if no hybrid session is established. */
+    public String getSessionToken() {
+        return sessionToken;
+    }
+
+    /** Stores the peer's Wi-Fi IPv4 address learned over Bluetooth (see {@link #peerWifiHost}). */
+    public void setPeerWifiHost(String host) {
+        this.peerWifiHost = host;
+    }
+
+    /** Returns the peer's Wi-Fi IPv4 address learned over Bluetooth, or null if not yet known. */
+    public String getPeerWifiHost() {
+        return peerWifiHost;
     }
 
     /**
@@ -95,6 +224,9 @@ public final class ConnectionContext {
         // re-establishing, so stale handlers and pending REQs are not replayed on the
         // new session's frames. Mirrors the C# ConnectionContext.InitializeTransports.
         reset();
+        // Arm the key exchange before connecting so a peer KEY_EXCHANGE arriving the instant the link
+        // is up is captured (and derived synchronously) rather than lost.
+        beginKeyExchange();
         try {
             wifiTransport.connect(targetId, timeoutSeconds).get();
         } catch (java.util.concurrent.ExecutionException e) {
@@ -112,6 +244,16 @@ public final class ConnectionContext {
 
     public SocketTransport getWifiTransportAsSocket() {
         return wifiTransport;
+    }
+
+    /** Registers the active hybrid session's Bluetooth transport (see {@link #bluetoothTransport}). */
+    public void setBluetoothTransport(ITransport transport) {
+        this.bluetoothTransport = transport;
+    }
+
+    /** @return the active hybrid session's Bluetooth transport, or null in Wi-Fi-only mode. */
+    public ITransport getBluetoothTransport() {
+        return bluetoothTransport;
     }
 
     /**
@@ -245,6 +387,29 @@ public final class ConnectionContext {
     }
 
     /**
+     * Records that a transport has been intentionally brought up. Paired with
+     * {@link #notifyTransportDisconnected()} on the matching explicit disconnect.
+     * Reconnects after an unexpected drop do NOT call this — the transport never
+     * logically left the session.
+     */
+    public void notifyTransportConnected() {
+        activeTransportCount.incrementAndGet();
+    }
+
+    /**
+     * Records that a transport has been intentionally torn down. Only when the LAST live
+     * transport disconnects (count reaches zero) are the open channels aborted and the
+     * session state reset. Disconnecting one transport while another stays up (e.g. dropping
+     * Wi-Fi but keeping Bluetooth) leaves that transport's channels untouched.
+     */
+    public void notifyTransportDisconnected() {
+        if (activeTransportCount.decrementAndGet() <= 0) {
+            abortAllChannels();
+            reset();
+        }
+    }
+
+    /**
      * Clears all routing, service, and discovery state accumulated during a session.
      *
      * <p>Must be called before re-establishing a new connection so that stale handlers
@@ -256,6 +421,12 @@ public final class ConnectionContext {
         targetMap.clear();
         serviceRegistry.clear();
         pendingDiscoveryByWord.clear();
+        sessionToken = null;
+        peerWifiHost = null;
+        bluetoothTransport = null;
+        securitySession.clear();
+        peerKeyReceived = null;
+        localPublicKey = null;
         nextCorrelationId.set(CoreConfig.MIN_ID);
     }
 
@@ -278,9 +449,20 @@ public final class ConnectionContext {
     }
 
     private boolean dispatchToExistingChannel(int targetId, byte[] payload, byte flags) {
+        // Transport-switch barrier frames (BARRIER / BARRIER_ACK) are handled out-of-band by the hybrid
+        // manager — they carry no channel data and must not trigger FIN cleanup.
+        if ((flags & (CoreConfig.FLAG_BARRIER | CoreConfig.FLAG_BARRIER_ACK)) != 0) {
+            BiConsumer<Integer, Byte> listener = channelControlListener;
+            if (listener != null) listener.accept(targetId, flags);
+            return true;
+        }
+
         BiConsumer<byte[], Byte> handler = routingMap.get(targetId);
         if (handler == null) return false;
 
+        // Decrypt only now — after the plaintext-header routing decision picked this handler — so
+        // decryption is never on the routing path and dropped/empty frames cost nothing.
+        payload = securitySession.decryptPayload(payload);
         handler.accept(payload, flags);
 
         if ((flags & CoreConfig.FLAG_FIN) != 0) {
@@ -293,6 +475,20 @@ public final class ConnectionContext {
 
     private boolean dispatchDiscoveryRequest(byte[] payload, byte flags) {
         if ((flags & CoreConfig.FLAG_CONTROL) == 0) return false;
+
+        // Key-exchange frames arrive in plaintext, before encryption is active, as the first traffic on
+        // the link. Consume them here (gated on !active so a later decrypted control frame can never be
+        // mistaken for one) BEFORE any decryption, and derive the key synchronously on this receive
+        // thread so the peer's first encrypted frame is never processed before activation.
+        if (!securitySession.isEncryptionActive() && tryHandleKeyExchange(payload)) return true;
+        // Now that the key exchange has been ruled out, decrypt the control payload (no-op while inactive
+        // or empty) before parsing its JSON.
+        payload = securitySession.decryptPayload(payload);
+
+        // Hybrid session signaling (BT_MAGIC, WIFI_CONNECT_*, SESSION_JOIN*) is checked before
+        // meeting-word discovery: it shares TargetID=0 + CONTROL but is keyed by a reserved Type,
+        // so it never collides with a user meeting word.
+        if (tryHandleSessionControl(payload)) return true;
 
         TransferRequest request = parseTransferRequest(payload);
         if (request == null) return false;
@@ -471,6 +667,115 @@ public final class ConnectionContext {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    // ── Hybrid session control ────────────────────────────────────────
+
+    /**
+     * Hybrid session-control callback. Registered by the hybrid {@link ConnectionManager};
+     * invoked for every recognised session-control frame (BT_MAGIC, WIFI_CONNECT_*, SESSION_JOIN*)
+     * arriving on TargetID=0. The coordinator infers the source transport from the message type,
+     * so the source need not be passed here.
+     */
+    private volatile Consumer<SessionControlMessage> sessionControlListener;
+
+    /** Registers the hybrid session-control callback (see {@link #sessionControlListener}). */
+    public void registerSessionControlListener(Consumer<SessionControlMessage> listener) {
+        if (listener == null) throw new IllegalArgumentException("listener must not be null");
+        this.sessionControlListener = listener;
+    }
+
+    /** Clears the hybrid session-control callback (e.g. on manager close). */
+    public void unregisterSessionControlListener() {
+        this.sessionControlListener = null;
+    }
+
+    /**
+     * Channel-control callback for transport-switch barrier frames (BARRIER / BARRIER_ACK) arriving on
+     * a channel TargetID. Registered by the hybrid {@link ConnectionManager}; receives
+     * (channelTargetId, flags). Lets the manager answer the barrier and complete pending switches
+     * without the frame being treated as channel data.
+     */
+    private volatile BiConsumer<Integer, Byte> channelControlListener;
+
+    /** Registers the channel-control (barrier) callback (see {@link #channelControlListener}). */
+    public void registerChannelControlListener(BiConsumer<Integer, Byte> listener) {
+        if (listener == null) throw new IllegalArgumentException("listener must not be null");
+        this.channelControlListener = listener;
+    }
+
+    /** Clears the channel-control (barrier) callback (e.g. on manager close). */
+    public void unregisterChannelControlListener() {
+        this.channelControlListener = null;
+    }
+
+    /**
+     * Routes a recognised session-control frame to the registered listener. Returns false (so the
+     * frame falls through to meeting-word discovery) when no listener is registered or the payload
+     * is not a valid session-control message.
+     */
+    private boolean tryHandleSessionControl(byte[] payload) {
+        Consumer<SessionControlMessage> listener = sessionControlListener;
+        if (listener == null) return false;
+        SessionControlMessage message = parseSessionControl(payload);
+        if (message == null) return false;
+        listener.accept(message);
+        return true;
+    }
+
+    /**
+     * Consumes a plaintext KEY_EXCHANGE frame: derives the shared key synchronously (on the receive
+     * thread, so encryption is active before the next frame is read) and unblocks
+     * {@link #completeKeyExchange}. Returns false for any non-KEY_EXCHANGE payload so it falls through
+     * to the normal discovery path.
+     */
+    private boolean tryHandleKeyExchange(byte[] payload) {
+        KeyExchangeMessage message = parseKeyExchange(payload);
+        if (message == null || message.getPublicKey() == null || message.getPublicKey().isEmpty()) {
+            return false;
+        }
+        try {
+            // Derive now if our key pair is ready (it is, after beginKeyExchange ran before connect).
+            securitySession.completeExchange(message.getPublicKey());
+        } catch (Exception ignored) {
+            // Key pair not ready yet or malformed peer key — the driver's await + completeExchange safety
+            // net will derive it. Never let a bad frame break dispatch.
+        }
+        CompletableFuture<String> awaiter = peerKeyReceived;
+        if (awaiter != null) awaiter.complete(message.getPublicKey());
+        return true;
+    }
+
+    private KeyExchangeMessage parseKeyExchange(byte[] payload) {
+        if (payload == null || payload.length == 0) return null;
+        try {
+            KeyExchangeMessage message =
+                    gson.fromJson(new String(payload, StandardCharsets.UTF_8), KeyExchangeMessage.class);
+            if (message == null || message.getMagicBytes() != CoreConfig.MAGIC_BYTES) return null;
+            return KeyExchangeMessage.TYPE_KEY_EXCHANGE.equals(message.getType()) ? message : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private SessionControlMessage parseSessionControl(byte[] payload) {
+        if (payload == null || payload.length == 0) return null;
+        try {
+            SessionControlMessage message =
+                    gson.fromJson(new String(payload, StandardCharsets.UTF_8), SessionControlMessage.class);
+            if (message == null || message.getMagicBytes() != CoreConfig.MAGIC_BYTES) return null;
+            return isKnownSessionType(message.getType()) ? message : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static boolean isKnownSessionType(String type) {
+        return SessionControlMessage.TYPE_BT_MAGIC.equals(type)
+                || SessionControlMessage.TYPE_WIFI_CONNECT_REQ.equals(type)
+                || SessionControlMessage.TYPE_WIFI_CONNECT_READY.equals(type)
+                || SessionControlMessage.TYPE_SESSION_JOIN.equals(type)
+                || SessionControlMessage.TYPE_SESSION_JOIN_ACK.equals(type);
     }
 
     // ── Functional interface for service callbacks ─────────────────────

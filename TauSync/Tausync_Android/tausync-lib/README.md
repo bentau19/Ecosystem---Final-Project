@@ -59,6 +59,116 @@ TauSyncStream s1 = tau.connect("channel_a");
 TauSyncStream s2 = manager2.connect("channel_b");
 ```
 
+## Bluetooth & Hybrid Mode
+
+TauSync can run over **Bluetooth** instead of Wi‑Fi, so the two devices no longer need to share a
+network (no router, NAT, captive portal, or firewall in the way). Android is always the Bluetooth
+**client**; the Windows PC is the Bluetooth **server**.
+
+**Hybrid mode** uses both links: **Bluetooth is always on** (control traffic + small messages) and
+**Wi‑Fi is brought up automatically and only when a large payload needs the speed** (a file), then
+dropped after it sits idle. The PC's Wi‑Fi IP is discovered over Bluetooth — you never type it.
+
+Routing is automatic, decided by which method you call:
+
+| You call | Travels over |
+|----------|--------------|
+| `writeString(...)`, small `write(...)` | **Bluetooth** |
+| `writeFile(...)` | **Wi‑Fi** (falls back to Bluetooth if Wi‑Fi can't be established) |
+
+### Permissions
+
+Add to your app's `AndroidManifest.xml` and request the runtime ones (API 31+) before connecting:
+
+```xml
+<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+<uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+    android:usesPermissionFlags="neverForLocation" />
+```
+
+### Connect when you already know the PC's MAC
+
+```java
+// All TauSync calls block — run on a background thread.
+TauSync tau = new TauSync();
+tau.connectHybrid(context, "AA:BB:CC:DD:EE:FF");   // BT connect + handshake
+
+TauSyncStream stream = tau.connect("main");
+stream.writeString("hello over bluetooth\n");       // → Bluetooth
+stream.writeFile("/sdcard/DCIM/photo.jpg");          // → Wi‑Fi (automatic)
+stream.close();
+
+String pcWifiIp = tau.getPeerWifiIp();  // discovered over BT, e.g. "192.168.1.50"
+boolean wifiUp  = tau.isWifiActive();   // true only while a large transfer keeps Wi‑Fi up
+tau.dispose();
+```
+
+### First‑time pairing — discover the PC over BLE (no MAC typing)
+
+The first time you don't know the PC's MAC. The PC advertises a BLE beacon carrying its **name** and
+its Bluetooth MAC. `BleDiscovery` scans for it, hands you the name so you can show your own confirm
+dialog, then **bonds and remembers the MAC** so later launches skip discovery entirely.
+
+```java
+BleDiscovery bleDiscovery = new BleDiscovery();
+
+// 1. Returning launch? Use the saved MAC directly — no scan, no dialog.
+String saved = BleDiscovery.getSavedAddress(context);
+if (saved != null) {
+    tau.connectHybrid(context, saved);   // (background thread)
+    return;
+}
+
+// 2. First launch: scan for the PC's beacon, then ask the user.
+bleDiscovery.startScan(activity, new BleDiscovery.DiscoveryCallback() {
+    @Override public void onPcFound(String pcName, BluetoothDevice pc) {
+        runOnUiThread(() -> new AlertDialog.Builder(activity)
+            .setTitle("TauSync PC found")
+            .setMessage("Connect to \"" + pcName + "\" (" + pc.getAddress() + ")?")
+            .setPositiveButton("Connect", (d, w) -> pairAndConnect(pc))
+            .setNegativeButton("Cancel", null)
+            .show());
+    }
+    @Override public void onDiscoveryFailed(String reason) {
+        Log.w(TAG, "No TauSync PC found nearby: " + reason);
+    }
+});
+
+// 3. Bond over Classic Bluetooth (+ save the MAC), then connect.
+void pairAndConnect(BluetoothDevice pc) {
+    bleDiscovery.bond(context, pc, new BleDiscovery.PairingCallback() {
+        @Override public void onDevicePaired(BluetoothDevice paired) {
+            // paired + bonded + MAC saved. Connect on a background thread.
+            backgroundExecutor.execute(() ->
+                tau.connectHybrid(context, paired.getAddress()));
+        }
+        @Override public void onPairingFailed(String reason) {
+            Log.w(TAG, "Pairing failed: " + reason);
+        }
+    });
+}
+```
+
+**What the user sees the first time:** phone scans → *your* "Found <PC name>?" dialog → the PC pops a
+**"Phone wants to connect — Accept / Reject"** prompt → connected. After that, **both sides remember
+each other and reconnect silently** (the saved MAC skips the phone dialog; the PC skips its prompt).
+
+> **Bond lost** (user unpaired the PC in system settings): `connectHybrid` throws, with
+> `BluetoothTransport.BondLostException` somewhere in the cause chain. Catch it, call
+> `BleDiscovery.clearSavedAddress(context)`, and re‑run `startScan` to re‑pair.
+
+> Call `bleDiscovery.stopScan()` in your Activity's `onDestroy()` to end a scan that's still running.
+
+### `BleDiscovery` API
+
+| Method | Description |
+|--------|-------------|
+| `startScan(Context, DiscoveryCallback)` | Scan for the PC beacon (15 s). `onPcFound(name, device)` fires on the first match; `onDiscoveryFailed(reason)` on timeout/error. |
+| `bond(Context, BluetoothDevice, PairingCallback)` | Pair over Classic Bluetooth, save the MAC, then `onDevicePaired(device)`. |
+| `stopScan()` | Stop an in‑progress scan. |
+| `getSavedAddress(Context)` *(static)* | The remembered PC MAC, or `null`. |
+| `clearSavedAddress(Context)` *(static)* | Forget the saved PC (use after a bond loss). |
+
 ## Threading
 
 All TauSync operations are **blocking** and must be called from a background thread. On Android, use `Dispatchers.IO` (Kotlin coroutines) or `Executors.newSingleThreadExecutor()`:
@@ -92,6 +202,10 @@ lifecycleScope.launch(Dispatchers.IO) {
 | `isConnected()`                        | Returns `true` if the transport layer is active.         |
 | `getPeerWaitingWords()`                | `List<String>` snapshot of words the peer has REQ'd that we have not paired yet. |
 | `newManager()`                         | Creates another TauSync sharing the same socket.         |
+| `connectHybrid(Context, String mac)`   | Connect over Bluetooth (hybrid BT + lazy Wi‑Fi). Blocks until the BT link + handshake are up. |
+| `getPeerWifiIp()`                       | The peer's Wi‑Fi IP discovered over Bluetooth, or `null`. |
+| `isWifiActive()`                       | `true` while the lazy Wi‑Fi link is currently up (e.g. during a file transfer). |
+| `disconnect()`                         | Closes the transport but keeps this instance usable — you can `connectTo()`/`connectHybrid()` again afterward (unlike `dispose()`). |
 | `dispose()`                            | Releases the underlying ConnectionManager. Idempotent.   |
 
 
@@ -202,7 +316,10 @@ All methods throw standard Java exceptions:
 - **Min SDK**: 24 (Android 7.0)
 - **Compile SDK / Target SDK**: 37
 - **Dependencies**: Gson (for protocol handshake JSON)
-- **Permissions**: `android.permission.INTERNET`
+- **Permissions**:
+  - Wi‑Fi mode: `android.permission.INTERNET`
+  - Bluetooth/hybrid mode (API 31+, request at runtime): `android.permission.BLUETOOTH_CONNECT`,
+    `android.permission.BLUETOOTH_SCAN`
 
 ## Installation / build
 

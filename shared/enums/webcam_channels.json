@@ -1,0 +1,17 @@
+{
+  "name": "WebcamChannels",
+  "description": "TauSync meeting-word identifiers for the webcam streaming protocol. Android streams camera frames to PC over a persistent channel.",
+  "type": "string",
+  "members": [
+    {
+      "name": "WEBCAM_START",
+      "value": "webcam_start",
+      "description": "Android sends a start signal to PC. PC opens the virtual camera in response."
+    },
+    {
+      "name": "WEBCAM_FRAMES",
+      "value": "webcam_frames",
+      "description": "Android streams JPEG frames continuously to PC. Channel stays open for the duration of the session."
+    }
+  ]
+}

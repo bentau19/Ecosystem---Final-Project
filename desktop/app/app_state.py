@@ -1,7 +1,10 @@
 from typing import Final
 
+from domain.enums.clipboard_channels import ClipboardChannels
+from domain.enums.webcam_channels import WebcamChannels
 from repositories.device import DeviceRepository
 from repositories.tool import ToolRepository
+from services.clipboard import ClipboardService
 from services.backup import BackupService
 from services.connectivity import ConnectivityService
 from services.device_info import DeviceInfoService
@@ -10,10 +13,12 @@ from services.lifecycle import Lifecycle
 from services.phone_request import PhoneRequestService
 from services.tool import ToolService
 from services.virtual_drive import VirtualDriveService
+from services.webcam import WebcamService
 from viewmodels.backup import BackupViewModel
 from viewmodels.device import DeviceViewModel
 from viewmodels.file_transfer import FileTransferViewModel
 from viewmodels.tool import ToolViewModel
+from viewmodels.webcam import WebcamViewModel
 
 
 class AppState:
@@ -39,10 +44,16 @@ class AppState:
         self.file_transfer_service: Final[FileTransferService] = FileTransferService(
             connectivity=self.connectivity_service,
         )
+        self.clipboard_service: Final[ClipboardService] = ClipboardService(
+            connectivity=self.connectivity_service,
+        )
         self.tool_service: Final[ToolService] = ToolService(
             repository=self.tools_repository,
         )
         self.backup_service: Final[BackupService] = BackupService(
+            connectivity=self.connectivity_service,
+        )
+        self.webcam_service: Final[WebcamService] = WebcamService(
             connectivity=self.connectivity_service,
         )
 
@@ -67,12 +78,22 @@ class AppState:
             device_info=self.device_info_service,
         )
 
+        self.webcam_viewmodel: Final[WebcamViewModel] = WebcamViewModel(
+            webcam_service=self.webcam_service,
+        )
         self.phone_request_service: Final[PhoneRequestService] = PhoneRequestService(
             connectivity_service=self.connectivity_service,
             file_transfer_service=self.file_transfer_service,
             backup_service=self.backup_service,
             device_info_service=self.device_info_service,
         )
+        self.phone_request_service.operations[
+            ClipboardChannels.CLIPBOARD_ANDROID_TO_PC.value
+        ] = self.clipboard_service.receive
+
+        self.phone_request_service.operations[
+            WebcamChannels.WEBCAM_START.value
+        ] = self.webcam_service.receive_start
 
         # Wire service lifecycles to device connection events.
         # BackupService is wired first so its executor is initialized before

@@ -36,9 +36,33 @@ public class SocketTransport implements ITransport {
     private volatile boolean serverMode;
     private Thread receiveThread;
     private Thread acceptThread;
+    private Thread reconnectThread;
     private final Semaphore sendLock = new Semaphore(1);
     private final IProtocolHandler protocolHandler;
     private OnDataReceivedListener dataReceivedListener;
+
+    /** True only while an explicit {@link #disconnect()} is tearing the transport down — distinguishes a deliberate close (ends the session) from an unexpected drop (triggers reconnect). */
+    private volatile boolean intentionalClose;
+
+    /** True once this transport has been counted in {@link ConnectionContext}, so the matching disconnect decrements exactly once. */
+    private volatile boolean counted;
+
+    /** Peer host saved on connect so the reconnect loop (client mode) can re-dial it. */
+    private volatile String lastTargetId;
+
+    /**
+     * Completed while a live connection exists; replaced with an incomplete future during a
+     * reconnect so a send issued mid-drop waits for the link to come back instead of failing.
+     * {@link #sendRaw(byte[])} waits on this before writing.
+     */
+    private volatile CompletableFuture<Void> sendGate = new CompletableFuture<>();
+
+    /**
+     * Epoch millis of the last frame sent or received. The hybrid coordinator reads this to decide
+     * when the Wi-Fi link has been idle long enough to disconnect. Initialised to "now" so a freshly
+     * connected link is not immediately considered idle.
+     */
+    private volatile long lastActivityMillis = System.currentTimeMillis();
 
     private int port = CoreConfig.DEFAULT_PORT;
 
@@ -61,6 +85,16 @@ public class SocketTransport implements ITransport {
         return serverMode;
     }
 
+    /** Epoch millis of the last send or receive on this transport (see {@link #lastActivityMillis}). */
+    public long getLastActivityMillis() {
+        return lastActivityMillis;
+    }
+
+    @Override
+    public TransportKind getTransportType() {
+        return TransportKind.WIFI;
+    }
+
     @Override
     public CompletableFuture<Void> connect(String targetId) {
         return connect(targetId, null);
@@ -75,13 +109,19 @@ public class SocketTransport implements ITransport {
             disconnect();
         }
 
+        // Re-arm for a fresh session: a prior disconnect() left intentionalClose set, and the
+        // gate must start incomplete until this connection succeeds.
+        intentionalClose = false;
+        sendGate = new CompletableFuture<>();
+
         boolean wantServer = targetId == null || targetId.trim().isEmpty();
         serverMode = wantServer;
 
         if (wantServer) {
             return startListening(timeoutSeconds);
         }
-        return connectToServerWithRetry(targetId.trim(), timeoutSeconds);
+        lastTargetId = targetId.trim();
+        return connectToServerWithRetry(lastTargetId, timeoutSeconds);
     }
 
     // ── Server Mode ───────────────────────────────────────────────────
@@ -102,6 +142,7 @@ public class SocketTransport implements ITransport {
                 outputStream = socket.getOutputStream();
                 connected = true;
                 startReceiveLoop();
+                markInitialConnection();
                 connectionFuture.complete(null);
             } catch (java.net.SocketTimeoutException e) {
                 connectionFuture.completeExceptionally(
@@ -155,6 +196,7 @@ public class SocketTransport implements ITransport {
                     outputStream = socket.getOutputStream();
                     connected = true;
                     startReceiveLoop();
+                    markInitialConnection();
                     connectionFuture.complete(null);
                     return;
                 } catch (IOException e) {
@@ -211,6 +253,14 @@ public class SocketTransport implements ITransport {
         if (disposed) {
             return CompletableFuture.failedFuture(new IllegalStateException("Transport disposed"));
         }
+
+        try {
+            // Block briefly if an unexpected drop is being healed, so a write issued during
+            // the reconnect window resumes on the new link instead of failing.
+            waitForConnection();
+        } catch (Exception e) {
+            return CompletableFuture.failedFuture(e);
+        }
         if (!connected || outputStream == null) {
             return CompletableFuture.failedFuture(new IllegalStateException("Not connected"));
         }
@@ -220,6 +270,7 @@ public class SocketTransport implements ITransport {
             try {
                 outputStream.write(data);
                 outputStream.flush();
+                lastActivityMillis = System.currentTimeMillis();
             } finally {
                 sendLock.release();
             }
@@ -229,6 +280,21 @@ public class SocketTransport implements ITransport {
             return CompletableFuture.failedFuture(new RuntimeException("Send interrupted", e));
         } catch (IOException e) {
             return CompletableFuture.failedFuture(new RuntimeException("Send failed", e));
+        }
+    }
+
+    /**
+     * Blocks until the send gate opens (connection live) or the wait budget elapses.
+     * Returns immediately during normal operation; only parks during a reconnect window.
+     */
+    private void waitForConnection() throws Exception {
+        CompletableFuture<Void> gate = sendGate;
+        if (gate.isDone()) return;
+        try {
+            gate.get(CoreConfig.SEND_RECONNECT_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable cause = e.getCause();
+            throw cause instanceof Exception ? (Exception) cause : e;
         }
     }
 
@@ -271,6 +337,7 @@ public class SocketTransport implements ITransport {
                     if (payloadRead != payloadLength) break;
                 }
 
+                lastActivityMillis = System.currentTimeMillis();
                 IProtocolHandler.ParseResult result = protocolHandler.parseFrame(frame);
                 dispatchFrame(result.getTargetId(), result.getPayload(), result.getFlags(), frame);
 
@@ -279,9 +346,7 @@ public class SocketTransport implements ITransport {
             }
         }
 
-        if (connected) {
-            disconnect();
-        }
+        handleConnectionDropped();
     }
 
     private void dispatchFrame(int targetId, byte[] payload, byte flags, byte[] rawFrame) {
@@ -313,18 +378,45 @@ public class SocketTransport implements ITransport {
 
     // ── Lifecycle ─────────────────────────────────────────────────────
 
+    /**
+     * Marks this transport connected exactly once and counts it in {@link ConnectionContext}.
+     * Called only on the FIRST successful connect — reconnects after a drop reuse the same
+     * count, so the session is never double-counted.
+     */
+    private void markInitialConnection() {
+        if (!counted) {
+            counted = true;
+            ConnectionContext.getInstance().notifyTransportConnected();
+        }
+        sendGate.complete(null);
+    }
+
+    /**
+     * Explicit, app-initiated teardown. Ends the session for this transport: stops any
+     * reconnect attempt and notifies {@link ConnectionContext}, which aborts the open channels
+     * and resets state only if this was the last live transport.
+     */
     public void disconnect() {
-        if (!connected) return;
+        if (intentionalClose) return;
+        intentionalClose = true;
         connected = false;
+
+        // Stop any in-flight reconnect and release a sender parked on the gate.
+        Thread rc = reconnectThread;
+        if (rc != null) rc.interrupt();
+        sendGate.complete(null);
 
         closeQuietly(inputStream);
         closeQuietly(outputStream);
         closeQuietly(socket);
+        closeServerSocket(); // unblocks a reconnect accept(), if one is in progress
 
-        // Unblock every reader stuck on an open channel stream. The peer is gone, so no
-        // FIN will ever arrive — deliver a synthetic FIN to each handler so blocked
-        // read() calls return EOF instead of hanging forever.
-        ConnectionContext.getInstance().abortAllChannels();
+        // Decrement the transport count exactly once. Channels are aborted (synthetic FIN so
+        // blocked read() calls return EOF) and state reset only when the count hits zero.
+        if (counted) {
+            counted = false;
+            ConnectionContext.getInstance().notifyTransportDisconnected();
+        }
 
         Thread rt = receiveThread;
         if (rt != null && rt != Thread.currentThread()) {
@@ -337,6 +429,93 @@ public class SocketTransport implements ITransport {
         inputStream = null;
         outputStream = null;
         socket = null;
+    }
+
+    /**
+     * Handles the receive loop exiting on a broken link. An explicit disconnect ends the
+     * session; an unexpected drop instead tears down only the dead socket — keeping the
+     * channels, handlers, and transport count intact — and starts reconnecting so the session
+     * resumes transparently.
+     */
+    private void handleConnectionDropped() {
+        if (intentionalClose || disposed) return;
+        if (!connected) return;
+        connected = false;
+
+        // Fresh incomplete gate so sends block until the link is back.
+        sendGate = new CompletableFuture<>();
+
+        closeQuietly(inputStream);
+        closeQuietly(outputStream);
+        closeQuietly(socket);
+        inputStream = null;
+        outputStream = null;
+        socket = null;
+
+        startReconnectLoop();
+    }
+
+    private void startReconnectLoop() {
+        reconnectThread = new Thread(this::reconnectLoop, "TauSync-Reconnect");
+        reconnectThread.setDaemon(true);
+        reconnectThread.start();
+    }
+
+    /**
+     * Retries the connection with exponential back-off until it succeeds or an explicit
+     * disconnect stops it. On success it restarts the receive loop and opens the send gate,
+     * all on the same channel handlers — the layers above never see the gap.
+     */
+    private void reconnectLoop() {
+        int delayMs = CoreConfig.RECONNECT_INITIAL_DELAY_MS;
+        while (!disposed && !intentionalClose) {
+            try {
+                boolean reconnected = serverMode ? tryReListen() : tryReconnectClient();
+                if (reconnected) {
+                    connected = true;
+                    startReceiveLoop();
+                    sendGate.complete(null);
+                    return;
+                }
+            } catch (Exception ignored) {
+                // transient failure — fall through to back-off and retry
+            }
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            delayMs = Math.min(delayMs * 2, CoreConfig.RECONNECT_MAX_DELAY_MS);
+        }
+    }
+
+    private boolean tryReconnectClient() {
+        try {
+            Socket attempt = new Socket();
+            attempt.connect(new java.net.InetSocketAddress(lastTargetId, port),
+                    CoreConfig.RECONNECT_MAX_DELAY_MS);
+            socket = attempt;
+            inputStream = socket.getInputStream();
+            outputStream = socket.getOutputStream();
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private boolean tryReListen() {
+        try {
+            serverSocket = new ServerSocket(port);
+            socket = serverSocket.accept();
+            inputStream = socket.getInputStream();
+            outputStream = socket.getOutputStream();
+            return true;
+        } catch (IOException e) {
+            return false;
+        } finally {
+            closeServerSocket();
+        }
     }
 
     @Override

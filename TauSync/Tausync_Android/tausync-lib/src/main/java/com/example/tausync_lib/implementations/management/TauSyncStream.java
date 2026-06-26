@@ -183,7 +183,9 @@ public final class TauSyncStream implements Closeable {
         checkOpen();
         if (data == null) throw new IllegalArgumentException("data must not be null");
         if (data.length == 0) return 0;
-        outputStream.write(data, 0, data.length);
+        // A raw byte[] write carries no file/string semantics — route by size: a payload at or above a
+        // full wire chunk goes over Wi-Fi in hybrid mode, smaller stays on Bluetooth.
+        sendData(data, 0, data.length, data.length > CoreConfig.HYBRID_SMALL_THRESHOLD_BYTES);
         return data.length;
     }
 
@@ -198,7 +200,10 @@ public final class TauSyncStream implements Closeable {
         checkOpen();
         if (text == null) throw new IllegalArgumentException("text must not be null");
         byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
-        return write(bytes);
+        if (bytes.length == 0) return 0;
+        // Strings are control/text traffic — always sent over Bluetooth in hybrid mode.
+        sendData(bytes, 0, bytes.length, false);
+        return bytes.length;
     }
 
     // ── File transfer helpers ─────────────────────────────────────────
@@ -211,7 +216,9 @@ public final class TauSyncStream implements Closeable {
      * @throws IOException on I/O error or file not found
      */
     public long writeFile(String path) throws IOException {
-        return writeFile(path, DEFAULT_CHUNK_SIZE);
+        // Use the large-transfer chunk size (above the hybrid threshold) so a file streamed in hybrid
+        // mode is routed over Wi-Fi rather than Bluetooth. Small writes keep the default chunk size.
+        return writeFile(path, CoreConfig.LARGE_TRANSFER_CHUNK_SIZE);
     }
 
     /**
@@ -234,7 +241,8 @@ public final class TauSyncStream implements Closeable {
         try (FileInputStream fis = new FileInputStream(file)) {
             int n;
             while ((n = fis.read(buf, 0, chunkSize)) > 0) {
-                outputStream.write(buf, 0, n);
+                // A file is bulk data — always sent over Wi-Fi in hybrid mode.
+                sendData(buf, 0, n, true);
                 total += n;
             }
         }
@@ -313,6 +321,30 @@ public final class TauSyncStream implements Closeable {
         if (closed.get()) throw new IOException("Stream is closed");
     }
 
+    /**
+     * Validates and sends {@code count} bytes, choosing the transport via {@code preferWifi} (files →
+     * Wi-Fi, strings → Bluetooth, raw writes → by size). Slices into {@link CoreConfig#LARGE_TRANSFER_CHUNK_SIZE}
+     * pieces so one user write never hands an unbounded buffer to the manager; the manager then splits
+     * each slice into {@link CoreConfig#STREAM_CHUNK_SIZE} wire frames. All frames of one send ride the
+     * one chosen link, so the send is never split across transports.
+     */
+    private void sendData(byte[] buffer, int offset, int count, boolean preferWifi) throws IOException {
+        if (closed.get()) throw new IOException("Stream is closed");
+        if (finSent) return;
+        if (buffer == null) throw new NullPointerException("buffer");
+        if (offset < 0 || count < 0 || offset + count > buffer.length) {
+            throw new IndexOutOfBoundsException();
+        }
+        if (count == 0) return;
+
+        int sent = 0;
+        while (sent < count) {
+            int slice = Math.min(CoreConfig.LARGE_TRANSFER_CHUNK_SIZE, count - sent);
+            connectionManager.sendStreamData(localId, buffer, offset + sent, slice, preferWifi);
+            sent += slice;
+        }
+    }
+
     private static void validateChunkSize(int chunkSize) {
         if (chunkSize < 1 || chunkSize > MAX_CHUNK_SIZE) {
             throw new IllegalArgumentException(
@@ -332,21 +364,8 @@ public final class TauSyncStream implements Closeable {
 
         @Override
         public void write(byte[] buffer, int offset, int count) throws IOException {
-            if (closed.get()) throw new IOException("Stream closed");
-            if (finSent) return;
-            if (buffer == null) throw new NullPointerException("buffer");
-            if (offset < 0 || count < 0 || offset + count > buffer.length) {
-                throw new IndexOutOfBoundsException();
-            }
-            if (count == 0) return;
-
-            // Split into STREAM_CHUNK_SIZE slices so no single frame ever exceeds MAX_PAYLOAD_SIZE.
-            int sent = 0;
-            while (sent < count) {
-                int slice = Math.min(CoreConfig.STREAM_CHUNK_SIZE, count - sent);
-                connectionManager.sendStreamData(localId, buffer, offset + sent, slice);
-                sent += slice;
-            }
+            // Raw OutputStream writes carry no file/string semantics — route by size (see write(byte[])).
+            sendData(buffer, offset, count, count > CoreConfig.HYBRID_SMALL_THRESHOLD_BYTES);
         }
 
         @Override

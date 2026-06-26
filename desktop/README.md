@@ -60,6 +60,12 @@ bidirectional file transfer via Windows shell integration, and a configurable to
   appears and behaves like a local disk
 - **Sidebar Navigation** — Icon-based sidebar with logo; `NavigationManager` drives all
   screen transitions without coupling widgets to `MainWindow`
+- **Clipboard Sync** — Two-directional clipboard sync over TauSync. Android → PC: user taps
+  "Send Clipboard to PC"; PC → Android: automatic push on every local clipboard change.
+  SHA-256 hash guard prevents echo loops in both directions
+- **Camera Mirror** — Receives a live JPEG frame stream from the Android app and feeds it
+  into a virtual webcam via `pyvirtualcam` + OBS Virtual Camera driver. Portrait frames are
+  pillarboxed to preserve aspect ratio. Requires OBS Virtual Camera to be installed on the PC
 
 ---
 
@@ -95,6 +101,7 @@ by pip during setup — only the tools below need manual installation.
 | **CMake** | ≥ 3.20 | Configure & build the pipe module | Bundled with the C++ workload above; or [cmake.org](https://cmake.org/download/) (add to PATH) |
 | **.NET 8 SDK** | 8.x | Package the MSI installer; WiX toolset | [dotnet.microsoft.com/download/dotnet/8.0](https://dotnet.microsoft.com/download/dotnet/8.0) |
 | **WiX Toolset** | ≥ 4.x | Create the `.msi` production package | `dotnet tool install --global wix` (requires .NET SDK above) |
+| **OBS Studio** (with Virtual Camera) | ≥ 29.x | Camera Mirror feature — `pyvirtualcam` uses the OBS Virtual Camera driver as its backend | [obsproject.com/download](https://obsproject.com/download) — the driver is installed automatically with OBS |
 
 ### Installing the prerequisites
 
@@ -202,6 +209,21 @@ wix --version   # prints: 4.x.x
 ```
 
 > If `wix` is not found after install, close and reopen your terminal so the PATH is refreshed.
+
+#### 8. OBS Studio (Virtual Camera driver)
+
+`pyvirtualcam` requires a virtual camera driver. The easiest way to get it on Windows is to install
+OBS Studio — the **OBS Virtual Camera** driver is bundled and registered automatically during setup.
+
+1. Download OBS Studio from [obsproject.com/download](https://obsproject.com/download).
+2. Run the installer with default options (no additional components need to be ticked).
+3. After installation you do **not** need to launch OBS — the driver is registered system-wide and
+   `pyvirtualcam` will find it automatically at runtime.
+4. Verify the driver is present by opening **Device Manager → Cameras**: you should see
+   **OBS Virtual Camera** listed.
+
+> **Camera Mirror only.** The OBS driver is only needed when using the Camera Mirror feature.
+> All other SyncDose features (file transfer, backup, device info, clipboard) work without it.
 
 ---
 
@@ -454,7 +476,8 @@ desktop/
 │       ├── backup_channels.py      # BackupChannels — control + per-file result channel names
 │       ├── backup_file_result.py   # BackupFileResult (ACCEPTED, REJECTED, NEEDS_REVIEW, …)
 │       ├── backup_status.py        # BackupStatus — overall backup session state machine
-│       └── virtual_drive_channels.py  # VirtualDriveChannels — list / stat / read / write / … op names
+│       ├── virtual_drive_channels.py  # VirtualDriveChannels — list / stat / read / write / … op names
+│       └── clipboard_channels.py   # ClipboardChannels — CLIPBOARD_ANDROID_TO_PC / CLIPBOARD_PC_TO_ANDROID
 │
 ├── native/
 │   └── windows/
@@ -492,7 +515,8 @@ desktop/
 │   ├── phone_request.py            # PhoneRequestService — polls peer waiting channels, dispatches
 │   ├── tool.py                     # ToolService — wraps ToolRepository, re-emits its signals
 │   ├── backup.py                   # BackupService — receives backup files, runs FileDetection pipeline
-│   └── virtual_drive.py            # VirtualDriveService — bridges VirtualDrive.exe ↔ Android via TauSync
+│   ├── virtual_drive.py            # VirtualDriveService — bridges VirtualDrive.exe ↔ Android via TauSync
+│   └── clipboard.py                # ClipboardService — two-directional clipboard sync; SHA-256 anti-loop guard
 │
 ├── utils/                          # Shared utilities (no singletons here)
 │   ├── meta.py                     # ABCQObjectMeta — metaclass bridging ABC and QObject
@@ -570,8 +594,10 @@ desktop/
     │   └── test_serializer_tool.py
     ├── services/
     │   ├── test_connectivity.py
+    │   ├── test_clipboard.py
     │   ├── test_file_transfer.py
-    │   └── test_phone_request.py
+    │   ├── test_phone_request.py
+    │   └── test_webcam.py
     ├── utils/
     │   ├── test_network.py
     │   └── test_styles.py
@@ -628,6 +654,7 @@ class AppState:
         self.file_transfer_service  = FileTransferService(connectivity)
         self.tool_service           = ToolService(tools_repository)
         self.backup_service         = BackupService(connectivity)
+        self.clipboard_service      = ClipboardService(connectivity)
 
         # ViewModels
         self.device_viewmodel        = DeviceViewModel(connectivity_service, device_info_service)
@@ -923,6 +950,52 @@ Default handler map (registered in `AppState`):
 | `FileTransferChannels.REGULAR_FILE_METADATA_ANDROID_TO_PC` | `FileTransferService.receive_metadata` |
 | `SessionChannels.DISCONNECT_FROM_PHONE` | `ConnectivityService.disconnect_device` |
 | `BackupChannels.*` | `BackupService` (backup session control channel) |
+
+### `ClipboardService`
+
+Two-directional clipboard sync between the PC and Android over TauSync.
+
+**Android → PC (manual):** `PhoneRequestService` detects Android waiting on `CLIPBOARD_ANDROID_TO_PC`
+and calls `receive()`. A daemon thread reads the JSON payload, checks the SHA-256 hash to skip
+duplicates, and emits `clipboard_text_received` so the main-thread slot in `MainWindow` calls
+`QClipboard.setText()`.
+
+**PC → Android (automatic):** `MainWindow` wires `QClipboard.dataChanged` to
+`on_clipboard_changed()`. The method hashes the new content, skips if unchanged, updates
+`_last_synced_hash`, and spawns a daemon thread that writes the JSON payload to
+`CLIPBOARD_PC_TO_ANDROID`.
+
+**Anti-loop guard:** `_last_synced_hash` (SHA-256) is set in `_receive()` *before* emitting the
+signal, so the clipboard change that results from `setText()` is silently dropped by
+`on_clipboard_changed`.
+
+| Signal | Payload | When |
+|---|---|---|
+| `clipboard_text_received` | `str` | Text received from Android; connect to main-thread `QClipboard.setText()` |
+
+| Channel | Wire value | Direction | Purpose |
+|---|---|---|---|
+| `CLIPBOARD_ANDROID_TO_PC` | `clipboard_android_to_pc` | Android → PC | User-initiated push |
+| `CLIPBOARD_PC_TO_ANDROID` | `clipboard_pc_to_android` | PC → Android | Automatic push on PC clipboard change |
+
+### `WebcamService`
+
+Receives a live camera stream from Android and feeds it into a virtual webcam via `pyvirtualcam`.
+
+Flow:
+1. `PhoneRequestService` detects Android waiting on `webcam_start` and calls `receive_start()`.
+2. A daemon thread connects to `WEBCAM_START` (reads the handshake), then opens `pyvirtualcam.Camera` at 1280×720 @ 24 fps.
+3. The thread connects to `WEBCAM_FRAMES` and reads length-prefixed JPEG frames in a loop.
+4. Each JPEG is decoded with Pillow, padded to 1280×720 preserving aspect ratio (`ImageOps.pad`), converted to a numpy array, and pushed to the virtual camera via `cam.send()`.
+5. When Android closes the channel, `webcam_stopped` is emitted and the virtual camera is released.
+
+| Signal | Payload | When |
+|---|---|---|
+| `webcam_started` | — | Virtual camera opened and streaming |
+| `webcam_stopped` | — | Stream ended (normal or disconnected) |
+| `webcam_error` | `str` | Unrecoverable exception in the stream loop |
+
+**Prerequisite:** OBS Virtual Camera driver must be installed on the PC (`pyvirtualcam` uses it as its backend).
 
 ### `ToolService`
 
