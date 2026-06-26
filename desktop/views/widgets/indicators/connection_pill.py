@@ -1,5 +1,7 @@
+from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QFrame, QWidget
 
+from app.app_state import app_state
 from app.theme_manager import theme_manager
 from resources.colors import Colors, LightColors
 from resources.paths import IndicatorStyles
@@ -47,8 +49,8 @@ class ConnectionPill(QFrame):
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
-        # Wire theme_changed to re-apply the stylesheet.
         theme_manager.theme_changed.connect(self._setup_style)
+        app_state.device_viewmodel.mode_changed.connect(self._on_mode_changed)
 
     def _create_widgets(self) -> None:
         # Instantiate the pulsing-dot indicator and the connection-type label.
@@ -61,10 +63,16 @@ class ConnectionPill(QFrame):
         return PulsingDot()
 
     def _create_connection_type_label(self) -> QLabel:
-        # Create the 'Connected via USB' status label.
-        label: QLabel = QLabel(self.tr("Connected via USB"))
+        text = "Connected via Bluetooth" if app_state.device_viewmodel.is_bluetooth_mode else "Connected via WiFi"
+        label: QLabel = QLabel(text)
         label.setObjectName("label")
         return label
+
+    @Slot(bool)
+    def _on_mode_changed(self, use_bluetooth: bool) -> None:
+        self._connection_type_label.setText(
+            "Connected via Bluetooth" if use_bluetooth else "Connected via WiFi"
+        )
 
     def _create_layout(self) -> None:
         # Build the horizontal layout: dot → label → stretch.

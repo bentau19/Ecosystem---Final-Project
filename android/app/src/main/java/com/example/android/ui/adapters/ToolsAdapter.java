@@ -1,29 +1,30 @@
 package com.example.android.ui.adapters;
 
+import android.content.res.ColorStateList;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
+import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.example.android.R;
 import com.example.android.ui.models.ToolItem;
-import com.google.android.material.button.MaterialButton;
 
 import java.util.List;
 
 /**
- * Adapter for managing and displaying the list of utility tools in the Actions screen.
- * Each tool is represented as a clickable MaterialButton within a RecyclerView.
+ * Adapter for the tool cards in the Actions screen.
+ * Each card shows a coloured icon circle, a title, and a subtitle.
  */
 public class ToolsAdapter extends RecyclerView.Adapter<ToolsAdapter.ToolViewHolder> {
-    private List<ToolItem> tools;
-    private OnToolClickListener listener;
 
-    /**
-     * Interface to handle click events on specific tools.
-     */
+    private final List<ToolItem> tools;
+    private final OnToolClickListener listener;
+
     public interface OnToolClickListener {
         void onToolClick(ToolItem tool);
     }
@@ -36,29 +37,37 @@ public class ToolsAdapter extends RecyclerView.Adapter<ToolsAdapter.ToolViewHold
     @NonNull
     @Override
     public ToolViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        // Inflate the custom tool item layout
-        View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_tool, parent, false);
+        View view = LayoutInflater.from(parent.getContext())
+                .inflate(R.layout.item_tool, parent, false);
         return new ToolViewHolder(view);
     }
 
     @Override
     public void onBindViewHolder(@NonNull ToolViewHolder holder, int position) {
         ToolItem tool = tools.get(position);
+        boolean enabled = tool.isEnabled();
 
-        // Update button text and icon based on the tool data
-        holder.toolButton.setText(tool.getTitle());
-        holder.toolButton.setIconResource(tool.getIconRes());
-        holder.toolButton.setEnabled(tool.isEnabled());
-        holder.toolButton.setAlpha(tool.isEnabled() ? 1.0f : 0.5f);
+        holder.toolTitle.setText(tool.getTitle());
+        holder.toolSubtitle.setText(tool.getSubtitle());
+        holder.toolIcon.setImageResource(tool.getIconRes());
 
-        // Set click listener on the MaterialButton component
-        holder.toolButton.setOnClickListener(v -> listener.onToolClick(tool));
+        // Apply accent colour to both the icon and its circle background.
+        int accentColor = ContextCompat.getColor(
+                holder.itemView.getContext(), tool.getAccentColorRes());
+        holder.toolIcon.setImageTintList(ColorStateList.valueOf(accentColor));
+        holder.iconBg.setBackgroundResource(tool.getIconBgRes());
+
+        // Dim the whole card while disabled (e.g. clipboard "Sent!" cooldown).
+        holder.itemView.setEnabled(enabled);
+        holder.itemView.setAlpha(enabled ? 1.0f : 0.45f);
+
+        holder.itemView.setOnClickListener(v -> listener.onToolClick(tool));
     }
 
     @Override
     public int getItemCount() { return tools.size(); }
 
-    /** Updates the label of the tool with the given id and refreshes its card. */
+    /** Updates the display label of the tool with the given id. */
     public void updateLabel(String toolId, String newLabel) {
         for (int i = 0; i < tools.size(); i++) {
             if (tools.get(i).getId().equals(toolId)) {
@@ -69,17 +78,18 @@ public class ToolsAdapter extends RecyclerView.Adapter<ToolsAdapter.ToolViewHold
         }
     }
 
-    /**
-     * ViewHolder class that holds the reference to the MaterialButton in the layout.
-     */
     static class ToolViewHolder extends RecyclerView.ViewHolder {
-        // The MaterialButton is the primary interactive element in our item layout
-        MaterialButton toolButton;
+        final TextView  toolTitle;
+        final TextView  toolSubtitle;
+        final ImageView toolIcon;
+        final View      iconBg;
 
         ToolViewHolder(View itemView) {
             super(itemView);
-            // Reference the specific ID (btnTool) defined in item_tool.xml
-            toolButton = itemView.findViewById(R.id.btnTool);
+            toolTitle    = itemView.findViewById(R.id.toolTitle);
+            toolSubtitle = itemView.findViewById(R.id.toolSubtitle);
+            toolIcon     = itemView.findViewById(R.id.toolIcon);
+            iconBg       = itemView.findViewById(R.id.iconBg);
         }
     }
 }

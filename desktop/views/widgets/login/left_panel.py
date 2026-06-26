@@ -1,7 +1,8 @@
+import math
 import sys
 
-from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt, QRectF, QTimer, Slot
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
@@ -18,6 +19,49 @@ from views.widgets.login.qr import QR
 from views.widgets.logo_widget import Logo, LogoNameLabel
 
 
+class _BtRingsWidget(QWidget):
+    """Pulsing concentric-ring animation used as the Bluetooth waiting indicator."""
+
+    _CYAN = QColor(34, 211, 238)
+    _TAU = 2 * math.pi
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(120, 120)
+        self._phase = 0.0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(50)
+
+    def _tick(self) -> None:
+        self._phase = (self._phase + 0.08) % self._TAU
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        pulse = (math.sin(self._phase) + 1) / 2  # oscillates 0 → 1
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        def ring(radius: float, base_alpha: float, pulse_extra: float = 0.0) -> None:
+            alpha = int(255 * min(1.0, base_alpha + pulse_extra * pulse))
+            painter.setPen(QPen(QColor(34, 211, 238, alpha), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QRectF(60 - radius, 60 - radius, radius * 2, radius * 2))
+
+        ring(54, 0.08, 0.14)   # outer — pulses most visibly
+        ring(40, 0.20, 0.08)   # middle
+        # Inner filled circle
+        painter.setPen(QPen(QColor(34, 211, 238, int(255 * 0.55)), 1))
+        painter.setBrush(QColor(34, 211, 238, int(255 * 0.14)))
+        painter.drawEllipse(QRectF(34, 34, 52, 52))
+
+        # BT rune centered
+        painter.setPen(QPen(self._CYAN))
+        painter.setFont(QFont("Segoe UI Symbol", 22))
+        painter.drawText(QRectF(0, 0, 120, 120), Qt.AlignmentFlag.AlignCenter, "ᛒ")
+
+
 class LeftPanel(QWidget):
     """Left panel of the login screen.
 
@@ -26,8 +70,6 @@ class LeftPanel(QWidget):
     instructions (identical to the previous design). A small toggle link
     at the bottom lets the user switch between the two modes.
     """
-
-    _BT_ICON_CHAR = "ᛒ"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -81,7 +123,7 @@ class LeftPanel(QWidget):
         self._wifi_content = self._build_wifi_content()
 
         # Bluetooth content
-        self._bt_icon_label = self._create_bt_icon()
+        self._bt_icon_label = _BtRingsWidget()
         self._bt_title = self._create_bt_title()
         self._bt_instructions = self._create_bt_instructions()
         self._bt_content = self._build_bt_content()
@@ -95,7 +137,7 @@ class LeftPanel(QWidget):
         layout.setContentsMargins(Spacing.XXL, Spacing.SM, Spacing.XXL, Spacing.XXL)
         layout.setSpacing(Spacing.SM)
 
-        layout.addStretch()
+        layout.addStretch(1)
 
         layout.addWidget(self._logo, alignment=Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self._logo_name, alignment=Qt.AlignmentFlag.AlignHCenter)
@@ -113,7 +155,7 @@ class LeftPanel(QWidget):
         layout.addSpacing(Spacing.XS)
         layout.addWidget(self._switch_mode_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        layout.addStretch()
+        layout.addStretch(3)
 
     # ── Content panel builders ─────────────────────────────────────────────────
 
@@ -196,13 +238,6 @@ class LeftPanel(QWidget):
         button.setFixedSize(140, 36)
         button.setObjectName("RefreshButton")
         return button
-
-    def _create_bt_icon(self) -> QLabel:
-        label = QLabel(self._BT_ICON_CHAR)
-        label.setFixedSize(100, 100)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setObjectName("BtIconCircle")
-        return label
 
     @staticmethod
     def _create_bt_title() -> QLabel:

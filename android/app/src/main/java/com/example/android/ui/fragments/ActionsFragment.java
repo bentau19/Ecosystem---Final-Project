@@ -145,9 +145,12 @@ public class ActionsFragment extends Fragment {
         toolsRecyclerView.setLayoutManager(new LinearLayoutManager(getContext()));
 
         toolList = new ArrayList<>();
-        toolList.add(new ToolItem("backup", "File Backup", R.drawable.ic_backup));
-        toolList.add(new ToolItem("clipboard", "Send Clipboard to PC", R.drawable.ic_clipboard));
-        toolList.add(new ToolItem("camera", "Camera Mirror", R.drawable.ic_camera));
+        toolList.add(new ToolItem("backup",    "File Backup",       "Sync your files to the PC",
+                R.drawable.ic_backup,    R.drawable.icon_circle_cyan, R.color.accent_cyan));
+        toolList.add(new ToolItem("clipboard", "Send Clipboard",    "Transfer clipboard text to desktop",
+                R.drawable.ic_clipboard, R.drawable.icon_bg_purple,   R.color.accent_purple));
+        toolList.add(new ToolItem("camera",    "Camera Mirror",     "Stream your camera live to PC",
+                R.drawable.ic_camera,    R.drawable.icon_bg_pink,     R.color.accent_pink));
 
         toolsAdapter = new ToolsAdapter(toolList, tool -> {
             // Only execute tools if a connection is currently active
