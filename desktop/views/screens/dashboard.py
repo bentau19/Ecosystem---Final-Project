@@ -148,7 +148,15 @@ class DashboardScreen(QWidget):
             event: The show event delivered by Qt.
         """
         super().showEvent(event)
-        self._loading_overlay.start("Fetching device info…")
+        # Reset disconnect guard and clear any stale overlay text.  If a mode
+        # switch triggered _stop() while the dashboard was already hidden,
+        # hideEvent never ran — the overlay could be sitting in an internally-
+        # visible "Disconnecting…" state that would flash on screen the moment
+        # the dashboard becomes visible.  Always wipe it here first.
+        self._is_disconnecting = False
+        self._loading_overlay.hide()
+        if not app_state.device_viewmodel.is_device_info_loaded:
+            self._loading_overlay.start("Fetching device info…")
         app_state.device_viewmodel.load_current_device_info()
         app_state.tool_viewmodel.load_enabled_tools()
 

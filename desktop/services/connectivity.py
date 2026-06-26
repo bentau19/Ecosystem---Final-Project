@@ -1,7 +1,11 @@
+import json
 import logging
+import os
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
@@ -14,6 +18,44 @@ from tausync_py import TauSync
 from utils import network
 
 logger = logging.getLogger(__name__)
+
+
+def _approved_devices_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(os.environ["APPDATA"]) / "SyncDose" / "approved_devices.json"
+    return Path(__file__).parent.parent / "data" / "approved_devices.json"
+
+
+def _load_approved_devices() -> set[str]:
+    try:
+        return set(json.loads(_approved_devices_path().read_text(encoding="utf-8")))
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        return set()
+
+
+def _save_approved_devices(devices: set[str]) -> None:
+    path = _approved_devices_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(sorted(devices)), encoding="utf-8")
+
+
+def _approved_devices_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(os.environ["APPDATA"]) / "SyncDose" / "approved_devices.json"
+    return Path(__file__).parent.parent / "data" / "approved_devices.json"
+
+
+def _load_approved_devices() -> set[str]:
+    try:
+        return set(json.loads(_approved_devices_path().read_text(encoding="utf-8")))
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        return set()
+
+
+def _save_approved_devices(devices: set[str]) -> None:
+    path = _approved_devices_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(sorted(devices)), encoding="utf-8")
 
 
 class ConnectivityService(LifecycleFlag, QObject):
@@ -55,6 +97,13 @@ class ConnectivityService(LifecycleFlag, QObject):
     device_disconnecting: Signal = Signal()
     device_disconnected: Signal = Signal()
     connection_error: Signal = Signal(str)
+    #: Emitted (with the phone's name) when a new phone asks to connect over Bluetooth and the
+    #: user must approve it. A view shows a dialog on the main thread and calls
+    #: :meth:`resolve_phone_approval`. Emitted from a TauSync background thread, so the connection
+    #: is a queued (cross-thread) signal — the dialog is never opened off the UI thread.
+    phone_approval_requested: Signal = Signal(str)
+    #: Emitted when the connection mode changes. True = Bluetooth, False = WiFi.
+    mode_changed: Signal = Signal(bool)
 
     def __init__(self, parent: QObject | None = None) -> None:
         """Initialize the service and inject the device repository.
@@ -74,6 +123,14 @@ class ConnectivityService(LifecycleFlag, QObject):
         self._init_lifecycle()
 
         self._lifecycle_lock: threading.Lock = threading.Lock()
+
+        # Phone-approval handshake state. The TauSync callback blocks on _approval_event until a
+        # view resolves the decision on the main thread. _approved_devices remembers phones
+        # accepted this session so repeat connections are silent (persistence is a future step).
+        self._approval_event: threading.Event = threading.Event()
+        self._approval_result: bool = False
+        self._approved_devices: set[str] = _load_approved_devices()
+        self._use_bluetooth: bool = True
 
     # ── Public read-only access to the transport ──────────────────────────────
 
@@ -115,6 +172,33 @@ class ConnectivityService(LifecycleFlag, QObject):
         is already ``False``, so the lifecycle signals are always emitted.
         """
         threading.Thread(target=self._stop, daemon=True).start()
+
+    @property
+    def is_bluetooth_mode(self) -> bool:
+        """``True`` when the service is listening for Bluetooth connections."""
+        return self._use_bluetooth
+
+    def set_mode(self, use_bluetooth: bool) -> None:
+        """Switch between Bluetooth and WiFi connection modes.
+
+        If the service is currently running (listening), it is stopped, the mode
+        is changed, and then restarted — so the new listen() or connect_hybrid()
+        takes effect immediately on the next connection attempt.
+
+        Args:
+            use_bluetooth: ``True`` for Bluetooth+WiFi hybrid mode,
+                ``False`` for WiFi-only (QR code) mode.
+        """
+        if self._use_bluetooth == use_bluetooth:
+            return
+        self._use_bluetooth = use_bluetooth
+        self.mode_changed.emit(use_bluetooth)
+        if self._is_running.is_set():
+            threading.Thread(target=self._restart_after_mode_change, daemon=True).start()
+
+    def _restart_after_mode_change(self) -> None:
+        self._stop()
+        self._start()
 
     def connect_to_device(self, hostname: str) -> None:
         """Initiate an outbound connection to *hostname* on a background thread.
@@ -209,6 +293,9 @@ class ConnectivityService(LifecycleFlag, QObject):
             # Swallow it so teardown always completes.
             logger.warning("Peer appears to have disconnected unexpectedly: %s", e)
         finally:
+            # connect_hybrid stops the BLE beacon itself (on connect, timeout, or error),
+            # so no explicit stop_advertising is needed here — disconnect() closes the
+            # transport and resets the role.
             try:
                 tau.disconnect()
             except Exception as e:
@@ -244,34 +331,43 @@ class ConnectivityService(LifecycleFlag, QObject):
     def _listen(self) -> None:
         # Retries on timeout; surfaces unexpected exceptions via connection_error.
         while self._is_running.is_set() and not self.connected:
-            logger.debug(
-                "_listen: waiting for connection (running=%s, connected=%s)",
-                self._is_running.is_set(),
-                self.connected,
-            )
+            mode = "bluetooth" if self._use_bluetooth else "wifi"
+            logger.debug("_listen: [%s] waiting for connection", mode)
             try:
-                self._tau.listen(timeout_seconds=10)
-                # listen() returning does NOT guarantee a live peer: a stale transport can
+                if self._use_bluetooth:
+                    # Hybrid server: Bluetooth primary + lazy Wi-Fi. Advertises a BLE beacon
+                    # so the phone can discover this PC without typing a MAC address.
+                    self._tau.connect_hybrid(
+                        timeout_seconds=10,
+                        device_name=utils.network.get_pc_name(),
+                        on_approve=self._on_phone_approval,
+                    )
+                else:
+                    # WiFi-only server: plain TCP listen. Phone connects by scanning the QR
+                    # code shown on the login screen (encodes this PC's local IP).
+                    logger.info("_listen: [wifi] listening on %s", utils.network.get_ip())
+                    self._tau.listen(timeout_seconds=10)
+                # A returning call does NOT guarantee a live peer: a stale transport can
                 # return instantly with is_connected still False (the "phantom connect").
                 # Never emit a phantom device_connected — reset the role so the next
-                # listen() re-arms a real accept, then back off and retry.
+                # attempt re-arms a real accept, then back off and retry.
                 if not self.connected:
-                    logger.warning("_listen: listen() returned with no live peer — resetting")
+                    logger.warning("_listen: [%s] returned with no live peer — resetting", mode)
                     self._reset_transport()
                     time.sleep(1)
                     continue
-                logger.info("_listen: device connected")
+                logger.info("_listen: device connected (mode=%s)", mode)
                 self.device_connected.emit()
             except TimeoutError:
-                logger.debug("_listen: listen timed out — retrying")
+                logger.debug("_listen: [%s] timed out — retrying", mode)
                 time.sleep(1)
             except Exception as exc:
                 # A deliberate stop() aborts the blocking listen() via
                 # tau.disconnect() — that is normal teardown, not an error.
                 if not self._is_running.is_set():
-                    logger.debug("_listen: listen aborted by stop() — exiting")
+                    logger.debug("_listen: [%s] aborted by stop() — exiting", mode)
                     return
-                logger.error("Connection listener error: %s", exc)
+                logger.error("_listen: [%s] error: %s", mode, exc)
                 self.connection_error.emit(str(exc))
                 # Clear any stuck role (e.g. a surfaced "already connected" RuntimeError)
                 # so the next attempt can re-arm a real listen.
@@ -279,3 +375,46 @@ class ConnectivityService(LifecycleFlag, QObject):
                 # Brief backoff so a persistent failure (e.g. port in use)
                 # never hot-spins the listener thread.
                 time.sleep(1)
+
+    #: Max time to wait for the user's accept/reject decision before defaulting to reject.
+    _APPROVAL_TIMEOUT_S = 30.0
+
+    def _on_phone_approval(self, phone_name: str | None) -> bool:
+        """Decide whether to accept a phone requesting a hybrid connection.
+
+        Invoked by ``connect_hybrid`` on a TauSync background thread when a phone connects over
+        Bluetooth, before the session completes. A previously approved phone is auto-accepted
+        (silent); a new one fires :attr:`phone_approval_requested` so a view shows an accept/reject
+        dialog on the main thread, then blocks here until :meth:`resolve_phone_approval` is called.
+
+        Returns ``True`` to accept or ``False`` to reject. Runs on a TauSync background thread —
+        it never touches the UI directly; the dialog is opened by the slot on the UI thread.
+        """
+        device = (phone_name or "").strip() or "Unknown phone"
+        logger.debug("_on_phone_approval: called for '%s'", device)
+        if device in self._approved_devices:
+            logger.info("Auto-approving known phone '%s'", device)
+            return True
+
+        # Arm the handshake, ask the UI (cross-thread queued signal), and block for the decision.
+        self._approval_result = False
+        self._approval_event.clear()
+        self.phone_approval_requested.emit(device)
+
+        if not self._approval_event.wait(timeout=self._APPROVAL_TIMEOUT_S):
+            logger.warning("Phone approval for '%s' timed out — rejecting", device)
+            return False
+
+        if self._approval_result:
+            self._approved_devices.add(device)
+            _save_approved_devices(self._approved_devices)
+            logger.info("Phone '%s' approved", device)
+        else:
+            logger.info("Phone '%s' rejected", device)
+        return self._approval_result
+
+    def resolve_phone_approval(self, accepted: bool) -> None:
+        """Resolve a pending :meth:`_on_phone_approval` decision. Called by the view (main thread)
+        after the user accepts/rejects, unblocking the waiting TauSync thread."""
+        self._approval_result = accepted
+        self._approval_event.set()

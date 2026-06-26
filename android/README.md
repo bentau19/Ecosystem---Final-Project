@@ -87,7 +87,7 @@ viewmodel/
 
 Important files:
 
-- `MainViewModel.java` - Coordinates connection state and user actions (QR scan, connect, disconnect, refresh stats).
+- `MainViewModel.java` - Coordinates connection state and user actions (QR scan, BLE discovery, hybrid connect, disconnect, refresh stats). Also owns the one-shot `justDisconnected` / `justDisconnectedByPc` flags that prevent `ConnectFragment.onResume` from auto-reconnecting after an intentional disconnect.
 - `MainViewModelFactory.java` - Manual dependency creation for `MainViewModel`.
 - `FileTransferViewModel.java` - Coordinates incoming file transfer state (PC → Android). Exposes `getPendingRequest()` and `getTransferStatus()` LiveData, and handles user Accept / Reject decisions.
 - `BackupViewModel.java` - Coordinates the backup scan phase. Registers itself as `BackupRepository.ScanActionListener`, owns the background thread that runs `ScanBackupFilesUseCase`, and feeds results back to `BackupRepository`. Does not touch the network — the scan→transfer handoff is owned by the repository.
@@ -117,6 +117,7 @@ Current use cases:
 
 - `ParseQrDataUseCase.java`
 - `ConnectToDeviceUseCase.java`
+- `PairWithPcUseCase.java` - Wraps BLE discovery and bonding. `discover()` scans for the PC's BLE beacon; `pair()` bonds with the found MAC and saves it for instant reconnect. `savedAddress()` / `savedPcName()` expose the remembered PC so `ConnectFragment.onResume` can skip scanning and connect directly.
 - `DisconnectDeviceUseCase.java`
 - `RefreshLocalStatsUseCase.java`
 - `RespondToFileTransferUseCase.java` - Sends `ACCEPTED_FROM_ANDROID` or `REJECTED_FROM_ANDROID` to the PC over the response channel. Called by `ConnectivityService` on a background thread after the user decides.
@@ -802,10 +803,10 @@ app/src/androidTest/java/com/example/android/
 
 Current tests include:
 
-- `DeviceRepositoryTest.java`
+- `DeviceRepositoryTest.java` - Covers connection state, battery/IP updates, `connectHybrid()` (BT path), and `justDisconnectedByPc` consume-once semantics.
 - `DeviceSerializerTest.java`
-- `MainViewModelTest.java`
-- `ReceiveFileRepositoryTest.java` - Verifies all state-machine transitions (IDLE → PENDING_APPROVAL → RECEIVING → COMPLETED / REJECTED / FAILED → IDLE) and that `ReceiveFileActionListener` / `IncomingRequestListener` callbacks fire at the correct moments.
+- `MainViewModelTest.java` - Covers QR handling, hybrid connect, BLE discovery lifecycle (`startDiscovery`, `cancelDiscovery`), and `justDisconnected` / `justDisconnectedByPc` one-shot flags.
+- `FileTransferRepositoryTest.java` - Verifies all state-machine transitions (IDLE → PENDING_APPROVAL → RECEIVING → COMPLETED / REJECTED / FAILED → IDLE) and that `FileTransferActionListener` / `IncomingRequestListener` callbacks fire at the correct moments.
 - `FileTransferViewModelTest.java` - Verifies that `acceptTransfer()`, `rejectTransfer()`, and `reset()` produce the expected LiveData state changes, and that `getPendingRequest()` / `getTransferStatus()` correctly reflect repository state.
 - `SendFileRepositoryTest.java` - Verifies all state-machine transitions for the Android→PC send flow (IDLE → WAITING_FOR_RESPONSE → SENDING → COMPLETED / REJECTED / FAILED → IDLE) and that `SendFileActionListener` fires at the correct moments.
 - `BackupRepositoryTest.java` - Verifies the scan and transfer state-machine transitions, the scan→transfer auto-handoff logic, and the guard that discards stale scan results after a disconnect.

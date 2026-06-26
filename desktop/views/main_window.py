@@ -26,6 +26,7 @@ from views.screens.login import LoginScreen
 from views.widgets.backup.backup_dest_picker_dialog import BackupDestPickerDialog
 from views.widgets.backup.backup_progress_window import BackupProgressWindow
 from views.widgets.backup.backup_review_dialog import BackupReviewDialog
+from views.widgets.dialogs.connection_approval_dialog import ConnectionApprovalDialog
 from views.widgets.dialogs.file_handler import TransferErrorDialog
 from views.widgets.loading.overlay import LoadingOverlay
 from views.widgets.toasts.file_received import FileReceivedToast
@@ -132,6 +133,8 @@ class MainWindow(QMainWindow):
         self._backup_vm.backup_session_result.connect(self._on_backup_session_result)
         self._backup_vm.device_ready_changed.connect(self._on_backup_device_ready_changed)
         app_state.device_viewmodel.connection_error.connect(self._on_connection_error)
+        app_state.connectivity_service.phone_approval_requested.connect(
+            self._on_phone_approval_requested)
         self._clipboard_service.clipboard_text_received.connect(self._on_clipboard_text_received)
         self._webcam_vm.webcam_active_changed.connect(self._on_webcam_active_changed)
         self._webcam_vm.webcam_error_occurred.connect(self._on_webcam_error)
@@ -302,6 +305,20 @@ class MainWindow(QMainWindow):
             self._backup_vm.confirm_dest_dir(dlg.selected_path)
         else:
             self._backup_vm.cancel_dest_selection()
+
+    @Slot(str)
+    def _on_phone_approval_requested(self, phone_name: str) -> None:
+        # A new phone is asking to connect over Bluetooth. Show an accept/reject dialog on the
+        # UI thread (this slot runs on the main thread via the queued signal) and hand the
+        # decision back to the service, which is blocking a TauSync thread until we answer.
+        #
+        # Restore the window first so the dialog is never shown behind a hidden parent — that
+        # would leave the connecting phone stuck until the approval timeout.
+        if not self.isVisible():
+            self._restore_window()
+        dlg = ConnectionApprovalDialog(phone_name, parent=self)
+        accepted = dlg.exec() == QDialog.DialogCode.Accepted
+        app_state.connectivity_service.resolve_phone_approval(accepted)
 
     @Slot(int, 'qint64')
     def _on_backup_ready(self, file_count: int, total_bytes: int) -> None:

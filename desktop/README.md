@@ -832,14 +832,24 @@ All services share the same internal lifecycle pattern:
 
 ### `ConnectivityService`
 
-Manages the TauSync TCP connection lifecycle. Listens for incoming connections in server mode
-(default) or connects to a device by IP in client mode.
+Manages the TauSync TCP connection lifecycle. Supports two connection modes:
+
+- **Bluetooth (default)** — calls `tau.connect_hybrid()`, which advertises a BLE beacon so the
+  phone can discover the PC by name. Requires the user to approve the first connection via a
+  dialog; subsequent connections from the same phone are auto-approved.
+- **Wi-Fi** — calls `tau.listen()` (plain TCP). The phone connects by scanning a QR code
+  that encodes this PC's local IP.
+
+The active mode is toggled at runtime with `set_mode(use_bluetooth: bool)`.
 
 | Signal | Payload | When |
 |---|---|---|
-| `device_connected` | — | `listen()` returns a client, or `connect_to_device()` succeeds |
-| `device_disconnected` | — | `disconnect_device()` disposes the connection |
-| `connection_error` | `str` | `listen()` raises an unexpected exception |
+| `device_connected` | — | A phone connects in either mode |
+| `device_disconnecting` | — | Teardown starts (transport still open) |
+| `device_disconnected` | — | Transport closed; safe to call `start()` to re-listen |
+| `connection_error` | `str` | Unexpected exception while listening (not a normal stop) |
+| `mode_changed` | `bool` | `set_mode()` changed the active mode; `True` = BT, `False` = Wi-Fi |
+| `phone_approval_requested` | `str` | New (unknown) phone is asking to connect over BT — show approve/reject dialog; call `resolve_phone_approval()` to unblock |
 
 `disconnect_device()` checks whether the phone sent a disconnect first (via
 `SessionChannels.DISCONNECT_FROM_PHONE`). If not, it notifies the phone

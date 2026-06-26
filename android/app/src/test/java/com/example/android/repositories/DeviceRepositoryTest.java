@@ -1,6 +1,7 @@
 package com.example.android.repositories;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -123,5 +124,39 @@ public class DeviceRepositoryTest {
         assertEquals("192.168.1.100", state.getLocalDevice().getIpAddress());
         assertEquals("test_id", state.getLocalDevice().getDeviceId());
         assertEquals("Test Pixel 6", state.getLocalDevice().getModelName());
+    }
+
+    // ── Hybrid (Bluetooth) connection ────────────────────────────────────────
+
+    @Test
+    public void connectHybrid_createsBluetoothRemoteDevice() {
+        // Act: simulate the hybrid (BT) path — no Wi-Fi IP is known at connect time
+        repository.connectHybrid("PC", "AA:BB:CC:DD:EE:FF");
+
+        DeviceConnectionState state = repository.getConnectionState().getValue();
+        assertNotNull(state.getRemotePC());
+        assertTrue(state.isConnected());
+        assertEquals("AA:BB:CC:DD:EE:FF", state.getRemotePC().getMacAddress());
+        assertNull(state.getRemotePC().getPcIp());
+        assertEquals(ConnectionType.BLUETOOTH, state.getRemotePC().getConnectionType());
+    }
+
+    // ── justDisconnectedByPc flag ─────────────────────────────────────────────
+
+    @Test
+    public void justDisconnectedByPc_defaultsToFalse() {
+        // The flag must be false on a fresh repository so onResume auto-connects normally.
+        assertFalse(repository.consumeJustDisconnectedByPc());
+    }
+
+    @Test
+    public void justDisconnectedByPc_consumeOnce_returnsTrueThenFalse() {
+        // Arrange: PC initiates a disconnect
+        repository.setJustDisconnectedByPc();
+
+        // Act + Assert: first consume returns true (skips auto-reconnect)
+        assertTrue(repository.consumeJustDisconnectedByPc());
+        // Second consume returns false — the flag is a one-shot
+        assertFalse(repository.consumeJustDisconnectedByPc());
     }
 }

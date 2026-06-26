@@ -6,10 +6,12 @@ import androidx.annotation.NonNull;
 import androidx.lifecycle.ViewModel;
 import androidx.lifecycle.ViewModelProvider;
 
+import com.example.android.data.datasource.BluetoothDiscoveryDataSource;
 import com.example.android.data.datasource.SystemDataSource;
 import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
 import com.example.android.domain.usecases.DisconnectDeviceUseCase;
+import com.example.android.domain.usecases.PairWithPcUseCase;
 import com.example.android.domain.usecases.ParseQrDataUseCase;
 import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
 
@@ -32,9 +34,12 @@ public class MainViewModelFactory implements ViewModelProvider.Factory {
 
         if (modelClass.isAssignableFrom(MainViewModel.class)) {
 
-            // 1. Initialize DataSource - The only component that interacts with the Android Context
+            // 1. Initialize DataSources - The only components that interact with the Android Context
             SystemDataSource systemDataSource =
                     new SystemDataSource(application.getApplicationContext());
+
+            BluetoothDiscoveryDataSource bluetoothDiscoveryDataSource =
+                    new BluetoothDiscoveryDataSource(application.getApplicationContext());
 
             // 2. Initialize Repository
             DeviceRepository repository =
@@ -56,13 +61,17 @@ public class MainViewModelFactory implements ViewModelProvider.Factory {
             DisconnectDeviceUseCase disconnectDevice =
                     new DisconnectDeviceUseCase(repository);
 
+            PairWithPcUseCase pairWithPc =
+                    new PairWithPcUseCase(bluetoothDiscoveryDataSource);
+
             // 4. Create the ViewModel with the fully prepared dependency graph
             return (T) new MainViewModel(
                     repository,
                     refreshStats,
                     connectToDevice,
                     parseQr,
-                    disconnectDevice
+                    disconnectDevice,
+                    pairWithPc
             );
         }
 

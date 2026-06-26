@@ -219,6 +219,7 @@ class DeviceInfoService(LifecycleFlag, QObject):
         try:
             read = utils.network.read_string_from_channel
             t = self._CHANNEL_TIMEOUT
+            logger.debug("_get_device_info: submitting %d channel reads (timeout=%ds)", 8, t)
             with ThreadPoolExecutor() as pool:
                 f_id = pool.submit(read, tau, DeviceInfoChannels.ID.value, t)
                 f_name = pool.submit(read, tau, DeviceInfoChannels.NAME_FROM_ANDROID.value, t)
@@ -228,6 +229,8 @@ class DeviceInfoService(LifecycleFlag, QObject):
                 f_stor_tot = pool.submit(read, tau, DeviceInfoChannels.STORAGE_TOTAL_FROM_ANDROID.value, t)
                 f_stor_use = pool.submit(read, tau, DeviceInfoChannels.STORAGE_USED_FROM_ANDROID.value, t)
                 f_ip = pool.submit(read, tau, DeviceInfoChannels.IP_FROM_ANDROID.value, t)
+            logger.debug("_get_device_info: all channels returned — id=%s name=%s ip=%s",
+                         f_id.result(), f_name.result(), f_ip.result())
             entity = DeviceEntity(
                 id=f_id.result(),
                 tag="",

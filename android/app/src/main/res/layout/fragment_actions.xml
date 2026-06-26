@@ -7,204 +7,262 @@
     android:layout_height="match_parent"
     android:background="@color/background_main">
 
-    <androidx.appcompat.widget.AppCompatButton
-        android:id="@+id/btnDisconnect"
-        android:layout_width="wrap_content"
+    <!-- ── Fixed disconnect area (pinned to bottom) ───────────────────────── -->
+    <LinearLayout
+        android:id="@+id/disconnectArea"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="24dp"
-        android:background="@drawable/red_button_shape"
-        android:paddingHorizontal="40dp"
-        android:text="Disconnect Device"
-        android:textAllCaps="false"
-        android:textColor="#FFFFFF"
-        android:textStyle="bold"
-        android:elevation="8dp"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:paddingTop="8dp"
+        android:paddingBottom="24dp"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent" />
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
 
-    <!-- Disconnect progress: shown while DISCONNECTING is in flight -->
-    <TextView
-        android:id="@+id/tvDisconnectingLabel"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="8dp"
-        android:text="@string/disconnecting_label"
-        android:textColor="@color/text_muted"
-        android:textSize="12sp"
-        android:visibility="gone"
-        app:layout_constraintBottom_toTopOf="@id/btnDisconnect"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent" />
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/progressDisconnecting"
+            android:layout_width="160dp"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="6dp"
+            android:indeterminate="true"
+            android:visibility="gone"
+            app:indicatorColor="@color/accent_pink"
+            app:trackColor="@color/border_color" />
 
-    <com.google.android.material.progressindicator.LinearProgressIndicator
-        android:id="@+id/progressDisconnecting"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginHorizontal="24dp"
-        android:indeterminate="true"
-        android:visibility="gone"
-        app:indicatorColor="@color/accent_cyan"
-        app:trackColor="@color/border_color"
-        app:layout_constraintBottom_toTopOf="@id/tvDisconnectingLabel"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent" />
+        <TextView
+            android:id="@+id/tvDisconnectingLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
+            android:text="@string/disconnecting_label"
+            android:textColor="@color/text_muted"
+            android:textSize="12sp"
+            android:visibility="gone" />
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnDisconnect"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            app:backgroundTint="@android:color/transparent"
+            app:strokeColor="#CC3333"
+            app:strokeWidth="1dp"
+            app:cornerRadius="22dp"
+            android:paddingHorizontal="40dp"
+            android:text="Disconnect"
+            android:textColor="#CC3333"
+            android:textSize="14sp"
+            android:textAllCaps="false"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- ── Scrollable main content ────────────────────────────────────────── -->
     <androidx.core.widget.NestedScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:fillViewport="true"
-        app:layout_constraintBottom_toTopOf="@id/btnDisconnect"
-        app:layout_constraintTop_toTopOf="parent">
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/disconnectArea">
 
-        <androidx.constraintlayout.widget.ConstraintLayout
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:paddingBottom="24dp">
+            android:orientation="vertical"
+            android:paddingBottom="8dp">
 
+            <!-- ══════════════ APP IDENTITY TOPBAR ══════════════ -->
             <LinearLayout
-                android:id="@+id/headerContainer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="96dp"
-                android:gravity="center"
-                android:orientation="vertical"
-                app:layout_constraintTop_toTopOf="parent">
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingHorizontal="22dp"
+                android:paddingTop="22dp"
+                android:paddingBottom="4dp">
 
-                <LinearLayout
+                <ImageView
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:src="@mipmap/ic_launcher_round"
+                    android:contentDescription="SyncDose logo" />
+
+                <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
+                    android:layout_marginStart="10dp"
+                    android:text="SyncDose"
+                    android:textColor="@color/text_primary"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.01" />
+            </LinearLayout>
 
-                    <ImageView
-                        android:id="@+id/pcIcon"
-                        android:layout_width="40dp"
-                        android:layout_height="40dp"
-                        android:layout_marginEnd="12dp"
-                        android:src="@drawable/ic_laptop"
-                        app:tint="@color/white" />
+            <!-- ══════════════ HERO CARD — connection info ══════════════ -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/heroCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="20dp"
+                android:layout_marginTop="12dp"
+                app:cardBackgroundColor="#111827"
+                app:cardCornerRadius="24dp"
+                app:strokeColor="@color/accent_cyan"
+                app:strokeWidth="1dp"
+                app:cardElevation="8dp">
 
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:gravity="center"
+                    android:paddingTop="28dp"
+                    android:paddingBottom="28dp"
+                    android:paddingHorizontal="24dp">
+
+                    <!-- Laptop icon in glowing cyan circle -->
+                    <FrameLayout
+                        android:layout_width="72dp"
+                        android:layout_height="72dp">
+
+                        <View
+                            android:layout_width="72dp"
+                            android:layout_height="72dp"
+                            android:background="@drawable/icon_circle_cyan" />
+
+                        <ImageView
+                            android:layout_width="36dp"
+                            android:layout_height="36dp"
+                            android:layout_gravity="center"
+                            android:src="@drawable/ic_laptop"
+                            app:tint="@color/accent_cyan" />
+                    </FrameLayout>
+
+                    <!-- PC Name -->
                     <TextView
                         android:id="@+id/deviceNameText"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
                         android:textColor="@color/text_primary"
-                        android:textSize="26sp"
+                        android:textSize="24sp"
                         android:textStyle="bold"
-                        tools:text="My PC" />
-                </LinearLayout>
+                        android:letterSpacing="0.01"
+                        tools:text="My Desktop" />
 
-                <LinearLayout
-                    android:id="@+id/statusRow"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <View
-                        android:id="@+id/statusDot"
-                        android:layout_width="10dp"
-                        android:layout_height="10dp"
-                        android:layout_marginEnd="8dp"
-                        android:background="@drawable/green_dot" />
-
-                    <TextView
-                        android:id="@+id/statusText"
+                    <!-- Connected status pill -->
+                    <LinearLayout
+                        android:id="@+id/statusRow"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Connected via WiFi"
-                        android:textColor="@color/status_green"
-                        android:textSize="14sp" />
-                </LinearLayout>
+                        android:layout_marginTop="12dp"
+                        android:background="@drawable/status_pill"
+                        android:paddingHorizontal="12dp"
+                        android:paddingVertical="6dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
 
-                <!-- Shown while connected but still waiting for the PC's basic info (name). -->
-                <LinearLayout
-                    android:id="@+id/pcInfoRow"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:visibility="gone">
+                        <View
+                            android:id="@+id/statusDot"
+                            android:layout_width="8dp"
+                            android:layout_height="8dp"
+                            android:layout_marginEnd="7dp"
+                            android:background="@drawable/green_dot" />
 
-                    <com.google.android.material.progressindicator.CircularProgressIndicator
-                        android:id="@+id/progressPcInfo"
+                        <TextView
+                            android:id="@+id/statusText"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Connected via WiFi"
+                            android:textColor="@color/status_green"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+
+                    <!-- Loading row — visible while waiting for PC name -->
+                    <LinearLayout
+                        android:id="@+id/pcInfoRow"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginEnd="10dp"
-                        android:indeterminate="true"
-                        app:indicatorColor="@color/accent_cyan"
-                        app:indicatorSize="18dp"
-                        app:trackThickness="2dp" />
+                        android:layout_marginTop="12dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:visibility="gone">
 
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/getting_pc_info_label"
-                        android:textColor="@color/text_muted"
-                        android:textSize="14sp" />
+                        <com.google.android.material.progressindicator.CircularProgressIndicator
+                            android:id="@+id/progressPcInfo"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="10dp"
+                            android:indeterminate="true"
+                            app:indicatorColor="@color/accent_cyan"
+                            app:indicatorSize="16dp"
+                            app:trackThickness="2dp" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/getting_pc_info_label"
+                            android:textColor="@color/text_muted"
+                            android:textSize="13sp" />
+                    </LinearLayout>
                 </LinearLayout>
-            </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
 
+            <!-- ══════════════ QUICK ACTIONS section ══════════════ -->
             <TextView
-                android:id="@+id/toolsLabel"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="24dp"
                 android:layout_marginTop="32dp"
-                android:text="Available Tools"
-                android:textColor="@color/text_muted"
-                android:textSize="13sp"
-                android:textStyle="bold"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/headerContainer" />
+                android:layout_marginBottom="4dp"
+                android:text="QUICK ACTIONS"
+                android:textColor="@color/accent_cyan"
+                android:textSize="11sp"
+                android:letterSpacing="0.12"
+                android:textStyle="bold" />
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/toolsRecyclerView"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:nestedScrollingEnabled="false"
-                app:layout_constraintTop_toBottomOf="@id/toolsLabel" />
+                android:nestedScrollingEnabled="false" />
 
+            <!-- ══════════════ SYSTEM section ══════════════ -->
             <TextView
                 android:id="@+id/systemLabel"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="24dp"
-                android:layout_marginTop="24dp"
-                android:text="System"
-                android:textColor="@color/text_muted"
-                android:textSize="13sp"
-                android:textStyle="bold"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/toolsRecyclerView" />
+                android:layout_marginTop="28dp"
+                android:layout_marginBottom="4dp"
+                android:text="SYSTEM"
+                android:textColor="@color/accent_cyan"
+                android:textSize="11sp"
+                android:letterSpacing="0.12"
+                android:textStyle="bold" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnSettings"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="match_parent"
                 android:layout_height="64dp"
-                android:layout_marginHorizontal="24dp"
-                android:layout_marginTop="12dp"
-                app:backgroundTint="#1A1A2E"
-                app:strokeColor="#30475E"
+                android:layout_marginHorizontal="20dp"
+                app:backgroundTint="#0D1117"
+                app:strokeColor="@color/border_color"
                 app:strokeWidth="1dp"
-                app:cornerRadius="16dp"
-                android:text="App Settings"
-                android:textColor="@color/white"
+                app:cornerRadius="20dp"
+                android:text="Settings"
+                android:textColor="@color/text_primary"
                 android:textSize="15sp"
                 android:textAllCaps="false"
                 android:textAlignment="viewStart"
                 app:icon="@drawable/ic_settings"
-                app:iconTint="@color/white"
+                app:iconTint="#9CA3AF"
                 app:iconPadding="14dp"
                 app:iconGravity="textStart"
-                android:paddingStart="20dp"
-                app:layout_constraintTop_toBottomOf="@id/systemLabel" />
+                android:paddingStart="20dp" />
 
-        </androidx.constraintlayout.widget.ConstraintLayout>
+        </LinearLayout>
     </androidx.core.widget.NestedScrollView>
+
 </androidx.constraintlayout.widget.ConstraintLayout>
