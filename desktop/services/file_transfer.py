@@ -296,18 +296,34 @@ class FileTransferService(LifecycleFlag, QObject):
             self.file_receive_error.emit(str(exc))
 
     def _listen_for_file_to_send(self) -> None:
-        # Poll the named pipe for incoming file paths from FileHandler.exe and forward them.
+        # Poll \\.\pipe\FileSend for paths from FileHandler.exe and forward them.
+        #
+        # A Windows named-pipe instance must be disconnected (DisconnectNamedPipe)
+        # after each client before it can accept the next one. Without the
+        # finally-disconnect below the SECOND send raises ConnectionError on
+        # wait_for_client and the listener can never serve another client — so
+        # every send after the first in a connection session would fail. The
+        # canonical server loop is therefore: accept -> serve -> disconnect.
         pipe_name: str = r'\\.\pipe\FileSend'
+        poll: datetime.timedelta = datetime.timedelta(seconds=3)
         with Server(65536, 65536, pipe_name) as server:
             while self._is_running.is_set():
                 try:
-                    timeout = datetime.timedelta(seconds=3)
-                    server.wait_for_client(timeout)
-                    file_path: str = server.read(timeout)
-                    self.send_file(file_path)
+                    server.wait_for_client(poll)
                 except TimeoutError:
-                    # No client connected within the poll window — wait and retry.
-                    sleep(3)
+                    # No client connected within the poll window — nothing to
+                    # disconnect; re-check the running flag and keep waiting.
                     continue
                 except Exception as exc:
-                    logger.error("Pipe listener error: %s", exc)
+                    logger.error("Pipe listener accept error: %s", exc)
+                    server.disconnect()  # defensively re-arm the instance
+                    sleep(1)  # backoff so a persistent failure can't hot-spin
+                    continue
+                try:
+                    file_path: str = server.read(poll).decode("utf-8")
+                    self.send_file(file_path)
+                except Exception as exc:
+                    logger.error("Pipe listener read error: %s", exc)
+                finally:
+                    # Re-arm the instance for the next client (canonical Win32 loop).
+                    server.disconnect()

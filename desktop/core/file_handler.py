@@ -53,7 +53,6 @@ def send_via_pipe(file_path: str) -> None:
             client.write(file_path.encode('utf-8'))
             client.close()
             return
-
         except ConnectionError:
             _ensure_app()
             if PhoneNotDetectedDialog().exec() != QDialog.DialogCode.Accepted:
