@@ -248,7 +248,7 @@ class LeftPanel(QWidget):
 
     @staticmethod
     def _create_bt_instructions() -> QLabel:
-        label = QLabel("Open SyncDose on your phone\nand tap Connect over Bluetooth")
+        label = QLabel("Open SyncDose on your phone\nand tap Scan Nearby Devices to connect")
         label.setObjectName("DetailedScanInstructions")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setWordWrap(True)
