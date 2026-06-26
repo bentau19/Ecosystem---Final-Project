@@ -7,11 +7,13 @@
     android:background="@color/background_main"
     android:padding="24dp">
 
+    <!-- ── Top: illustration + title + description ── -->
+
     <ImageView
         android:id="@+id/mainIllustration"
-        android:layout_width="120dp"
-        android:layout_height="120dp"
-        android:layout_marginTop="140dp"
+        android:layout_width="96dp"
+        android:layout_height="96dp"
+        android:layout_marginTop="64dp"
         android:src="@drawable/ic_sync"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -21,7 +23,7 @@
         android:id="@+id/welcomeTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="32dp"
+        android:layout_marginTop="24dp"
         android:text="Link Your Device"
         android:textColor="@color/text_primary"
         android:textSize="32sp"
@@ -34,88 +36,191 @@
         android:id="@+id/descriptionText"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="12dp"
         android:gravity="center"
         android:text="Access your phone's files, notifications, and camera directly from your desktop."
         android:textColor="@color/text_muted"
-        android:textSize="16sp"
+        android:textSize="15sp"
         android:lineSpacingExtra="4dp"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/welcomeTitle" />
 
-    <LinearLayout
-        android:id="@+id/ipContainer"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="24dp"
-        android:background="@drawable/button_shape"
-        android:backgroundTint="#1AFFFFFF"
-        android:orientation="horizontal"
-        android:paddingHorizontal="16dp"
-        android:paddingVertical="8dp"
-        android:gravity="center"
-        app:layout_constraintBottom_toTopOf="@id/btnConnect"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent">
+    <!-- ── Bottom: action buttons anchored from the bottom up ── -->
 
-        <TextView
-            android:id="@+id/ipDisplayText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Your IP: 0.0.0.0"
-            android:textColor="@color/text_muted"
-            android:textSize="14sp"
-            android:textStyle="italic" />
-    </LinearLayout>
-
-    <androidx.appcompat.widget.AppCompatButton
-        android:id="@+id/btnConnectBluetooth"
-        android:layout_width="match_parent"
-        android:layout_height="60dp"
-        android:layout_marginBottom="12dp"
-        android:layout_marginHorizontal="16dp"
-        android:background="@drawable/button_shape"
-        android:backgroundTint="@color/accent_cyan"
-        android:text="Scan Nearby Devices"
-        android:textAllCaps="false"
-        android:textColor="@color/background_main"
-        android:textSize="18sp"
-        android:textStyle="bold"
-        app:layout_constraintBottom_toTopOf="@id/btnConnect"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent" />
-
-    <androidx.appcompat.widget.AppCompatButton
-        android:id="@+id/btnConnect"
-        android:layout_width="match_parent"
-        android:layout_height="60dp"
-        android:layout_marginBottom="16dp"
-        android:layout_marginHorizontal="16dp"
-        android:background="@drawable/button_shape"
-        android:backgroundTint="@color/accent_cyan"
-        android:text="Scan QR Code"
-        android:textAllCaps="false"
-        android:textColor="@color/background_main"
-        android:textSize="18sp"
-        android:textStyle="bold"
-        app:layout_constraintBottom_toTopOf="@id/waitingText"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent" />
-
+    <!-- Subtle IP pill — anchored to the very bottom -->
     <TextView
-        android:id="@+id/waitingText"
+        android:id="@+id/ipDisplayText"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="24dp"
-        android:text="Tap to open camera"
+        android:layout_marginBottom="16dp"
+        android:text="Your IP: 0.0.0.0"
         android:textColor="@color/border_color"
         android:textSize="12sp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent" />
 
-    <!-- Connection progress: shown while CONNECTING / RECONNECTING / waiting for PC info -->
+    <!-- Secondary: Scan QR Code (outlined, less prominent) -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnConnect"
+        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="8dp"
+        android:text="Scan QR Code"
+        android:textAllCaps="false"
+        android:textColor="@color/text_muted"
+        android:textSize="15sp"
+        app:strokeColor="@color/border_color"
+        app:strokeWidth="1dp"
+        app:cornerRadius="30dp"
+        app:rippleColor="#1AFFFFFF"
+        app:layout_constraintBottom_toTopOf="@id/ipDisplayText"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- "or" divider -->
+    <LinearLayout
+        android:id="@+id/orDivider"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="8dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        app:layout_constraintBottom_toTopOf="@id/btnConnect"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1"
+            android:background="@color/border_color"
+            android:alpha="0.4" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="14dp"
+            android:text="or"
+            android:textColor="@color/border_color"
+            android:textSize="12sp" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1"
+            android:background="@color/border_color"
+            android:alpha="0.4" />
+    </LinearLayout>
+
+    <!-- Primary: Scan Nearby Devices (shown when no saved device) -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnConnectBluetooth"
+        android:layout_width="match_parent"
+        android:layout_height="60dp"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="8dp"
+        android:text="Scan Nearby Devices"
+        android:textAllCaps="false"
+        android:textColor="@color/background_main"
+        android:textSize="17sp"
+        android:textStyle="bold"
+        app:backgroundTint="@color/accent_cyan"
+        app:cornerRadius="30dp"
+        app:icon="@drawable/ic_laptop"
+        app:iconTint="@color/background_main"
+        app:iconGravity="textStart"
+        app:iconPadding="10dp"
+        app:layout_constraintBottom_toTopOf="@id/orDivider"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- Saved device card (shown instead of btnConnectBluetooth when paired) -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/savedDeviceCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="8dp"
+        android:visibility="gone"
+        app:cardBackgroundColor="#111827"
+        app:cardCornerRadius="20dp"
+        app:strokeColor="@color/accent_cyan"
+        app:strokeWidth="1dp"
+        app:cardElevation="4dp"
+        app:layout_constraintBottom_toTopOf="@id/orDivider"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Last connected"
+                android:textColor="@color/text_muted"
+                android:textSize="11sp"
+                android:letterSpacing="0.08"
+                android:layout_marginBottom="4dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <ImageView
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:src="@drawable/ic_laptop"
+                    app:tint="@color/accent_cyan"
+                    android:layout_marginEnd="12dp" />
+
+                <TextView
+                    android:id="@+id/tvSavedDeviceName"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnForgetDevice"
+                    style="@style/Widget.MaterialComponents.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Forget"
+                    android:textColor="@color/accent_pink"
+                    android:textSize="13sp"
+                    android:textAllCaps="false"
+                    app:rippleColor="@color/accent_pink" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnConnectSaved"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    app:backgroundTint="@color/accent_cyan"
+                    app:cornerRadius="20dp"
+                    android:paddingHorizontal="20dp"
+                    android:text="Connect"
+                    android:textColor="@color/background_main"
+                    android:textSize="13sp"
+                    android:textAllCaps="false"
+                    android:textStyle="bold" />
+            </LinearLayout>
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- Connection progress indicator -->
     <com.google.android.material.progressindicator.CircularProgressIndicator
         android:id="@+id/progressConnecting"
         android:layout_width="wrap_content"
@@ -128,7 +233,7 @@
         app:trackColor="@color/border_color"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/btnConnect" />
+        app:layout_constraintTop_toBottomOf="@id/descriptionText" />
 
     <TextView
         android:id="@+id/tvConnectingStatus"
@@ -142,7 +247,7 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/progressConnecting" />
 
-    <!-- Connection error / timeout message -->
+    <!-- Connection error message -->
     <TextView
         android:id="@+id/tvConnectError"
         android:layout_width="0dp"
@@ -155,6 +260,6 @@
         android:visibility="gone"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/btnConnect" />
+        app:layout_constraintTop_toBottomOf="@id/descriptionText" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

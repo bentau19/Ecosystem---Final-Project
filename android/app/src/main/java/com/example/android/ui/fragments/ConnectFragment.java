@@ -59,6 +59,10 @@ public class ConnectFragment extends Fragment {
     private TextView tvConnectingStatus;
     private TextView tvConnectError;
 
+    // Saved device card
+    private View savedDeviceCard;
+    private TextView tvSavedDeviceName;
+
     // Guards against the "PC found" dialog re-showing when LiveData re-delivers PC_FOUND
     // (e.g. on rotation) while the dialog is already up.
     private boolean pcFoundDialogShown = false;
@@ -112,6 +116,19 @@ public class ConnectFragment extends Fragment {
         progressConnecting = view.findViewById(R.id.progressConnecting);
         tvConnectingStatus = view.findViewById(R.id.tvConnectingStatus);
         tvConnectError = view.findViewById(R.id.tvConnectError);
+        savedDeviceCard = view.findViewById(R.id.savedDeviceCard);
+        tvSavedDeviceName = view.findViewById(R.id.tvSavedDeviceName);
+
+        view.findViewById(R.id.btnConnectSaved).setOnClickListener(v -> {
+            String mac = viewModel.getSavedAddress();
+            if (mac != null) startHybridConnection(mac);
+        });
+        view.findViewById(R.id.btnForgetDevice).setOnClickListener(v -> {
+            viewModel.forgetSavedDevice();
+            refreshSavedDeviceCard();
+        });
+
+        refreshSavedDeviceCard();
 
         // 3. Observer: Monitors changes in the unified ConnectionState (local IP display)
         viewModel.getConnectionState().observe(getViewLifecycleOwner(), state -> {
@@ -302,6 +319,16 @@ public class ConnectFragment extends Fragment {
         }
     }
 
+    private void refreshSavedDeviceCard() {
+        boolean hasSaved = viewModel.getSavedAddress() != null;
+        if (hasSaved && tvSavedDeviceName != null) {
+            String name = viewModel.getSavedDeviceName();
+            tvSavedDeviceName.setText(name != null ? name : "My PC");
+        }
+        setVisible(savedDeviceCard, hasSaved);
+        setVisible(btnConnectBluetooth, !hasSaved);
+    }
+
     /** Spinner + status label visible; connect buttons and idle hint hidden. */
     private void showConnectingUI(String label) {
         if (tvConnectingStatus != null) tvConnectingStatus.setText(label);
@@ -310,6 +337,7 @@ public class ConnectFragment extends Fragment {
         setVisible(tvConnectError, false);
         setVisible(btnConnect, false);
         setVisible(btnConnectBluetooth, false);
+        setVisible(savedDeviceCard, false);
         setVisible(waitingText, false);
     }
 
@@ -322,6 +350,7 @@ public class ConnectFragment extends Fragment {
         setVisible(btnConnect, true);
         setVisible(btnConnectBluetooth, true);
         setVisible(waitingText, true);
+        refreshSavedDeviceCard();
     }
 
     /** Default resting state: just the connect buttons and their hint. */
@@ -332,6 +361,7 @@ public class ConnectFragment extends Fragment {
         setVisible(btnConnect, true);
         setVisible(btnConnectBluetooth, true);
         setVisible(waitingText, true);
+        refreshSavedDeviceCard();
     }
 
     private static void setVisible(@Nullable View v, boolean visible) {
@@ -373,6 +403,7 @@ public class ConnectFragment extends Fragment {
     public void onResume() {
         super.onResume();
         refreshData();
+        refreshSavedDeviceCard();
         // After a manual disconnect the user chose to leave — skip auto-connect this one time.
         if (viewModel.consumeJustDisconnected()) return;
         if (hasBluetoothPermissions()) {

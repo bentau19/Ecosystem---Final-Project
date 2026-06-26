@@ -62,4 +62,15 @@ public class PairWithPcUseCase {
     public void clearSaved() {
         dataSource.clearSavedAddress();
     }
+
+    /** Saves the display name of the paired PC. */
+    public void savePcName(String name) {
+        dataSource.savePcName(name);
+    }
+
+    /** Returns the saved PC display name, or {@code null} if not yet paired. */
+    @Nullable
+    public String savedPcName() {
+        return dataSource.getSavedPcName();
+    }
 }

@@ -85,6 +85,9 @@ public class BluetoothDiscoveryDataSource {
         bleDiscovery.stopScan();
     }
 
+    private static final String PREFS_NAME = "syncdose_bt_prefs";
+    private static final String KEY_PC_NAME = "saved_pc_name";
+
     /** The remembered PC MAC from a previous pairing, or {@code null} on first run. */
     @Nullable
     public String getSavedAddress() {
@@ -94,6 +97,21 @@ public class BluetoothDiscoveryDataSource {
     /** Forgets the saved PC (used after a lost bond, to force a fresh discovery). */
     public void clearSavedAddress() {
         BleDiscovery.clearSavedAddress(context);
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().remove(KEY_PC_NAME).apply();
+    }
+
+    /** Saves the display name of the paired PC alongside the MAC. */
+    public void savePcName(String name) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putString(KEY_PC_NAME, name).apply();
+    }
+
+    /** Returns the saved PC display name, or {@code null} if not yet paired. */
+    @Nullable
+    public String getSavedPcName() {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_PC_NAME, null);
     }
 
     @Nullable

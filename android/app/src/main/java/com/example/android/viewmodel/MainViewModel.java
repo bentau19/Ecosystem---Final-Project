@@ -119,6 +119,12 @@ public class MainViewModel extends ViewModel {
         return pairWithPc.savedAddress();
     }
 
+    /** The display name of the remembered PC, or {@code null} if not yet paired. */
+    @Nullable
+    public String getSavedDeviceName() {
+        return pairWithPc.savedPcName();
+    }
+
     /**
      * Starts scanning for the PC over BLE. On a known device the caller should connect directly
      * with {@link #getSavedAddress()} instead of scanning.
@@ -147,6 +153,8 @@ public class MainViewModel extends ViewModel {
             @Override
             public void onPaired(String mac) {
                 pairedMac = mac;
+                DiscoveredPc pc = discoveredPc.getValue();
+                if (pc != null) pairWithPc.savePcName(pc.getName());
                 discoveryStatus.postValue(DiscoveryStatus.PAIRED);
             }
 
