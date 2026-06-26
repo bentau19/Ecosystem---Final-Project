@@ -114,6 +114,7 @@ public class ActionsFragment extends Fragment {
 
         // 6. Disconnect Button: Requests termination of the active session
         btnDisconnect.setOnClickListener(v -> {
+            viewModel.setJustDisconnected();
             if (getActivity() instanceof MainActivity) {
                 ((MainActivity) getActivity()).disconnect();
             }

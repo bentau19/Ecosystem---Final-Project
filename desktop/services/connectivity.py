@@ -1,7 +1,11 @@
+import json
 import logging
+import os
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
@@ -13,6 +17,25 @@ from tausync_py import TauSync
 from utils import network
 
 logger = logging.getLogger(__name__)
+
+
+def _approved_devices_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(os.environ["APPDATA"]) / "SyncDose" / "approved_devices.json"
+    return Path(__file__).parent.parent / "data" / "approved_devices.json"
+
+
+def _load_approved_devices() -> set[str]:
+    try:
+        return set(json.loads(_approved_devices_path().read_text(encoding="utf-8")))
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        return set()
+
+
+def _save_approved_devices(devices: set[str]) -> None:
+    path = _approved_devices_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(sorted(devices)), encoding="utf-8")
 
 
 class ConnectivityService(QObject):
@@ -85,7 +108,7 @@ class ConnectivityService(QObject):
         # accepted this session so repeat connections are silent (persistence is a future step).
         self._approval_event: threading.Event = threading.Event()
         self._approval_result: bool = False
-        self._approved_devices: set[str] = set()
+        self._approved_devices: set[str] = _load_approved_devices()
         self._use_bluetooth: bool = True
 
     # ── Public read-only access to the transport ──────────────────────────────
@@ -362,6 +385,7 @@ class ConnectivityService(QObject):
 
         if self._approval_result:
             self._approved_devices.add(device)
+            _save_approved_devices(self._approved_devices)
             logger.info("Phone '%s' approved", device)
         else:
             logger.info("Phone '%s' rejected", device)

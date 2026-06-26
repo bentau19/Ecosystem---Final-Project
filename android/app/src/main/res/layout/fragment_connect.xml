@@ -77,7 +77,7 @@
         android:layout_marginHorizontal="16dp"
         android:background="@drawable/button_shape"
         android:backgroundTint="@color/accent_cyan"
-        android:text="Connect over Bluetooth"
+        android:text="Scan Nearby Devices"
         android:textAllCaps="false"
         android:textColor="@color/background_main"
         android:textSize="18sp"

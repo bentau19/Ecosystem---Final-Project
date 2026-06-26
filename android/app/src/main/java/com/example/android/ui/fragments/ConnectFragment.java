@@ -372,8 +372,20 @@ public class ConnectFragment extends Fragment {
     @Override
     public void onResume() {
         super.onResume();
-        // Refresh local IP whenever the user returns to this screen (e.g., after switching Wi-Fi)
         refreshData();
+        // After a manual disconnect the user chose to leave — skip auto-connect this one time.
+        if (viewModel.consumeJustDisconnected()) return;
+        if (hasBluetoothPermissions()) {
+            String saved = viewModel.getSavedAddress();
+            if (saved != null) {
+                startHybridConnection(saved);
+            } else {
+                DiscoveryStatus discoveryStatus = viewModel.getDiscoveryStatus().getValue();
+                if (discoveryStatus == null || discoveryStatus == DiscoveryStatus.IDLE) {
+                    viewModel.startDiscovery();
+                }
+            }
+        }
     }
 
     @Override

@@ -40,6 +40,7 @@ public class MainViewModel extends ViewModel {
     private final MutableLiveData<DiscoveredPc> discoveredPc = new MutableLiveData<>();
     private final MutableLiveData<String> discoveryError = new MutableLiveData<>();
     private volatile String pairedMac;
+    private boolean justDisconnected = false;
 //    private android.content.BroadcastReceiver batteryReceiver;
 
     public MainViewModel(DeviceRepository repository,
@@ -192,7 +193,19 @@ public class MainViewModel extends ViewModel {
      * Commands the repository to terminate the current remote session.
      */
     public void disconnect() {
+        justDisconnected = true;
         disconnectDevice.execute();
+    }
+
+    public void setJustDisconnected() {
+        justDisconnected = true;
+    }
+
+    /** Returns true once after a manual disconnect, then resets to false. */
+    public boolean consumeJustDisconnected() {
+        boolean v = justDisconnected;
+        justDisconnected = false;
+        return v;
     }
 
 
