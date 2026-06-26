@@ -227,7 +227,7 @@ public class ConnectFragment extends Fragment {
                 break;
             case FAILED:
                 String reason = viewModel.getDiscoveryError().getValue();
-                showErrorUI(reason != null ? reason : getString(R.string.connection_failed_error));
+                showErrorUI(reason != null ? reason : getString(R.string.connection_failed_bt_error));
                 break;
             case IDLE:
             default:

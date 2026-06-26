@@ -9,6 +9,7 @@
     <string name="getting_pc_info_label">Getting PC info…</string>
     <string name="disconnecting_label">Disconnecting…</string>
     <string name="connection_failed_error">Connection failed. Check your Wi‑Fi and try again.</string>
+    <string name="connection_failed_bt_error">Connection failed. Make sure Bluetooth is on, or connect with WiFi.</string>
     <string name="connection_timeout_error">Connection timed out. Please try again.</string>
 
     <!-- Backup screen -->
