@@ -85,7 +85,7 @@ viewmodel/
 
 Important files:
 
-- `MainViewModel.java` - Coordinates connection state and user actions (QR scan, connect, disconnect, refresh stats).
+- `MainViewModel.java` - Coordinates connection state and user actions (QR scan, BLE discovery, hybrid connect, disconnect, refresh stats). Also owns the one-shot `justDisconnected` / `justDisconnectedByPc` flags that prevent `ConnectFragment.onResume` from auto-reconnecting after an intentional disconnect.
 - `MainViewModelFactory.java` - Manual dependency creation for `MainViewModel`.
 - `FileTransferViewModel.java` - Coordinates incoming file transfer state (PC → Android). Exposes `getPendingRequest()` and `getTransferStatus()` LiveData, and handles user Accept / Reject decisions.
 
@@ -113,6 +113,7 @@ Current use cases:
 
 - `ParseQrDataUseCase.java`
 - `ConnectToDeviceUseCase.java`
+- `PairWithPcUseCase.java` - Wraps BLE discovery and bonding. `discover()` scans for the PC's BLE beacon; `pair()` bonds with the found MAC and saves it for instant reconnect. `savedAddress()` / `savedPcName()` expose the remembered PC so `ConnectFragment.onResume` can skip scanning and connect directly.
 - `RefreshLocalStatsUseCase.java`
 - `RespondToFileTransferUseCase.java` - Sends `ACCEPTED_FROM_ANDROID` or `REJECTED_FROM_ANDROID` to the PC over the response channel. Called by `ConnectivityService` on a background thread after the user decides.
 - `ReceiveFileUseCase.java` - Streams file bytes from the `file_data_pc` TauSync channel directly into a MediaStore `OutputStream` in 64 KB chunks. The full file is never held in RAM, so arbitrarily large files are supported. Saves to the public Downloads folder using the MediaStore API (Android 10+, no storage permission required).
@@ -150,7 +151,7 @@ repositories/
 
 Important files:
 
-- `DeviceRepository.java` - Single source of truth for connection state, local device info, and remote PC info.
+- `DeviceRepository.java` - Single source of truth for connection state, local device info, and remote PC info. Exposes `connectHybrid()` for the Bluetooth path (no Wi-Fi IP at connect time) and the one-shot `justDisconnectedByPc` flag consumed by `ConnectFragment.onResume`.
 - `FileTransferRepository.java` - Single source of truth for the incoming file transfer lifecycle. Owns `LiveData<FileTransferRequest>` (the pending request) and `LiveData<FileTransferStatus>` (the current status). Also holds a `FileTransferActionListener` callback registered by `ConnectivityService` to bridge user decisions (Accept / Reject from the UI) to actual network writes without the ViewModel ever touching the transport layer.
 
 Each repository is a Singleton focused on a single domain. Future features (clipboard, contacts) should each get their own repository rather than extending the existing ones.
@@ -617,9 +618,9 @@ app/src/androidTest/java/com/example/android/
 
 Current tests include:
 
-- `DeviceRepositoryTest.java`
+- `DeviceRepositoryTest.java` - Covers connection state, battery/IP updates, `connectHybrid()` (BT path), and `justDisconnectedByPc` consume-once semantics.
 - `DeviceSerializerTest.java`
-- `MainViewModelTest.java`
+- `MainViewModelTest.java` - Covers QR handling, hybrid connect, BLE discovery lifecycle (`startDiscovery`, `cancelDiscovery`), and `justDisconnected` / `justDisconnectedByPc` one-shot flags.
 - `FileTransferRepositoryTest.java` - Verifies all state-machine transitions (IDLE → PENDING_APPROVAL → RECEIVING → COMPLETED / REJECTED / FAILED → IDLE) and that `FileTransferActionListener` / `IncomingRequestListener` callbacks fire at the correct moments.
 - `FileTransferViewModelTest.java` - Verifies that `acceptTransfer()`, `rejectTransfer()`, and `reset()` produce the expected LiveData state changes, and that `getPendingRequest()` / `getTransferStatus()` correctly reflect repository state.
 - `SendFileRepositoryTest.java` - Verifies all state-machine transitions for the Android→PC send flow (IDLE → WAITING_FOR_RESPONSE → SENDING → COMPLETED / REJECTED / FAILED → IDLE) and that `SendFileActionListener` fires at the correct moments.

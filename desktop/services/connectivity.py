@@ -306,11 +306,8 @@ class ConnectivityService(QObject):
     def _listen(self) -> None:
         # Retries on timeout; surfaces unexpected exceptions via connection_error.
         while self._is_running.is_set() and not self.connected:
-            logger.debug(
-                "_listen: waiting for connection (running=%s, connected=%s)",
-                self._is_running.is_set(),
-                self.connected,
-            )
+            mode = "bluetooth" if self._use_bluetooth else "wifi"
+            logger.debug("_listen: [%s] waiting for connection", mode)
             try:
                 if self._use_bluetooth:
                     # Hybrid server: Bluetooth primary + lazy Wi-Fi. Advertises a BLE beacon
@@ -323,29 +320,29 @@ class ConnectivityService(QObject):
                 else:
                     # WiFi-only server: plain TCP listen. Phone connects by scanning the QR
                     # code shown on the login screen (encodes this PC's local IP).
+                    logger.info("_listen: [wifi] listening on %s", utils.network.get_ip())
                     self._tau.listen(timeout_seconds=10)
                 # A returning call does NOT guarantee a live peer: a stale transport can
                 # return instantly with is_connected still False (the "phantom connect").
                 # Never emit a phantom device_connected — reset the role so the next
                 # attempt re-arms a real accept, then back off and retry.
                 if not self.connected:
-                    logger.warning("_listen: listen() returned with no live peer — resetting")
+                    logger.warning("_listen: [%s] returned with no live peer — resetting", mode)
                     self._reset_transport()
                     time.sleep(1)
                     continue
-                logger.info("_listen: device connected (mode=%s)",
-                            "bluetooth" if self._use_bluetooth else "wifi")
+                logger.info("_listen: device connected (mode=%s)", mode)
                 self.device_connected.emit()
             except TimeoutError:
-                logger.debug("_listen: listen timed out — retrying")
+                logger.debug("_listen: [%s] timed out — retrying", mode)
                 time.sleep(1)
             except Exception as exc:
                 # A deliberate stop() aborts the blocking listen() via
                 # tau.disconnect() — that is normal teardown, not an error.
                 if not self._is_running.is_set():
-                    logger.debug("_listen: listen aborted by stop() — exiting")
+                    logger.debug("_listen: [%s] aborted by stop() — exiting", mode)
                     return
-                logger.error("Connection listener error: %s", exc)
+                logger.error("_listen: [%s] error: %s", mode, exc)
                 self.connection_error.emit(str(exc))
                 # Clear any stuck role (e.g. a surfaced "already connected" RuntimeError)
                 # so the next attempt can re-arm a real listen.

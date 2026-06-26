@@ -252,6 +252,7 @@ public class ConnectFragment extends Fragment {
                 .setOnCancelListener(d -> {
                     pcFoundDialogShown = false;
                     viewModel.cancelDiscovery();
+                    showIdleUI();
                 })
                 .create();
         // Make the window transparent so the layout's rounded card corners show.
@@ -268,6 +269,7 @@ public class ConnectFragment extends Fragment {
             pcFoundDialogShown = false;
             dialog.dismiss();
             viewModel.cancelDiscovery();
+            showIdleUI();
         });
         dialog.show();
     }
