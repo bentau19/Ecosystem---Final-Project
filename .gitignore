@@ -68,3 +68,4 @@ tausync_structural_review.txt
 desktop/data/*.db
 desktop/data/*.log
 desktop/data/*.log.*
+desktop/data/approved_devices.json

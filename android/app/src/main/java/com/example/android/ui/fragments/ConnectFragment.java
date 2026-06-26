@@ -406,6 +406,7 @@ public class ConnectFragment extends Fragment {
         refreshSavedDeviceCard();
         // After a manual disconnect the user chose to leave — skip auto-connect this one time.
         if (viewModel.consumeJustDisconnected()) return;
+        if (viewModel.consumeJustDisconnectedByPc()) return;
         if (hasBluetoothPermissions()) {
             String saved = viewModel.getSavedAddress();
             if (saved != null) {

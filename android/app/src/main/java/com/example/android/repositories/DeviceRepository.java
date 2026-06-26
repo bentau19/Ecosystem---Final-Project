@@ -49,6 +49,20 @@ public class DeviceRepository {
         }
     }
 
+    // Set to true when the PC initiates the disconnect so ConnectFragment.onResume
+    // can skip auto-reconnect (mirroring justDisconnected for the PC-initiated path).
+    private volatile boolean justDisconnectedByPc = false;
+
+    public void setJustDisconnectedByPc() {
+        justDisconnectedByPc = true;
+    }
+
+    public boolean consumeJustDisconnectedByPc() {
+        boolean v = justDisconnectedByPc;
+        justDisconnectedByPc = false;
+        return v;
+    }
+
     private DeviceRepository(String deviceId, String modelName) {
         // Initialize local device data with REAL values
         LocalDeviceInfo initialLocal = new LocalDeviceInfo(

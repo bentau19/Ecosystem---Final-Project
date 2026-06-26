@@ -216,6 +216,11 @@ public class MainViewModel extends ViewModel {
         return v;
     }
 
+    /** Returns true once after a PC-initiated disconnect, then resets to false. */
+    public boolean consumeJustDisconnectedByPc() {
+        return repository.consumeJustDisconnectedByPc();
+    }
+
 
     /**
      * Fetches the latest storage statistics from the repository.
