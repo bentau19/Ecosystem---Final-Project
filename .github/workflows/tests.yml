@@ -52,6 +52,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r TauSync/windows/requirements.txt
+          pip install -r FileDetection/requirements.txt
           pip install -r desktop/requirements.txt
           pip install TauSync/windows
           pip install pytest pytest-timeout

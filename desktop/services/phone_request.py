@@ -12,11 +12,12 @@ from services.backup import BackupService
 from services.connectivity import ConnectivityService
 from services.device_info import DeviceInfoService
 from services.file_transfer import FileTransferService
+from services.lifecycle import LifecycleFlag
 
 logger = logging.getLogger(__name__)
 
 
-class PhoneRequestService:
+class PhoneRequestService(LifecycleFlag):
     """Dispatches incoming TauSync channel requests to registered handlers.
 
     Reads the peer's waiting channels on a background thread and invokes
@@ -55,6 +56,7 @@ class PhoneRequestService:
         self._device_info_service: DeviceInfoService = device_info_service
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
         self._is_running: threading.Event = threading.Event()
+        self._init_lifecycle()
         self._lifecycle_lock: threading.Lock = threading.Lock()
 
         self.operations: dict[str, Callable[[], None]] = {
@@ -71,7 +73,7 @@ class PhoneRequestService:
         threading.Thread(target=self._start, daemon=True).start()
 
     def stop(self) -> None:
-        """Stop the service on a background thread, joining all pending workers."""
+        """Stop the service on a daemon thread (fire-and-forget)."""
         threading.Thread(target=self._stop, daemon=True).start()
 
     def _start(self) -> None:
@@ -81,6 +83,7 @@ class PhoneRequestService:
                 return
             self._executor = ThreadPoolExecutor()
             self._is_running.set()
+            self._mark_started()
             self._executor.submit(self._listen_to_channels)
 
     def _stop(self) -> None:
@@ -93,7 +96,8 @@ class PhoneRequestService:
                 return
             self._is_running.clear()
             executor = self._executor
-        executor.shutdown(wait=True, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
+            self._mark_stopped()
 
     # ── Private lifecycle ──────────────────────────────────────────────────────
 

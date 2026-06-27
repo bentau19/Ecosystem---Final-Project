@@ -17,19 +17,19 @@ from domain.enums.file_transfer_response import FileTransferResponse
 from native import Server
 from serializers.file_metadata import FileMetadataSerializer
 from services.connectivity import ConnectivityService
+from services.lifecycle import LifecycleFlag
 
 logger = logging.getLogger(__name__)
-
 
 # ── Data-channel timeout calibration ─────────────────────────────────────────
 # Formula: timeout_s = ceil(_DATA_TIMEOUT_MULT * file_size_bytes) + _DATA_TIMEOUT_OFFSET_S
 # Assumes a pessimistic 5 MB/s floor (slow mobile hotspot / congested Wi-Fi).
 # Examples: 10 MB → 32 s  |  100 MB → 50 s  |  1 GB → 230 s (~4 min)
-_DATA_TIMEOUT_MULT: float = 1 / 5_000_000   # 0.2 µs per byte ≈ 0.2 s per MB
-_DATA_TIMEOUT_OFFSET_S: int = 30             # baseline before any bytes arrive
+_DATA_TIMEOUT_MULT: float = 1 / 5_000_000  # 0.2 µs per byte ≈ 0.2 s per MB
+_DATA_TIMEOUT_OFFSET_S: int = 30  # baseline before any bytes arrive
 
 
-class FileTransferService(QObject):
+class FileTransferService(LifecycleFlag, QObject):
     """Sends and receives files over TauSync channels on background threads.
 
     Reads ``connectivity.tau`` at the start of every call so reconnects that
@@ -78,6 +78,7 @@ class FileTransferService(QObject):
         self._metadata_serializer: FileMetadataSerializer = FileMetadataSerializer()
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
         self._is_running: threading.Event = threading.Event()
+        self._init_lifecycle()
 
         self._lifecycle_lock: threading.Lock = threading.Lock()
 
@@ -87,7 +88,7 @@ class FileTransferService(QObject):
         threading.Thread(target=self._start, daemon=True).start()
 
     def stop(self) -> None:
-        """Stop the service on a background thread, joining all pending workers."""
+        """Stop the service on a daemon thread (fire-and-forget)."""
         threading.Thread(target=self._stop, daemon=True).start()
 
     def _start(self) -> None:
@@ -97,6 +98,7 @@ class FileTransferService(QObject):
                 return
             self._executor = ThreadPoolExecutor()
             self._is_running.set()
+            self._mark_started()
             self._executor.submit(self._listen_for_file_to_send)
 
     def _stop(self) -> None:
@@ -109,7 +111,8 @@ class FileTransferService(QObject):
                 return
             self._is_running.clear()
             executor = self._executor
-        executor.shutdown(wait=True, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
+            self._mark_stopped()
 
     def send_file(self, path: str) -> None:
         """Send a local file to the connected peer on a background thread.
@@ -229,8 +232,8 @@ class FileTransferService(QObject):
 
             # 3. Stream raw bytes — write_file handles chunking internally.
             with tau.connect(
-                FileTransferChannels.REGULAR_FILE_DATA_PC_TO_ANDROID.value,
-                timeout_seconds=self._data_timeout(file_size),
+                    FileTransferChannels.REGULAR_FILE_DATA_PC_TO_ANDROID.value,
+                    timeout_seconds=self._data_timeout(file_size),
             ) as data_stream:
                 total_bytes: int = data_stream.write_file(str(file_path))
 
@@ -263,8 +266,8 @@ class FileTransferService(QObject):
 
             # 2. Stream bytes straight to disk — no full-file buffering in RAM.
             with tau.connect(
-                FileTransferChannels.REGULAR_FILE_DATA_ANDROID_TO_PC.value,
-                timeout_seconds=self._data_timeout(file_size),
+                    FileTransferChannels.REGULAR_FILE_DATA_ANDROID_TO_PC.value,
+                    timeout_seconds=self._data_timeout(file_size),
             ) as data_stream:
                 data_stream.read_to_file(dest_path, file_size)
 
@@ -293,18 +296,34 @@ class FileTransferService(QObject):
             self.file_receive_error.emit(str(exc))
 
     def _listen_for_file_to_send(self) -> None:
-        # Poll the named pipe for incoming file paths from FileHandler.exe and forward them.
+        # Poll \\.\pipe\FileSend for paths from FileHandler.exe and forward them.
+        #
+        # A Windows named-pipe instance must be disconnected (DisconnectNamedPipe)
+        # after each client before it can accept the next one. Without the
+        # finally-disconnect below the SECOND send raises ConnectionError on
+        # wait_for_client and the listener can never serve another client — so
+        # every send after the first in a connection session would fail. The
+        # canonical server loop is therefore: accept -> serve -> disconnect.
         pipe_name: str = r'\\.\pipe\FileSend'
+        poll: datetime.timedelta = datetime.timedelta(seconds=3)
         with Server(65536, 65536, pipe_name) as server:
             while self._is_running.is_set():
                 try:
-                    timeout = datetime.timedelta(seconds=3)
-                    server.wait_for_client(timeout)
-                    file_path: str = server.read(timeout)
-                    self.send_file(file_path)
+                    server.wait_for_client(poll)
                 except TimeoutError:
-                    # No client connected within the poll window — wait and retry.
-                    sleep(3)
+                    # No client connected within the poll window — nothing to
+                    # disconnect; re-check the running flag and keep waiting.
                     continue
                 except Exception as exc:
-                    logger.error("Pipe listener error: %s", exc)
+                    logger.error("Pipe listener accept error: %s", exc)
+                    server.disconnect()  # defensively re-arm the instance
+                    sleep(1)  # backoff so a persistent failure can't hot-spin
+                    continue
+                try:
+                    file_path: str = server.read(poll).decode("utf-8")
+                    self.send_file(file_path)
+                except Exception as exc:
+                    logger.error("Pipe listener read error: %s", exc)
+                finally:
+                    # Re-arm the instance for the next client (canonical Win32 loop).
+                    server.disconnect()

@@ -1,17 +1,24 @@
 import logging
 import sys
+from pathlib import Path
 from typing import Final
+
+# Add the desktop/ root to sys.path so imports work both when run directly
+# and when bundled by PyInstaller (which sets pathex correctly in the spec).
+_DESKTOP_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
+if str(_DESKTOP_ROOT) not in sys.path:
+    sys.path.insert(0, str(_DESKTOP_ROOT))
 
 from PySide6.QtCore import QCoreApplication
 from PySide6.QtWidgets import QApplication, QDialog
 
 from native.windows.pipe import Client
-
-logger = logging.getLogger(__name__)
 from views.widgets.dialogs.file_handler import (
     PhoneNotDetectedDialog,
     TransferErrorDialog,
 )
+
+logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -46,7 +53,6 @@ def send_via_pipe(file_path: str) -> None:
             client.write(file_path.encode('utf-8'))
             client.close()
             return
-
         except ConnectionError:
             _ensure_app()
             if PhoneNotDetectedDialog().exec() != QDialog.DialogCode.Accepted:

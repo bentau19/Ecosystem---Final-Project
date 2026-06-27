@@ -1,3 +1,8 @@
+### --- Bundle prerequisites (downloaded by CI, embedded into the offline installer) --- ###
+# Fetched at build time by the "Download bundle prerequisites" CI step — never commit them.
+desktop/installer/Bundle/dotnet-runtime-*.exe
+desktop/installer/Bundle/winfsp-*.msi
+
 ### --- .NET / C# Specific --- ###
 # התעלמות כללית מתיקיות הבינאריים
 [Bb]in/

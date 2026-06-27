@@ -221,7 +221,7 @@ Returns a `TauSyncStream`.
 stream = tau.connect("upload_channel")
 ```
 
-##### `tau.GetPeerWaitingWords() -> list[str]`
+##### `tau.get_peer_waiting_words() -> list[str]`
 
 Snapshot of meeting words the **peer** has fired REQ frames for, but which we
 have not paired with locally. Use this for diagnostics — e.g. to surface
@@ -235,7 +235,7 @@ A word appears in the list when:
 Once we call `connect(word)` and pair, the entry drops out of the list.
 
 ```python
-waiting = tau.GetPeerWaitingWords()
+waiting = tau.get_peer_waiting_words()
 print(f"Peer is waiting on: {waiting}")
 # Peer is waiting on: ['alpha', 'beta']
 ```

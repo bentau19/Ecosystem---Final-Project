@@ -11,9 +11,15 @@ a = Analysis(
         ("../../../native/windows/virtual_drive/build/Release/VirtualDrive.exe",
          "native/windows/virtual_drive"),
     ],
-    datas=[("../../../data/", "data/"),
-           ("../../../resources/", "resources/"),
+    datas=[("../../../resources/", "resources/"),
            ("../../../serializers/schemas/", "serializers/schemas/"),
+           # See file_handler.spec: ship native/* __init__.py on disk next to
+           # pipe_module.pyd so native.windows.pipe is a real package at runtime
+           # (otherwise the on-disk dir is treated as a namespace package and
+           # `from native import Server` fails with "(unknown location)").
+           ("../../../native/__init__.py", "native"),
+           ("../../../native/windows/__init__.py", "native/windows"),
+           ("../../../native/windows/pipe/__init__.py", "native/windows/pipe"),
            ("../../../../TauSync/windows/tausync_py/dll/", "tausync_py/dll/"),
            # FileDetection — bundled so the frozen exe can find classifer,
            # image_classifer, detector, file_duplicates, etc. at runtime.
@@ -26,6 +32,8 @@ a = Analysis(
         "native", "native.windows", "native.windows.pipe", "native.windows.pipe.pipe_module",
         # FileDetection runtime dependencies (C extensions PyInstaller may miss)
         "xxhash",
+        "torch", "torch.nn", "torch.utils.data", "torch.optim",
+        "torchvision", "torchvision.models", "torchvision.transforms",
     ],
     hookspath=[],
     hooksconfig={},
@@ -45,13 +53,16 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,
+    console=False,  # GUI-only, no console window
+    noconsole=True,  # Force no console
     disable_windowed_traceback=False,
     icon='../../../resources/icons/logo.ico',
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
 )
 
 coll = COLLECT(

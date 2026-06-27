@@ -72,6 +72,8 @@ Important files:
 - `ShareReceiverActivity.java` - Invisible trampoline Activity for Android's share sheet (`ACTION_SEND`). Has no UI — it validates the intent, checks connection state, and forwards the file URI directly to `ConnectivityService` via a `startService()` Intent with `FLAG_GRANT_READ_URI_PERMISSION` (URI Intent Delegation). This is required to transfer the share-sheet URI grant from the Activity to the Service, since URI permissions are not automatically inherited by services. Calls `finish()` immediately. Not part of the Single Activity Architecture; acts as a system entry point (similar role to a `BroadcastReceiver`).
 - `fragments/ConnectFragment.java` - Connection screen and QR flow.
 - `fragments/ActionsFragment.java` - Main connected dashboard/actions screen.
+- `fragments/BackupFragment.java` - Backup configuration and progress screen. Lets the user choose a backup mode (all media or a specific folder), configure options, start the transfer, and monitor progress via `BackupViewModel`.
+- `fragments/FolderPickerFragment.java` - Bottom-sheet fragment for browsing and selecting a folder on the device filesystem. Used by `BackupFragment` to pick the source folder for folder-mode backups.
 - `adapters/ToolsAdapter.java` - Adapter for action/tool items.
 - `models/ToolItem.java` - UI model for dashboard tools.
 
@@ -88,6 +90,8 @@ Important files:
 - `MainViewModel.java` - Coordinates connection state and user actions (QR scan, BLE discovery, hybrid connect, disconnect, refresh stats). Also owns the one-shot `justDisconnected` / `justDisconnectedByPc` flags that prevent `ConnectFragment.onResume` from auto-reconnecting after an intentional disconnect.
 - `MainViewModelFactory.java` - Manual dependency creation for `MainViewModel`.
 - `FileTransferViewModel.java` - Coordinates incoming file transfer state (PC → Android). Exposes `getPendingRequest()` and `getTransferStatus()` LiveData, and handles user Accept / Reject decisions.
+- `BackupViewModel.java` - Coordinates the backup scan phase. Registers itself as `BackupRepository.ScanActionListener`, owns the background thread that runs `ScanBackupFilesUseCase`, and feeds results back to `BackupRepository`. Does not touch the network — the scan→transfer handoff is owned by the repository.
+- `BackupViewModelFactory.java` - Manual dependency creation for `BackupViewModel`.
 
 Each ViewModel is scoped to the host Activity and observed by the relevant Fragment or the Activity itself. ViewModels are split by feature to keep each one focused.
 
@@ -114,9 +118,14 @@ Current use cases:
 - `ParseQrDataUseCase.java`
 - `ConnectToDeviceUseCase.java`
 - `PairWithPcUseCase.java` - Wraps BLE discovery and bonding. `discover()` scans for the PC's BLE beacon; `pair()` bonds with the found MAC and saves it for instant reconnect. `savedAddress()` / `savedPcName()` expose the remembered PC so `ConnectFragment.onResume` can skip scanning and connect directly.
+- `DisconnectDeviceUseCase.java`
 - `RefreshLocalStatsUseCase.java`
 - `RespondToFileTransferUseCase.java` - Sends `ACCEPTED_FROM_ANDROID` or `REJECTED_FROM_ANDROID` to the PC over the response channel. Called by `ConnectivityService` on a background thread after the user decides.
 - `ReceiveFileUseCase.java` - Streams file bytes from the `file_data_pc` TauSync channel directly into a MediaStore `OutputStream` in 64 KB chunks. The full file is never held in RAM, so arbitrarily large files are supported. Saves to the public Downloads folder using the MediaStore API (Android 10+, no storage permission required).
+- `SendFileUseCase.java` - Serializes metadata and streams file bytes to the PC over the `file_data_android` TauSync channel.
+- `ScanBackupFilesUseCase.java` - Enumerates files to back up. Supports two modes: `all_media` (images and videos via filesystem walk or MediaStore fallback) and `folder` (a user-selected SAF tree URI or filesystem path). Runs on a background thread; always synchronous.
+- `BackupTransferUseCase.java` - Sends a scanned file list to the PC one file at a time over indexed TauSync slot channels (`backup_slot_meta_N` / `backup_slot_data_N`). Waits for per-file result confirmations from the PC (`backup_file_result_N`). Supports pause, resume, and stop mid-transfer.
+- `VirtualDriveUseCase.java` - Handles all WinFsp filesystem operations forwarded by the desktop over TauSync (list, stat, read, write, create, delete, rename, truncate). Each method blocks on network I/O and must be called from a background thread.
 - `ClipboardSyncUseCase.java` - Reads the current Android clipboard via `ClipboardManager`, serialises the text as `{"type":"text","content":"..."}`, and writes it to the `clipboard_android_to_pc` TauSync channel. Must be called from a background thread.
 
 Current domain entities:
@@ -125,7 +134,12 @@ Current domain entities:
 - `LocalDeviceInfo.java`
 - `RemoteDeviceInfo.java`
 - `DeviceStorageStats.java`
-- `FileTransferRequest.java` - Represents a single incoming file transfer request (file name + size in bytes). Includes `getFormattedSize()` for human-readable display.
+- `ReceiveFileRequest.java` - Represents a single incoming file transfer request (file name + size in bytes). Includes `getFormattedSize()` for human-readable display.
+- `BackupFileEntry.java` - Represents one file discovered during a backup scan (display path, size, modification time, source URI, relative path).
+- `BackupOptions.java` - User-configured options for a backup run (e.g. whether to classify images by date).
+- `VDriveEntry.java` - Metadata for a single virtual drive filesystem entry (name, size, modification time, whether it is a directory).
+- `VDrivePageResult.java` - Paginated directory listing result (entries, has-more flag, next cursor).
+- `VDriveReadRange.java` - Wraps a byte range read from a virtual drive file (offset, data).
 
 ## Data Layer
 
@@ -135,9 +149,11 @@ Location:
 data/datasource/
 ```
 
-Important file:
+Important files:
 
 - `SystemDataSource.java` - Reads Android system data such as device model, device ID, local IP, battery status, charging state, and storage stats.
+- `BackupDataSource.java` - Platform I/O for backup file enumeration. Implements two scan strategies: SAF tree walk (`scanFolder`) and full-filesystem / MediaStore walk (`scanAllMedia`). Also handles post-transfer deletion of source files (`deleteSourceFile`) and cleanup of empty parent directories (`deleteEmptyParentFolders`).
+- `VirtualDriveDataSource.java` - Implements the low-level filesystem operations that back the virtual drive: directory listing (with pagination), stat, ranged reads, streamed writes, create, delete, rename, and truncate. Operates on a local directory that mirrors the virtual drive tree visible to the desktop WinFsp mount.
 
 This is the layer that talks directly to Android framework APIs.
 
@@ -151,8 +167,11 @@ repositories/
 
 Important files:
 
-- `DeviceRepository.java` - Single source of truth for connection state, local device info, and remote PC info. Exposes `connectHybrid()` for the Bluetooth path (no Wi-Fi IP at connect time) and the one-shot `justDisconnectedByPc` flag consumed by `ConnectFragment.onResume`.
-- `FileTransferRepository.java` - Single source of truth for the incoming file transfer lifecycle. Owns `LiveData<FileTransferRequest>` (the pending request) and `LiveData<FileTransferStatus>` (the current status). Also holds a `FileTransferActionListener` callback registered by `ConnectivityService` to bridge user decisions (Accept / Reject from the UI) to actual network writes without the ViewModel ever touching the transport layer.
+- `DeviceRepository.java` - Single source of truth for connection state, local device info, and remote PC info.
+- `ReceiveFileRepository.java` - Single source of truth for the incoming file transfer lifecycle (PC → Android). Owns `LiveData<ReceiveFileRequest>` (the pending request) and `LiveData<ReceiveFileStatus>` (the current status). Also holds a `ReceiveFileActionListener` callback registered by `ConnectivityService` to bridge user decisions (Accept / Reject from the UI) to actual network writes without the ViewModel ever touching the transport layer.
+- `SendFileRepository.java` - Single source of truth for the outgoing file transfer lifecycle (Android → PC). Owns `LiveData<SendFileStatus>` and a `SendFileActionListener` callback used by `ConnectivityService`.
+- `BackupRepository.java` - Single source of truth for the backup scan and transfer lifecycle. Owns `LiveData<BackupScanStatus>`, `LiveData<BackupTransferStatus>`, and per-file progress counters. Bridges the scan→transfer handoff: when a scan completes, the repository automatically calls `requestTransfer()` using the options captured at scan time, so the Fragment that started the scan can navigate away immediately.
+- `VirtualDriveRepository.java` - Thin singleton that delegates all virtual drive filesystem operations to `VirtualDriveDataSource`. Pure request/response — holds no observable state.
 
 Each repository is a Singleton focused on a single domain. Future features (clipboard, contacts) should each get their own repository rather than extending the existing ones.
 
@@ -170,7 +189,7 @@ Important files:
 
 - `ConnectivityService.java` - Foreground service that owns the active PC connection.
 - `AppNotificationManager.java` - Manages all app notifications: the persistent foreground service notification, the incoming file transfer heads-up notification (with Accept / Reject action buttons), and the send file progress / result notifications.
-- `FileTransferActionReceiver.java` - `BroadcastReceiver` that handles Accept / Reject actions from the file transfer notification when the app is in the background. Calls directly into `FileTransferRepository` since `BroadcastReceiver` has no lifecycle and cannot hold a ViewModel reference.
+- `FileTransferActionReceiver.java` - `BroadcastReceiver` that handles Accept / Reject actions from the file transfer notification when the app is in the background. Calls directly into `ReceiveFileRepository` since `BroadcastReceiver` has no lifecycle and cannot hold a ViewModel reference.
 
 `ConnectivityService` is responsible for:
 
@@ -180,10 +199,11 @@ Important files:
 - Connecting to the PC by IP.
 - Sending initial Android device info after connection.
 - Dispatching PC channel requests to the correct handler.
-- Instantiating `RespondToFileTransferUseCase` and `ReceiveFileUseCase` and registering itself as the `FileTransferRepository.FileTransferActionListener`.
+- Instantiating `RespondToFileTransferUseCase` and `ReceiveFileUseCase` and registering itself as the `ReceiveFileRepository.ReceiveFileActionListener`.
 - Running the accept / reject network operations on a dedicated background thread (`FileTransferAcceptThread` / `FileTransferRejectThread`).
 - Observing `SendFileRepository.getSendStatus()` via `observeForever` to drive send-file progress and result notifications without involving `MainActivity`.
-- Cleaning up both `DeviceRepository` and `FileTransferRepository` state on disconnect.
+- Registering as `BackupRepository.TransferActionListener` and `BackupRepository.ControlActionListener` to own the `BackupTransferUseCase` background thread and route pause / resume / stop commands to it.
+- Cleaning up all repository state on disconnect.
 
 ## Network Layer
 
@@ -222,13 +242,16 @@ network/handlers/
 Important files:
 
 - `ChannelHandler.java` - Common interface for all channel handlers.
-- `ChannelHandlerRegistry.java` - Maps channel names to handlers.
+- `ChannelHandlerRegistry.java` - Maps channel names to handlers. Supports prefix-based fallback routing for UUID-suffixed channels (used by VirtualDrive and Backup result channels).
 - `DeviceInfoChannelHandler.java` - Generic handler for Android device info channels.
 - `PCNameChannelHandler.java` - Reads the PC name and updates the repository.
 - `DisconnectChannelHandler.java` - Handles PC-initiated disconnects.
 - `FileMetadataChannelHandler.java` - Reads file metadata sent from the PC before a file transfer.
 - `FileDataChannelHandler.java` - Triggered by the polling loop when the PC opens `file_data_pc`. Calls `ReceiveFileUseCase` to stream the file bytes. Eliminates the simultaneous-connect race condition by letting the Desktop be the sole initiator of that channel.
 - `ClipboardFromPCHandler.java` - Triggered when the PC opens `clipboard_pc_to_android` (fired automatically on every PC clipboard change). Reads the JSON payload and sets the Android clipboard via `ClipboardManager`. Works in the background — Android allows clipboard writes without foreground restriction.
+- `BackupControlChannelHandler.java` - Handles PC-originated backup control commands (`pause`, `resume`, `stop`) on the `backup_ctrl_pc` channel. Forwards each command to the running `BackupTransferUseCase`. One channel connect per command.
+- `BackupReceivedChannelHandler.java` - Handles per-file transfer result tokens (`succ` / `fail`) sent by the PC on `backup_file_result_{slotIndex}` channels during an active backup session. Registered under the `BACKUP_FILE_RESULT` prefix; the registry's prefix-match fallback routes any slot-indexed channel here automatically.
+- `VirtualDriveChannelHandler.java` - Handles a single op type (list, stat, read, write, create, delete, rename, truncate) for all UUID-suffixed virtual drive channels of that type. One instance is registered per op-type prefix; the registry routes every incoming UUID-suffixed channel to the matching instance.
 
 New PC-initiated features should usually be implemented as a new `ChannelHandler` and registered in `ConnectivityService.registerChannelHandlers()`.
 
@@ -248,6 +271,9 @@ Important files:
 - `FileTransferResponse.java`
 - `DeviceInfoField.java`
 - `Channel.java`
+- `BackupChannels.java` - TauSync meeting-word identifiers for the backup protocol: manifest, ready ack, per-file metadata slot, per-file data slot, per-file result, and bidirectional control channels.
+- `BackupFileResult.java` - Per-file transfer result tokens (`succ` / `fail`) written by the PC on `BACKUP_FILE_RESULT` channels.
+- `VirtualDriveChannels.java` - TauSync meeting-word base prefixes for the virtual drive protocol (list, stat, read, write, create, delete, rename, truncate, paginated list, full list). The PC appends a unique 8-char hex UUID to form the actual meeting word.
 - `ClipboardChannels.java` — `CLIPBOARD_ANDROID_TO_PC` / `CLIPBOARD_PC_TO_ANDROID`
 
 These files define the shared channel names used by both Android and desktop. Many of them are generated from the shared definitions under `shared/enums/`.
@@ -263,11 +289,11 @@ File transfer follows the same MVVM layers as connection management, with each l
 ```text
 Network Layer       FileMetadataChannelHandler
                         ↓  onTransferRequested()
-Repository Layer    FileTransferRepository  (LiveData source of truth)
+Repository Layer    ReceiveFileRepository  (LiveData source of truth)
                         ↓  LiveData update
-ViewModel Layer     FileTransferViewModel   (exposes state to UI)
+ViewModel Layer     FileTransferViewModel  (exposes state to UI)
                         ↓  observe
-UI Layer            MainActivity            (Dialog / Notification)
+UI Layer            MainActivity           (Dialog / Notification)
 ```
 
 The user's Accept / Reject decision travels back down through a callback:
@@ -277,7 +303,7 @@ UI Layer            User taps Accept / Reject
                         ↓  acceptTransfer() / rejectTransfer()
 ViewModel Layer     FileTransferViewModel
                         ↓  repository.onTransferAccepted/Rejected()
-Repository Layer    FileTransferRepository  fires ActionListener callback
+Repository Layer    ReceiveFileRepository  fires ReceiveFileActionListener callback
                         ↓
 Service Layer       ConnectivityService.onUserAccepted(fileName)
                         ↓  background thread
@@ -285,7 +311,7 @@ Use Cases           RespondToFileTransferUseCase.accept()   → writes ACCEPT to
                     ReceiveFileUseCase.execute(fileName)    → reads bytes, saves to Downloads
 ```
 
-The key design decision: `FileTransferViewModel` never touches `TransportManager` directly. `ConnectivityService` owns the transport and bridges user decisions to network operations via the `FileTransferActionListener` callback registered on `FileTransferRepository`.
+The key design decision: `FileTransferViewModel` never touches `TransportManager` directly. `ConnectivityService` owns the transport and bridges user decisions to network operations via the `ReceiveFileActionListener` callback registered on `ReceiveFileRepository`.
 
 ### Step-by-step Flow
 
@@ -299,35 +325,35 @@ The desktop opens the `file_meta_pc` TauSync channel and writes a JSON payload:
 
 **2. Android detects and reads metadata**
 
-The polling loop in `TauSyncTransportManager` calls `getPeerWaitingWords()` every 2 seconds. When `file_meta_pc` appears, `ChannelHandlerRegistry` routes it to `FileMetadataChannelHandler.onPeerRequest()`, which reads and parses the JSON. The parsed `FileTransferRequest` is pushed into `FileTransferRepository` → status becomes `PENDING_APPROVAL`.
+The polling loop in `TauSyncTransportManager` calls `getPeerWaitingWords()` every 2 seconds. When `file_meta_pc` appears, `ChannelHandlerRegistry` routes it to `FileMetadataChannelHandler.onPeerRequest()`, which reads and parses the JSON. The parsed `ReceiveFileRequest` is pushed into `ReceiveFileRepository` → status becomes `PENDING_APPROVAL`.
 
 **3. UI shows approval prompt**
 
-`FileTransferViewModel` observes `FileTransferRepository.getPendingRequest()`. `MainActivity` observes the ViewModel:
+`FileTransferViewModel` observes `ReceiveFileRepository.getPendingRequest()`. `MainActivity` observes the ViewModel:
 
 - **App in foreground** → `AlertDialog` with file name, formatted size, and Accept / Reject buttons.
 - **App in background** → heads-up notification (`FileTransferChannel`, high importance) with Accept and Reject action buttons handled by `FileTransferActionReceiver`.
 
 **4. User accepts**
 
-`FileTransferViewModel.acceptTransfer()` → `FileTransferRepository.onTransferAccepted()` → fires `FileTransferActionListener.onUserAccepted(fileName)` → `ConnectivityService` spawns `FileTransferAcceptThread`:
+`FileTransferViewModel.acceptTransfer()` → `ReceiveFileRepository.onTransferAccepted()` → fires `ReceiveFileActionListener.onUserAccepted(fileName)` → `ConnectivityService` spawns `FileTransferAcceptThread`:
 
 1. `RespondToFileTransferUseCase.accept()` writes `accept_android` to the `file_response_android` channel.
 2. Android stops and waits. The Desktop receives ACCEPT, then opens `file_data_pc` alone.
 3. The polling loop (every 2 s) detects `file_data_pc` in `getPeerWaitingWords()` → routes to `FileDataChannelHandler.onPeerRequest()`.
 4. `ReceiveFileUseCase.execute(fileName)` streams bytes in 64 KB chunks from the TauSync `InputStream` directly into a MediaStore `OutputStream`. The full file is never held in RAM — safe for any file size.
 5. File is saved to the public Downloads folder using `MediaStore.Downloads` (API 29+). No `WRITE_EXTERNAL_STORAGE` permission required.
-6. `FileTransferRepository.onTransferCompleted()` → status becomes `COMPLETED` → MainActivity shows "File saved to Downloads ✓" Toast.
+6. `ReceiveFileRepository.onTransferCompleted()` → status becomes `COMPLETED` → MainActivity shows "File saved to Downloads ✓" Toast.
 
 This polling-based approach eliminates the simultaneous-connect race condition that occurred when both sides called `connect("file_data_pc")` at the same time.
 
 **4b. User rejects**
 
-`FileTransferViewModel.rejectTransfer()` → `FileTransferRepository.onTransferRejected()` → fires `FileTransferActionListener.onUserRejected()` → `ConnectivityService` spawns `FileTransferRejectThread` → writes `reject_android` to `file_response_android`. The PC aborts without opening `file_data_pc`.
+`FileTransferViewModel.rejectTransfer()` → `ReceiveFileRepository.onTransferRejected()` → fires `ReceiveFileActionListener.onUserRejected()` → `ConnectivityService` spawns `FileTransferRejectThread` → writes `reject_android` to `file_response_android`. The PC aborts without opening `file_data_pc`.
 
 **5. Reset**
 
-After any terminal status (COMPLETED / REJECTED / FAILED), `MainActivity` calls `fileTransferViewModel.reset()` which resets `FileTransferRepository` to `IDLE`, ready for the next transfer.
+After any terminal status (COMPLETED / REJECTED / FAILED), `MainActivity` calls `fileTransferViewModel.reset()` which resets `ReceiveFileRepository` to `IDLE`, ready for the next transfer.
 
 ### TauSync Channels Used
 
@@ -337,7 +363,7 @@ After any terminal status (COMPLETED / REJECTED / FAILED), `MainActivity` calls 
 | `REGULAR_FILE_RESPONSE_FROM_ANDROID` | `file_response_android` | Android → PC | `accept_android` or `reject_android` |
 | `REGULAR_FILE_DATA_PC_TO_ANDROID` | `file_data_pc` | PC → Android | Raw file bytes |
 
-### FileTransferStatus lifecycle
+### ReceiveFileStatus lifecycle
 
 ```text
 IDLE → PENDING_APPROVAL → RECEIVING → COMPLETED
@@ -348,11 +374,11 @@ IDLE → PENDING_APPROVAL → RECEIVING → COMPLETED
 ### New files added for this feature
 
 ```text
-domain/entities/FileTransferRequest.java
-domain/enums/FileTransferStatus.java
+domain/entities/ReceiveFileRequest.java
+domain/enums/ReceiveFileStatus.java
 domain/usecases/RespondToFileTransferUseCase.java
 domain/usecases/ReceiveFileUseCase.java
-repositories/FileTransferRepository.java
+repositories/ReceiveFileRepository.java
 viewmodel/FileTransferViewModel.java
 network/handlers/FileMetadataChannelHandler.java
 network/handlers/FileDataChannelHandler.java
@@ -548,6 +574,165 @@ The PC must have the **OBS Virtual Camera** driver installed (`OBS-VirtualCam` o
 
 ---
 
+## Backup Flow (Android → PC)
+
+The user taps Start Backup in `BackupFragment`, chooses a mode (all media or a specific folder), and optionally configures options (e.g. delete originals after transfer). The app scans the device for files, sends a manifest to the PC, waits for the PC user to confirm a destination folder, then streams every file to the PC over indexed TauSync slot channels.
+
+### Architecture
+
+```text
+UI Layer        BackupFragment  (mode / options selection, progress display)
+                    ↓  requestScan(mode, folderUri, options)
+Repository      BackupRepository  (LiveData source of truth for scan + transfer)
+                    ↓  ScanActionListener.onScanRequested()
+ViewModel       BackupViewModel  (owns scan background thread)
+                    ↓  ScanBackupFilesUseCase.execute()
+DataSource      BackupDataSource  (filesystem / MediaStore enumeration)
+                    ↓  onScanComplete(files) → repository auto-calls requestTransfer()
+Service         ConnectivityService  (TransferActionListener)
+                    ↓  background thread
+Use Case        BackupTransferUseCase.execute(files, options)
+                    ↓  backup_slot_meta_N / backup_slot_data_N channels
+PC              Receives files, writes result to backup_file_result_N
+                    ↓
+Handler         BackupReceivedChannelHandler  → BackupRepository.onFileResult()
+```
+
+The PC can send pause / resume / stop commands at any point during the transfer via `BackupControlChannelHandler`.
+
+### Step-by-step Flow
+
+**1. Scan**
+
+`BackupFragment` calls `BackupRepository.requestScan(mode, folderUri, options)`. The repository fires `ScanActionListener.onScanRequested()` → `BackupViewModel` spawns a background thread → `ScanBackupFilesUseCase` enumerates files using `BackupDataSource`. When complete, `BackupViewModel` calls `BackupRepository.onScanComplete(files)`.
+
+**2. Scan → Transfer handoff**
+
+`BackupRepository.onScanComplete()` automatically calls `requestTransfer(files, pendingOptions)` if the connection is still active. The `BackupFragment` has already returned to the main screen at this point — no UI involvement in the handoff.
+
+**3. Manifest sent to PC**
+
+`BackupTransferUseCase` sends `{num_files, total_size_bytes}` JSON on the `backup_manifest` channel. The PC displays a transfer summary and asks the user to confirm a destination folder.
+
+**4. PC ready**
+
+The PC writes `ready` on the `backup_ready_pc` channel. If the PC user cancels, a non-`ready` token is written and `BackupRepository.onTransferCanceledByPc()` is called — the app remains on `BackupFragment` and shows a Toast.
+
+**5. File transfer loop**
+
+For each file (slot index `i`):
+1. Android sends `{name, size, mtime, rel_path}` JSON on `backup_slot_meta_{i}`.
+2. Android streams raw bytes on `backup_slot_data_{i}`.
+3. PC writes `succ` or `fail` on `backup_file_result_{i}`. `BackupReceivedChannelHandler` reads this and calls `BackupRepository.onFileResult()`.
+4. If the user enabled "delete originals", `BackupDataSource.deleteSourceFile()` removes the source file on success.
+
+**6. Completion**
+
+`BackupRepository.onTransferComplete()` → `BackupTransferStatus.COMPLETED`. `ConnectivityService` shows a summary notification.
+
+### TauSync Channels Used
+
+| Channel enum | Wire value | Direction | Purpose |
+|---|---|---|---|
+| `BACKUP_MANIFEST_FROM_ANDROID` | `backup_manifest` | Android → PC | `{num_files, total_size_bytes}` header |
+| `BACKUP_READY_FROM_PC` | `backup_ready_pc` | PC → Android | Ready ack / cancel token |
+| `BACKUP_FILE_META_SLOT` | `backup_slot_meta_{i}` | Android → PC | Per-file JSON metadata |
+| `BACKUP_FILE_DATA_SLOT` | `backup_slot_data_{i}` | Android → PC | Per-file raw bytes |
+| `BACKUP_FILE_RESULT` | `backup_file_result_{i}` | PC → Android | `succ` or `fail` per file |
+| `BACKUP_CONTROL_FROM_PC` | `backup_ctrl_pc` | PC → Android | `{"cmd":"pause"/"resume"/"stop"}` |
+| `BACKUP_CONTROL_FROM_ANDROID` | `backup_ctrl_android` | Android → PC | `{"cmd":"pause"/"resume"/"stop"}` |
+
+### BackupTransferStatus lifecycle
+
+```text
+IDLE → SENDING → COMPLETED
+              ↘ PAUSED → SENDING (on resume)
+              ↘ STOPPED
+              ↘ FAILED
+              ↘ CANCELED_BY_PC
+```
+
+### New files added for this feature
+
+```text
+data/datasource/BackupDataSource.java
+domain/entities/BackupFileEntry.java
+domain/entities/BackupOptions.java
+domain/enums/BackupScanStatus.java
+domain/enums/BackupTransferStatus.java
+domain/usecases/ScanBackupFilesUseCase.java
+domain/usecases/BackupTransferUseCase.java
+enums/BackupChannels.java
+enums/BackupFileResult.java
+network/handlers/BackupControlChannelHandler.java
+network/handlers/BackupReceivedChannelHandler.java
+repositories/BackupRepository.java
+ui/fragments/BackupFragment.java
+ui/fragments/FolderPickerFragment.java
+viewmodel/BackupViewModel.java
+viewmodel/BackupViewModelFactory.java
+```
+
+---
+
+## Virtual Drive Flow (PC → Android)
+
+When the desktop mounts a connected phone as a Windows drive letter (via WinFsp), every filesystem operation the Windows shell issues — open, read, write, list directory, rename, delete, etc. — is forwarded over TauSync to the Android app. `VirtualDriveChannelHandler` routes each op to `VirtualDriveUseCase`, which delegates to `VirtualDriveDataSource` for the actual Android filesystem I/O. The result is sent back as a JSON response (or raw bytes for reads).
+
+### Architecture
+
+```text
+PC (WinFsp / VirtualDrive.exe)
+    ↓  connect("virtual_drive_{op}_{uuid8}")
+TauSyncTransportManager  (polling loop detects UUID-suffixed meeting word)
+    ↓
+ChannelHandlerRegistry  (prefix-match routes to the correct handler instance)
+    ↓
+VirtualDriveChannelHandler.onPeerRequest(fullChannel)
+    ↓
+VirtualDriveUseCase.handle{Op}(fullChannel)
+    ↓
+VirtualDriveRepository  →  VirtualDriveDataSource  (filesystem I/O)
+    ↓  JSON response / raw bytes
+PC
+```
+
+No LiveData or ViewModel is involved — virtual drive ops are fully synchronous request/response on the `PeerRequestHandlerThread`.
+
+### Channel routing
+
+The PC appends a unique 8-character hex UUID to each base meeting word (e.g. `virtual_drive_list_a1b2c3d4`). Android registers one `VirtualDriveChannelHandler` instance per op-type under the base prefix; `ChannelHandlerRegistry`'s prefix-fallback routes every UUID-suffixed incoming word to the matching instance without requiring per-request handler registration.
+
+### TauSync Channels Used
+
+| Channel enum | Wire base | Op |
+|---|---|---|
+| `VIRTUAL_DRIVE_LIST` | `virtual_drive_list` | Directory listing |
+| `VIRTUAL_DRIVE_LIST_PAGE` | `virtual_drive_list_page` | Paginated directory listing |
+| `VIRTUAL_DRIVE_LIST_FULL` | `virtual_drive_list_full` | Full directory listing (cached by mtime) |
+| `VIRTUAL_DRIVE_STAT` | `virtual_drive_stat` | File/directory metadata |
+| `VIRTUAL_DRIVE_READ` | `virtual_drive_read` | Ranged file read (streams bytes) |
+| `VIRTUAL_DRIVE_WRITE` | `virtual_drive_write` | File write (streams bytes in, then finalize) |
+| `VIRTUAL_DRIVE_CREATE` | `virtual_drive_create` | Create file or directory |
+| `VIRTUAL_DRIVE_DELETE` | `virtual_drive_delete` | Delete file or directory |
+| `VIRTUAL_DRIVE_RENAME` | `virtual_drive_rename` | Rename / move |
+| `VIRTUAL_DRIVE_TRUNCATE` | `virtual_drive_truncate` | Resize file |
+
+### New files added for this feature
+
+```text
+data/datasource/VirtualDriveDataSource.java
+domain/entities/VDriveEntry.java
+domain/entities/VDrivePageResult.java
+domain/entities/VDriveReadRange.java
+domain/usecases/VirtualDriveUseCase.java
+enums/VirtualDriveChannels.java
+network/handlers/VirtualDriveChannelHandler.java
+repositories/VirtualDriveRepository.java
+```
+
+---
+
 ## Device Info Flow
 
 After a successful connection, Android sends initial device information to the desktop:
@@ -624,6 +809,8 @@ Current tests include:
 - `FileTransferRepositoryTest.java` - Verifies all state-machine transitions (IDLE → PENDING_APPROVAL → RECEIVING → COMPLETED / REJECTED / FAILED → IDLE) and that `FileTransferActionListener` / `IncomingRequestListener` callbacks fire at the correct moments.
 - `FileTransferViewModelTest.java` - Verifies that `acceptTransfer()`, `rejectTransfer()`, and `reset()` produce the expected LiveData state changes, and that `getPendingRequest()` / `getTransferStatus()` correctly reflect repository state.
 - `SendFileRepositoryTest.java` - Verifies all state-machine transitions for the Android→PC send flow (IDLE → WAITING_FOR_RESPONSE → SENDING → COMPLETED / REJECTED / FAILED → IDLE) and that `SendFileActionListener` fires at the correct moments.
+- `BackupRepositoryTest.java` - Verifies the scan and transfer state-machine transitions, the scan→transfer auto-handoff logic, and the guard that discards stale scan results after a disconnect.
+- `BackupViewModelTest.java` - Verifies that scan requests are routed to `ScanBackupFilesUseCase` on a background thread and that results are fed back to `BackupRepository` correctly.
 
 Manual TauSync testing activities are under:
 
@@ -637,8 +824,9 @@ These are useful for local protocol checks but are not part of the normal app fl
 
 * **Android Studio:** Panda 1 | 2025.3.1 Patch 1 or newer
 * **JDK:** Java 21
-* **Gradle:** 8.13
+* **Gradle:** 9.5.1
 * **Min SDK:** 29 (Android 10.0)
+* **Compile SDK:** 37
 * **Target SDK:** 36
 
 ## Running The App

@@ -33,6 +33,26 @@
           WorkingDirectory="INSTALLFOLDER"
           Icon="SyncDoseIcon" />
 
+        <!--
+            Explicitly delete both .lnk files on uninstall.  This is the actual
+            fix for the desktop icon that was left behind: Windows Installer does
+            NOT reliably remove *non-advertised* shortcuts when their component is
+            uninstalled (a long-standing MSI quirk), so the Shortcut rows above
+            are not enough on their own.  Removing the Start-Menu .lnk here also
+            lets the RemoveFolder below succeed, since a folder is only deleted
+            once it is empty.
+        -->
+        <RemoveFile
+          Id="RemoveSyncDoseDesktopShortcut"
+          Directory="DesktopFolder"
+          Name="SyncDose.lnk"
+          On="uninstall" />
+        <RemoveFile
+          Id="RemoveSyncDoseStartMenuShortcut"
+          Directory="SyncDoseStartMenuFolder"
+          Name="SyncDose.lnk"
+          On="uninstall" />
+
         <!-- Remove the Start Menu folder on uninstall -->
         <RemoveFolder
           Id="RemoveSyncDoseStartMenuFolder"
@@ -42,6 +62,13 @@
         <!--
             Registry key — required as KeyPath for shortcut components.
             Tracks this component for clean install/repair/uninstall.
+
+            Stays HKCU (per-user): the shortcuts live in DesktopFolder /
+            ProgramMenuFolder, which Windows Installer classifies as per-user
+            data.  The keypath must match that scope, so an HKLM/HKMU keypath
+            triggers ICE57 ("per-user data + per-machine/ambiguous keypath").
+            Reliable removal is handled by the RemoveFile rows above, not the
+            keypath.
         -->
         <RegistryValue
           Root="HKCU"

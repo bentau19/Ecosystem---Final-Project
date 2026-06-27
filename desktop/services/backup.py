@@ -22,6 +22,7 @@ from domain.dto.backup_session_prompt import BackupSessionPromptDTO
 from domain.enums.backup_channels import BackupChannels
 from domain.enums.backup_file_result import BackupFileResult
 from serializers.backup_session import BackupSessionSerializer
+from services.lifecycle import LifecycleFlag
 from tausync_py import TauSyncStream
 from utils import network
 
@@ -58,14 +59,14 @@ _VIDEO_EXTENSIONS: frozenset[str] = frozenset({
 # into sys.path.  Imported at module level so missing-dependency errors surface
 # early (at app startup) rather than mid-backup.
 # ---------------------------------------------------------------------------
+from classification_types import ClassificationResult
 from detector import is_corrupt
 from file_duplicates import check_for_duplicates
-from image_classifer import ClassificationResult
 
 logger = logging.getLogger(__name__)
 
 
-class BackupService(QObject):
+class BackupService(LifecycleFlag, QObject):
     """Receives files from Android, screens them via FileDetection, and saves
     approved ones to a user-chosen destination folder.
 
@@ -228,6 +229,7 @@ class BackupService(QObject):
             max_workers=self.MAX_CONCURRENT_RECEIVES
         )
         self._is_running: threading.Event = threading.Event()
+        self._init_lifecycle()
         self._dest_event: threading.Event = threading.Event()
         self._cancel_event: threading.Event = threading.Event()
         self._pause_event: threading.Event = threading.Event()
@@ -256,7 +258,7 @@ class BackupService(QObject):
         threading.Thread(target=self._start, daemon=True).start()
 
     def stop(self) -> None:
-        """Stop the service and join all active threads."""
+        """Stop the service on a daemon thread (fire-and-forget)."""
         threading.Thread(target=self._stop, daemon=True).start()
 
     # ── Session control (called by ViewModel after user interaction) ─────────
@@ -431,6 +433,7 @@ class BackupService(QObject):
             self._executor = ThreadPoolExecutor()
             self._slot_executor = ThreadPoolExecutor(max_workers=self.MAX_CONCURRENT_RECEIVES)
             self._is_running.set()
+            self._mark_started()
 
     def _stop(self) -> None:
         # Executor references are captured inside the lock so a concurrent
@@ -445,10 +448,11 @@ class BackupService(QObject):
             self._wake_pending_reviews()
             slot_executor = self._slot_executor
             executor = self._executor
-        # Slot executor first — _receive_file tasks check _cancel_event and exit
-        # quickly once it is set, so this shutdown completes without a long wait.
-        slot_executor.shutdown(wait=True, cancel_futures=True)
-        executor.shutdown(wait=True, cancel_futures=True)
+            # Slot executor first — _receive_file tasks check _cancel_event and exit
+            # quickly once it is set, so this shutdown completes without a long wait.
+            slot_executor.shutdown(wait=True, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
+            self._mark_stopped()
 
     # ── Manifest entry point (called by PhoneRequestService) ─────────────────
 

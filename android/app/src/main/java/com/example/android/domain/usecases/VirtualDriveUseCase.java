@@ -18,7 +18,8 @@ import java.util.List;
 /**
  * Handles all WinFsp ops forwarded by the desktop over TauSync.
  * Simple ops (list/stat/create/delete/rename/truncate): serveJsonExchange.
- * Read: serveReadRequest — PC sends {path,offset,length}, Android streams bytes back.
+ * Read: serveReadSession — PC opens the channel once sending {path}, then issues
+ *   many {offset,length} reads over the same stream until it closes the channel.
  * Write: serveJsonHeaderThenStreamIn — PC sends {path} header then bytes; Android finalizeWrite after.
  * All methods block on I/O — call from a background thread.
  */
@@ -176,13 +177,12 @@ public class VirtualDriveUseCase {
 
     // ── read ──────────────────────────────────────────────────────────────────
 
-    // PC sends {"path","offset","length"}; Android streams file bytes back
+    // Persistent read session: PC opens the channel once sending {"path"}, then
+    // issues many {"offset","length"} reads against that one file over the same
+    // stream until it closes the channel. Reusing the channel keeps video playback
+    // smooth — no per-read TauSync handshake or channel churn.
     public void handleRead(String channel) throws Exception {
-        transportManager.serveReadRequest(channel, jsonRequest -> {
-            JSONObject req = new JSONObject(jsonRequest);
-            String path   = req.getString("path");
-            long   offset = req.getLong("offset");
-            int    length = req.getInt("length");
+        transportManager.serveReadSession(channel, (path, offset, length) -> {
             Log.d(TAG, "handleRead: path=" + path
                     + " offset=" + offset + " length=" + length + " ch=" + channel);
             try {

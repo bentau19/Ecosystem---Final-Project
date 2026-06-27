@@ -5,7 +5,11 @@ import threading
 from pathlib import Path
 
 from file_duplicates import check_for_duplicates
-from image_classifer import ClassificationResult, ClassificationVerdict, classify_image
+from classification_types import ClassificationResult, ClassificationVerdict
+# NOTE: classify_image is imported lazily in the classify() method so torch
+# (pulled in by image_classifer) loads only when ML screening actually runs,
+# not at import time. Keeping torch out of this import path is what keeps the
+# desktop app's startup fast.
 
 
 class Classifier:
@@ -110,12 +114,19 @@ class Classifier:
                 return ClassificationResult(ClassificationVerdict.REJECTED, 0.0)
         if not use_ml:
             return ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)
-        # classify_image opens the image itself — no pre-flight _is_image decode
-        # needed. Non-image files and unreadable files are caught by the except
+
+        # Lazy-import classify_image only when ML is enabled to make torch optional.
+        # This allows the app to function without PyTorch installed if ML filtering
+        # is not used. Non-image files and unreadable files are caught by the except
         # and treated as accepted (let the file through; it wasn't screened).
         try:
+            from image_classifer import classify_image
             result = classify_image(file)
+        except ImportError:
+            # torch not installed — log and skip ML filtering
+            return ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)
         except Exception:
+            # Image decode errors, model load errors, etc. — accept the file
             return ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)
         if result.verdict is ClassificationVerdict.REJECTED:
             return ClassificationResult(ClassificationVerdict.REJECTED, result.confidence)

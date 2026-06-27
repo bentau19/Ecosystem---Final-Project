@@ -52,6 +52,7 @@ jobs:
       - name: Install deps
         run: |
           pip install -r TauSync/windows/requirements.txt
+          pip install -r FileDetection/requirements.txt
           pip install -r desktop/requirements.txt
           pip install TauSync/windows
           pip install pyinstaller
@@ -61,18 +62,37 @@ jobs:
           pyinstaller desktop/installer/Package/specs/main_app.spec --distpath desktop/installer/Package/dist
           pyinstaller desktop/installer/Package/specs/file_handler.spec --distpath desktop/installer/Package/dist
 
+      - name: Download bundle prerequisites
+        # The offline Bundle embeds these two redistributables (see Bundle.wxs).
+        # They are NOT committed to the repo, so fetch them here before the build.
+        # -RetryIntervalSec/-MaximumRetryCount guard against transient CDN hiccups.
+        run: |
+          $bundleDir = "desktop/installer/Bundle"
+          Invoke-WebRequest `
+            -Uri "https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.16/dotnet-runtime-8.0.16-win-x64.exe" `
+            -OutFile "$bundleDir/dotnet-runtime-8.0.16-win-x64.exe" `
+            -MaximumRetryCount 3 -RetryIntervalSec 5
+          Invoke-WebRequest `
+            -Uri "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi" `
+            -OutFile "$bundleDir/winfsp-2.0.23075.msi" `
+            -MaximumRetryCount 3 -RetryIntervalSec 5
+          Invoke-WebRequest `
+            -Uri "https://github.com/obsproject/obs-studio/releases/download/32.1.2/OBS-Studio-32.1.2-Windows-x64-Installer.exe" `
+            -OutFile "$bundleDir/OBS-Studio-32.1.2-Windows-x64-Installer.exe" `
+            -MaximumRetryCount 3 -RetryIntervalSec 5
+
       - name: Build installer
         # Bundle.wixproj has a ProjectReference to Package.wixproj,
         # so this single command builds Package.msi first, then the Bundle .exe.
+        # Bundle.wxs uses local SourceFile payloads => WiX embeds .NET + WinFSP
+        # into SyncDoseSetup.exe, producing a fully offline installer.
         run: dotnet build desktop/installer/Bundle/ -c Release
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: |
-            desktop/installer/Package/bin/Release/*.msi
-            desktop/installer/Bundle/bin/Release/SyncDoseSetup.exe
+          path: desktop/installer/Bundle/bin/*/Release/SyncDoseSetup.exe
 
   # =========================
   # ANDROID BUILD
@@ -142,5 +162,5 @@ jobs:
           name: "SyncDose ${{ github.ref_name }}"
           generate_release_notes: true   # auto-generates changelog from commits since last tag
           files: |
-            artifacts/windows/**/*.msi
+            artifacts/windows/**/SyncDoseSetup.exe
             artifacts/android/**/*.apk

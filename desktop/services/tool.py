@@ -5,9 +5,10 @@ from PySide6.QtCore import QObject, Signal
 
 from domain.entities.tool import ToolEntity
 from repositories.tool import ToolRepository
+from services.lifecycle import LifecycleFlag
 
 
-class ToolService(QObject):
+class ToolService(LifecycleFlag, QObject):
     """Service wrapper around :class:`~repositories.tool.ToolRepository`.
 
     Re-emits repository mutation signals as service-level signals so that
@@ -53,6 +54,7 @@ class ToolService(QObject):
 
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
         self._is_running: threading.Event = threading.Event()
+        self._init_lifecycle()
         self._lifecycle_lock: threading.Lock = threading.Lock()
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -62,7 +64,7 @@ class ToolService(QObject):
         threading.Thread(target=self._start, daemon=True).start()
 
     def stop(self) -> None:
-        """Stop the service on a background thread, joining all pending workers."""
+        """Stop the service on a daemon thread (fire-and-forget)."""
         threading.Thread(target=self._stop, daemon=True).start()
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -91,6 +93,7 @@ class ToolService(QObject):
                 return
             self._executor = ThreadPoolExecutor()
             self._is_running.set()
+            self._mark_started()
 
     def _stop(self) -> None:
         # Clear the running flag then wait for all submitted work to finish.
@@ -102,7 +105,8 @@ class ToolService(QObject):
                 return
             self._is_running.clear()
             executor = self._executor
-        executor.shutdown(wait=True, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
+            self._mark_stopped()
 
     def _fetch_all_enabled(self) -> None:
         # Retrieve enabled tools from the repository and emit the result.

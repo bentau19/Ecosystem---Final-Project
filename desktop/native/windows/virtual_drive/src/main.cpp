@@ -17,8 +17,14 @@
 
 // Pipe name and buffer size come from Protocol.h so they stay in sync with VirtualDrive.cpp.
 
-// Retry parameters for the initial pipe connection.
-static constexpr int RETRY_INTERVAL_MS = 2000;
+// Retry parameters for the initial pipe connection. SyncDose now pre-creates all
+// PIPE_POOL_SIZE server instances before it launches this exe (see
+// VirtualDriveService._prewarm_pipes), so every connect below normally succeeds on
+// the first try and the pool fills in well under a millisecond. The short retry
+// interval is only a fallback for a brief restart race (e.g. the exe-watchdog
+// relaunching this process before the server's acceptors have recycled): keep it
+// small so such a race costs ~100 ms, not seconds.
+static constexpr int RETRY_INTERVAL_MS = 100;
 static constexpr int RETRY_TIMEOUT_MS  = 30000;
 
 // Number of pipe connections to open. Sets the desktop-side concurrency ceiling:
@@ -52,11 +58,13 @@ int wmain(int /*argc*/, wchar_t* /*argv*/[])
         return 1;
     }
 
-    // 2. Retry-connect to SyncDose's pipe server, opening PIPE_POOL_SIZE
-    //    connections. The server accepts each on its own instance
-    //    (PIPE_UNLIMITED_INSTANCES) and serves them concurrently. A connection
-    //    may transiently fail with ERROR_PIPE_BUSY before the server has looped
-    //    around to create the next instance, so each attempt is retried.
+    // 2. Connect to SyncDose's pipe server, opening PIPE_POOL_SIZE connections.
+    //    The server pre-creates all PIPE_POOL_SIZE instances up front
+    //    (PIPE_UNLIMITED_INSTANCES) and serves them concurrently, so these connects
+    //    normally all succeed immediately and the loop completes in microseconds —
+    //    the drive then mounts without delay. A connect can still transiently fail
+    //    with ERROR_PIPE_BUSY during a restart race (server acceptors mid-recycle),
+    //    so each attempt is retried at the short RETRY_INTERVAL_MS.
     std::vector<std::unique_ptr<ClientNamedPipe>> pipes;
     {
         int elapsed = 0;

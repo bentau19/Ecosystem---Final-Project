@@ -149,6 +149,24 @@ xxhash         # xxh3_128 content hashing
 numpy          # Array operations in quality scoring
 ```
 
+### Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+### Testing
+
+```bash
+pytest FileDetection/
+```
+
+Run from the repo root. The `tests/` directory uses pytest.
+
+### Pretrained weights and dataset
+
+`model.pth` (MobileNetV3-Large weights) and a `dataset/` directory of training images are present in the repo root of this module.
+
 ---
 
 ## Integration with BackupService

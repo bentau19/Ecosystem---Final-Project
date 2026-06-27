@@ -313,10 +313,28 @@ All methods throw standard Java exceptions:
 
 ## Requirements
 
-- **Min SDK**: 21 (Android 5.0)
+- **Min SDK**: 24 (Android 7.0)
+- **Compile SDK / Target SDK**: 37
 - **Dependencies**: Gson (for protocol handshake JSON)
 - **Permissions**:
   - Wi‑Fi mode: `android.permission.INTERNET`
   - Bluetooth/hybrid mode (API 31+, request at runtime): `android.permission.BLUETOOTH_CONNECT`,
     `android.permission.BLUETOOTH_SCAN`
+
+## Installation / build
+
+`tausync-lib` is consumed as a local Gradle module — there is no published Maven artifact. The consuming Android project (`android/`) declares it in `settings.gradle.kts`:
+
+```kotlin
+include(":tausync-lib")
+project(":tausync-lib").projectDir = File(settingsDir, "../TauSync/Tausync_Android/tausync-lib")
+```
+
+And in the app's `build.gradle.kts`:
+
+```kotlin
+implementation(project(":tausync-lib"))
+```
+
+To use in a different project, copy the same `include` + `project(...)` block into your `settings.gradle.kts` and adjust the relative path accordingly.
 

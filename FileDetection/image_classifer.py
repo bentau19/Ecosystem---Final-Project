@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import random
 import threading
-from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 
 import torch
@@ -15,6 +13,12 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 
 from image_classification_dataset import ImageClassificationDataset
+
+# Re-exported from the torch-free classification_types module so existing
+# ``from image_classifer import ClassificationResult/ClassificationVerdict``
+# callers keep working. Callers that need ONLY these types should import them
+# from classification_types directly to avoid pulling in torch at import time.
+from classification_types import ClassificationResult, ClassificationVerdict
 
 # Module-level device selection so every model instance and tensor in this
 # file shares one target device; printed once at import time for diagnostics.
@@ -33,46 +37,6 @@ _model_lock: threading.Lock = threading.Lock()
 _REMOVE_THRESHOLD: float = 0.95
 # Probability above which the model's argmax favours "remove" at all.
 _REVIEW_THRESHOLD: float = 0.5
-
-
-class ClassificationVerdict(Enum):
-    """Three-way outcome of :func:`classify_image` / :meth:`Classifier.classify`.
-
-    The underlying model is binary (label ``0`` = "filter"/unwanted, label
-    ``1`` = "keep" — matching the alphabetical class ordering
-    ``filter < keep`` produced by
-    :class:`~image_classification_dataset.ImageClassificationDataset`).
-    :func:`classify_image` turns the raw ``pr(remove)`` probability into one
-    of the three values below.
-
-    Attributes:
-        ACCEPTED: ``pr(remove) <= 0.5`` — confidently wanted. The file passed
-            all screening stages and should be saved.
-        REJECTED: ``pr(remove) > 0.95`` — confidently unwanted. The file
-            should be discarded (exact duplicate, or confidently flagged by
-            the ML classifier).
-        NEEDS_REVIEW: ``0.5 < pr(remove) <= 0.95`` — the model's argmax
-            already says "remove", but it isn't confident enough to act
-            automatically. The caller should ask the user whether to keep or
-            discard the file.
-    """
-
-    ACCEPTED = "accepted"
-    REJECTED = "rejected"
-    NEEDS_REVIEW = "needs_review"
-
-
-@dataclass
-class ClassificationResult:
-    """Outcome of a single image classification.
-
-    Attributes:
-        verdict: The three-way :class:`ClassificationVerdict`.
-        confidence: Raw ``pr(remove)`` probability reported by the model.
-    """
-
-    verdict: ClassificationVerdict
-    confidence: float
 
 
 class ImageClassifier(nn.Module):

@@ -680,6 +680,72 @@ public class TauSyncTransportManager implements TransportManager {
         }
     }
 
+    @Override
+    public void serveReadSession(String channel, RangeReader reader) throws Exception {
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException(
+                    "Cannot serve channel [" + channel + "]: Not connected");
+        }
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
+                     tauSync.connect(channel, DEFAULT_WRITE_CONNECT_TIMEOUT_S)) {
+            // First line establishes the file for the whole session (sent once by
+            // the desktop's read_open op).
+            String openLine = stream.readLine();
+            if (openLine == null) {
+                throw new java.io.EOFException(
+                        "serveReadSession: peer closed before open header on ["
+                                + channel + "]");
+            }
+            String path = new org.json.JSONObject(openLine).getString("path");
+            Log.d(TAG, "serveReadSession [" + channel + "]: open path=" + path);
+
+            java.io.OutputStream out = stream.getOutputStream();
+            byte[] buf = new byte[FILE_CHUNK_SIZE];
+
+            // Serve one {offset,length} request per iteration, reusing the same
+            // channel (and the file opened by the reader) until the peer closes it
+            // (read_close → EOF on readLine).
+            String reqLine;
+            while ((reqLine = stream.readLine()) != null) {
+                org.json.JSONObject req = new org.json.JSONObject(reqLine);
+                long offset = req.getLong("offset");
+                int length = req.getInt("length");
+
+                ReadResult result;
+                try {
+                    result = reader.openRange(path, offset, length);
+                } catch (Exception e) {
+                    Log.w(TAG, "serveReadSession [" + channel + "]: reader threw", e);
+                    result = ReadResult.error("io_error");
+                }
+
+                if (!result.ok) {
+                    // Header only; keep the session open so the peer can retry/seek.
+                    stream.writeString("{\"ok\":false,\"error\":\"" + result.error + "\"}\n");
+                    out.flush();
+                    Log.d(TAG, "serveReadSession [" + channel + "]: error=" + result.error
+                            + " off=" + offset + " len=" + length);
+                    continue;
+                }
+
+                // Success: declare the exact byte count, then stream exactly that many.
+                stream.writeString("{\"ok\":true,\"length\":" + result.length + "}\n");
+                try (java.io.InputStream in = result.stream) {
+                    long remaining = result.length;
+                    while (remaining > 0) {
+                        int want = (int) Math.min(buf.length, remaining);
+                        int n = in.read(buf, 0, want);
+                        if (n <= 0) break;  // file shrank under us → peer detects truncation
+                        out.write(buf, 0, n);
+                        remaining -= n;
+                    }
+                    out.flush();
+                }
+            }
+            Log.d(TAG, "serveReadSession [" + channel + "]: session ended for " + path);
+        }
+    }
+
     /**
      * Opens a single TauSync channel, reads one newline-terminated JSON header from the
      * peer, calls {@code handler} to obtain a destination {@link java.io.OutputStream},

@@ -309,6 +309,39 @@ public interface TransportManager {
     void serveReadRequest(String channel, JsonToReadResultHandler handler) throws Exception;
 
     /**
+     * Callback for {@link #serveReadSession}: opens one read range of the session's file.
+     * Unlike {@link JsonToReadResultHandler} the path is supplied once (from the session-open
+     * header) and only {@code offset}/{@code length} vary per call, so the handler receives
+     * typed arguments rather than a JSON string.
+     */
+    @FunctionalInterface
+    interface RangeReader {
+        /**
+         * @param path   The file path established when the session was opened.
+         * @param offset Byte offset to read from.
+         * @param length Number of bytes requested.
+         * @return A {@link ReadResult} describing success (length + stream) or failure (code).
+         * @throws Exception only on an unexpected internal error (treated as {@code io_error}).
+         */
+        ReadResult openRange(String path, long offset, int length) throws Exception;
+    }
+
+    /**
+     * Serves a <em>persistent</em> virtual-drive read channel: the desktop opens the channel
+     * once ({@code read_open}), sends a single {@code {"path":...}} header, then issues many
+     * {@code {"offset":N,"length":M}} requests over the same stream until it closes the channel
+     * ({@code read_close} → EOF). Each request is answered with the same framed response as
+     * {@link #serveReadRequest} (a {@code {"ok":...}} header then, on success, exactly
+     * {@code length} bytes). Reusing one channel pays the TauSync handshake and the file open
+     * once per handle instead of once per read, which is what makes video streaming smooth.
+     *
+     * @param channel Channel name (meeting word) to serve.
+     * @param reader  Opens each requested range, returning a {@link ReadResult}.
+     * @throws Exception if the channel connect or the session-open header read fails.
+     */
+    void serveReadSession(String channel, RangeReader reader) throws Exception;
+
+    /**
      * Callback for {@link #serveJsonHeaderThenStreamIn}: given the peer's newline-terminated
      * JSON header string, opens and returns the {@link java.io.OutputStream} into which the
      * remaining bytes from the peer will be piped.

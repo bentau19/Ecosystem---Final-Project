@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
@@ -51,7 +52,13 @@ class ToolRepository(
         """
         super().__init__(parent)
         self._serializer = ToolSerializer()
-        self._db_path = Path(os.environ["APPDATA"]) / "SyncDose" / "app.db"
+        # Frozen (PyInstaller): write to %APPDATA%\SyncDose\ which is always
+        # writable without admin rights.  Source dev: write to desktop/data/ so
+        # the database is easy to find next to the code.
+        if getattr(sys, "frozen", False):
+            self._db_path = Path(os.environ["APPDATA"]) / "SyncDose" / "app.db"
+        else:
+            self._db_path = Path(__file__).parent.parent / "data" / "app.db"
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db_path.touch(exist_ok=True)
         self._configure_db()

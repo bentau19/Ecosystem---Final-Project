@@ -1,6 +1,6 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
-      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <Bundle Name="SyncDose"
           Version="1.0.0.0"
@@ -13,64 +13,86 @@
         Theme="hyperlinkLicense" />
     </BootstrapperApplication>
 
+    <!--
+      Prerequisite detection. These searches run before the Chain and set Burn
+      variables consumed by each package's DetectCondition. When a DetectCondition
+      is true, Burn treats that package as already present and skips it.
+    -->
 
+    <!-- .NET 8 x64 runtime: detect by the on-disk shared-framework folder, which is
+         the authoritative source. (The Uninstall registry subkey is a GUID, and the
+         'dotnet\Setup\InstalledVersions\...\sharedfx' registry layout varies by
+         installer build, so neither is reliable.) Pinned to the bundled 8.0.16; if a
+         different 8.0.x is present but not this exact one, the .NET installer itself
+         no-ops, so it is a safe backstop. -->
+    <util:FileSearch Id="SearchDotNet8"
+                     Variable="DotNetFound"
+                     Path="[ProgramFiles64Folder]dotnet\shared\Microsoft.NETCore.App\8.0.16\System.Private.CoreLib.dll"
+                     Result="exists" />
 
+    <!-- OBS Studio: the OBS installer is NSIS, which registers its uninstall info
+         under the product-name subkey 'OBS Studio' (NOT the Inno-style
+         '<AppId>_is1'). The NSIS installer is a 32-bit process, so on 64-bit
+         Windows the key lands in the WOW6432Node (32-bit) view — Bitness must be
+         always32 or the search reads the wrong hive and never matches. -->
+    <util:RegistrySearch Id="SearchObsStudio"
+                         Variable="ObsFound"
+                         Root="HKLM"
+                         Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OBS Studio"
+                         Value="DisplayName"
+                         Result="exists"
+                         Bitness="always32" />
 
-<!-- Detects whether .NET 8 x64 Runtime is already installed.
-     Sets Variable="DotNet8Installed" to the found version string (e.g. "8.0.16")
-     or leaves it empty if not found. ExePackage DetectCondition treats non-empty as true. -->
-<util:DotNetCoreSearch
-    Id="DotNet8Check"
-    RuntimeType="dotnet"
-    Platform="x64"
-    MajorVersion="8"
-    Variable="DotNet8Installed" />
+    <!--
+      OFFLINE INSTALLER.
+      Every package below uses a local SourceFile and NO DownloadUrl, so WiX
+      embeds the payload directly inside SyncDoseSetup.exe. The end user gets a
+      single self-contained .exe that installs with no internet connection.
 
-<!-- Detects whether WinFSP is already installed by checking the registry.
-     Sets Variable="WinFspInstalled" to a non-empty value if found, otherwise empty.
-     WinFSP is required for the Virtual Drive feature (VirtualDrive.exe depends on it). -->
-<util:RegistrySearch
-    Id="WinFspCheck"
-    Root="HKLM"
-    Key="Software\WinFsp"
-    Value="InstallDir"
-    Variable="WinFspInstalled" />
-
+      The two prerequisite files (.NET runtime + WinFSP) are not in the repo;
+      the CI "Download bundle prerequisites" step fetches them into this folder
+      before `dotnet build` so they can be embedded.
+    -->
     <Chain>
 
-      <!-- Install .NET 8 Runtime if missing (required by TauSync C# library via pythonnet) -->
+      <!-- .NET 8 x64 Runtime (required by the TauSync C# library via pythonnet).
+           Permanent + no UninstallArguments => Burn never removes the shared
+           runtime on uninstall (other apps may depend on it). DetectCondition
+           (DotNetFound, set by SearchDotNet8) skips installation if already
+           present. The .NET installer is idempotent, but this improves UX by
+           avoiding unnecessary reinstalls. -->
       <ExePackage Id="DotNet8Runtime"
+                  SourceFile="dotnet-runtime-8.0.16-win-x64.exe"
                   InstallArguments="/install /quiet /norestart"
-                  RepairArguments="/repair /quiet /norestart"
-                  UninstallArguments="/uninstall /quiet /norestart"
-                  DetectCondition="DotNet8Installed"
-                  Vital="yes">
+                  Permanent="yes"
+                  Vital="yes"
+                  DetectCondition="DotNetFound" />
 
-        <ExePackagePayload
-            Name="dotnet-runtime-8.0.16-win-x64.exe"
-            DownloadUrl="https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.16/dotnet-runtime-8.0.16-win-x64.exe"
-            Size="29032704"
-            Compressed="no"
-            Hash="8c61220263b0d5640cb5c5499652fff5a99bbe9930d95d42943eb336cff80ecc7e00a7f6304d992da8016f5e8bacaac5323ecab92aa2e2cdf214c4e8425aef4f"
-            Version="8.0.16"
-            ProductName="Microsoft .NET Runtime 8.0.16" />
-      </ExePackage>
-
-      <!-- Install WinFSP if missing (required for Virtual Drive feature via VirtualDrive.exe) -->
+      <!-- WinFSP (required for the Virtual Drive feature via VirtualDrive.exe).
+           MsiPackage auto-detects via the MSI ProductCode captured at build
+           time, so it is skipped automatically if already installed — no
+           DetectCondition needed (unlike the ExePackages above).
+           Permanent="yes" because WinFSP is a shared library that other apps
+           might depend on; removing it when SyncDose uninstalls could break
+           those apps. -->
       <MsiPackage Id="WinFspMsi"
-                   DetectCondition="WinFspInstalled"
-                   Vital="yes">
+                  SourceFile="winfsp-2.0.23075.msi"
+                  Permanent="yes"
+                  Vital="yes" />
 
-        <MsiPackagePayload
-            Name="winfsp-2.0.23075.msi"
-            DownloadUrl="https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi"
-            Size="6176768"
-            Compressed="no"
-            Hash="80b36787949a17f0be2fb3de59a47c88faae1e93c15ae64f089ae5f69c9fce4d2df9cfeb5e71edd2c3eb23a69c4e93c1ef3c9c3b3f5e2b5f8e6c7d9e8a7b6c"
-            ProductName="WinFSP 2.0 (Windows Filesystem Proxy)" />
-      </MsiPackage>
+      <!-- OBS Studio with Virtual Camera plugin (required for phone camera streaming).
+           DetectCondition (ObsFound, set by SearchObsStudio) skips install if already
+           present. Permanent="no" means OBS is removed when SyncDose uninstalls.
+           Vital="no" allows SyncDose to install even if OBS fails (user can fix manually).
+           OBS appears in Add/Remove Programs so users can see it's installed. -->
+      <ExePackage Id="ObsStudio"
+                  SourceFile="OBS-Studio-32.1.2-Windows-x64-Installer.exe"
+                  InstallArguments="/S /D=C:\Program Files\obs-studio"
+                  Permanent="yes"
+                  Vital="no"
+                  DetectCondition="ObsFound" />
 
-      <!-- Main SyncDose application installer -->
+      <!-- Main SyncDose application installer (Package.msi, built earlier in CI). -->
       <MsiPackage SourceFile="..\Package\bin\Release\Package.msi"
                   Vital="yes" />
 

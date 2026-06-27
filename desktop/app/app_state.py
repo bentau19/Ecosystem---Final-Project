@@ -9,6 +9,7 @@ from services.backup import BackupService
 from services.connectivity import ConnectivityService
 from services.device_info import DeviceInfoService
 from services.file_transfer import FileTransferService
+from services.lifecycle import Lifecycle
 from services.phone_request import PhoneRequestService
 from services.tool import ToolService
 from services.virtual_drive import VirtualDriveService
@@ -108,21 +109,31 @@ class AppState:
         # start() opens \\.\pipe\SyncDoseVDrive and begins serving VirtualDrive.exe.
         # stop() shuts the executor down after all in-flight ops complete.
 
-    def shutdown(self) -> None:
-        """Stop all background services in dependency order on app exit.
+        # Every background service, used by the app-exit shutdown poll
+        # (stop_all / any_active).  VirtualDriveService is created after the
+        # viewmodels above, so the tuple is assembled here once all exist.
+        self._services: Final[tuple[Lifecycle, ...]] = (
+            self.phone_request_service,
+            self.backup_service,
+            self.virtual_drive_service,   # also terminates VirtualDrive.exe
+            self.file_transfer_service,
+            self.tool_service,
+            self.device_info_service,
+            self.connectivity_service,
+        )
 
-        Called via ``QApplication.aboutToQuit`` so every exit path is covered
-        (X button, tray Quit, sys.exit, etc.).  All ``stop()`` implementations
-        are idempotent and non-blocking (they spawn daemon threads), so this
-        returns immediately and the process exits cleanly.
+    def stop_all(self) -> None:
+        """Fire ``stop()`` on every service (each tears down on its own thread).
 
-        Order: dependent services first, connectivity last so the phone
-        receives a disconnect notification before the transport closes.
+        Fire-and-forget: no teardown runs on the calling (GUI) thread.  The
+        caller polls :meth:`any_active` to learn when teardown has finished.
         """
-        self.phone_request_service.stop()
-        self.backup_service.stop()
-        self.virtual_drive_service.stop()   # also terminates VirtualDrive.exe
-        self.connectivity_service.stop()    # notifies phone, then closes TauSync
+        for svc in self._services:
+            svc.stop()
+
+    def any_active(self) -> bool:
+        """True while any service is still running (polled during app shutdown)."""
+        return any(svc.is_active for svc in self._services)
 
 
 app_state: Final[AppState] = AppState()
