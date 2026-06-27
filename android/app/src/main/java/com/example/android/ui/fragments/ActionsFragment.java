@@ -13,6 +13,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.StringRes;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -22,10 +23,12 @@ import com.example.android.R;
 import com.example.android.domain.entities.RemoteDeviceInfo;
 import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.domain.enums.ConnectionType;
+import com.example.android.repositories.SettingsRepository;
 import com.example.android.ui.MainActivity;
 import com.example.android.ui.adapters.ToolsAdapter;
 import com.example.android.ui.models.ToolItem;
 import com.example.android.viewmodel.MainViewModel;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -112,7 +115,14 @@ public class ActionsFragment extends Fragment {
             tvDisconnectingLabel.setVisibility(progressVisibility);
         });
 
-        // 6. Disconnect Button: Requests termination of the active session
+        // 6. Settings button — opens SettingsFragment (addToBackStack in MainActivity)
+        btnSettings.setOnClickListener(v -> {
+            if (getActivity() instanceof MainActivity) {
+                ((MainActivity) getActivity()).navigateToSettings();
+            }
+        });
+
+        // 7. Disconnect Button: Requests termination of the active session
         btnDisconnect.setOnClickListener(v -> {
             viewModel.setJustDisconnected();
             if (getActivity() instanceof MainActivity) {
@@ -173,6 +183,10 @@ public class ActionsFragment extends Fragment {
     private void handleToolClick(String toolId) {
         switch (toolId) {
             case "backup":
+                if (!SettingsRepository.getInstance(requireContext()).isBackupEnabled()) {
+                    showToolDisabledDialog(R.string.tool_disabled_backup_msg);
+                    return;
+                }
                 if (viewModel.isBackupActive()) {
                     Toast.makeText(getContext(),
                             R.string.backup_already_in_progress,
@@ -185,6 +199,10 @@ public class ActionsFragment extends Fragment {
                 handleClipboardSend();
                 break;
             case "camera":
+                if (!SettingsRepository.getInstance(requireContext()).isWebcamEnabled()) {
+                    showToolDisabledDialog(R.string.tool_disabled_webcam_msg);
+                    return;
+                }
                 if (getActivity() instanceof MainActivity) {
                     ((MainActivity) getActivity()).navigateToWebcam();
                 }
@@ -195,7 +213,32 @@ public class ActionsFragment extends Fragment {
         }
     }
 
+    /**
+     * Shows a "Tool Disabled" MaterialAlertDialog with a direct shortcut to Settings.
+     *
+     * @param messageRes String resource for the feature-specific explanation, e.g.
+     *                   {@link R.string#tool_disabled_clipboard_msg}.
+     */
+    private void showToolDisabledDialog(@StringRes int messageRes) {
+        new MaterialAlertDialogBuilder(requireContext())
+                .setTitle(R.string.tool_disabled_title)
+                .setMessage(messageRes)
+                .setPositiveButton(R.string.tool_disabled_open_settings, (dialog, which) -> {
+                    if (getActivity() instanceof MainActivity) {
+                        ((MainActivity) getActivity()).navigateToSettings();
+                    }
+                })
+                .setNegativeButton(R.string.tool_disabled_dismiss, null)
+                .show();
+    }
+
     private void handleClipboardSend() {
+        // 0. Feature gate — show dialog and bail if clipboard sync is disabled in Settings
+        if (!SettingsRepository.getInstance(requireContext()).isClipboardEnabled()) {
+            showToolDisabledDialog(R.string.tool_disabled_clipboard_msg);
+            return;
+        }
+
         // 1. Read clipboard content before sending
         ClipboardManager cm = (ClipboardManager) requireContext()
                 .getSystemService(Context.CLIPBOARD_SERVICE);

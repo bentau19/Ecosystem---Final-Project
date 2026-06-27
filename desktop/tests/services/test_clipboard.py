@@ -27,9 +27,10 @@ def _make_stream_cm(read_data: bytes = b"") -> MagicMock:
     return cm
 
 
-def _make_connectivity(tau: MagicMock) -> MagicMock:
+def _make_connectivity(tau: MagicMock, connected: bool = True) -> MagicMock:
     connectivity = MagicMock()
     connectivity.tau = tau
+    connectivity.connected = connected
     return connectivity
 
 
@@ -189,6 +190,17 @@ def test_on_clipboard_changed_skips_empty_text(qtbot: QtBot) -> None:
     tau.connect.assert_not_called()
 
 
+def test_on_clipboard_changed_skips_when_disconnected(qtbot: QtBot) -> None:
+    """No device connected — the PC→Android send must not open a channel."""
+    tau = _make_tau()
+    svc = ClipboardService(connectivity=_make_connectivity(tau, connected=False))
+
+    svc.on_clipboard_changed("hi")
+    _wait_threads(svc, qtbot)
+
+    tau.connect.assert_not_called()
+
+
 def test_on_clipboard_changed_deduplicates_identical_content(qtbot: QtBot) -> None:
     tau = _make_tau()
     svc = _make_svc(tau)
@@ -225,3 +237,64 @@ def test_on_clipboard_changed_survives_broken_channel(qtbot: QtBot) -> None:
     svc.on_clipboard_changed("text that will fail to send")
     _wait_threads(svc, qtbot)
     # Should not raise; the exception is caught inside _send_to_android
+
+
+# ---------------------------------------------------------------------------
+# set_enabled() — feature toggle gates both directions
+# ---------------------------------------------------------------------------
+
+
+def test_on_clipboard_changed_skips_when_disabled(qtbot: QtBot) -> None:
+    """Disabled clipboard sync must not push PC clipboard changes to Android."""
+    tau = _make_tau()
+    svc = _make_svc(tau)
+    svc.set_enabled(False)
+
+    svc.on_clipboard_changed("hi")
+    _wait_threads(svc, qtbot)
+
+    tau.connect.assert_not_called()
+
+
+def test_receive_skips_when_disabled(qtbot: QtBot) -> None:
+    """Disabled clipboard sync must not open the Android→PC channel."""
+    tau = _make_tau()
+    payload = json.dumps({"type": "text", "content": "x"}).encode()
+    tau.connect.return_value = _make_stream_cm(payload)
+    svc = _make_svc(tau)
+    svc.set_enabled(False)
+
+    received: list[str] = []
+    svc.clipboard_text_received.connect(lambda t: received.append(t))
+
+    svc.receive()
+    _wait_threads(svc, qtbot)
+
+    tau.connect.assert_not_called()
+    assert received == []
+
+
+def test_re_enabling_restores_sync(qtbot: QtBot) -> None:
+    """Toggling back on resumes PC→Android sends."""
+    tau = _make_tau()
+    svc = _make_svc(tau)
+    svc.set_enabled(False)
+    svc.set_enabled(True)
+
+    svc.on_clipboard_changed("back on")
+    _wait_threads(svc, qtbot)
+
+    tau.connect.assert_called_once_with(_CH_PC_TO_ANDROID)
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle (shutdown participation)
+# ---------------------------------------------------------------------------
+
+
+def test_is_active_false_when_idle(qtbot: QtBot) -> None:
+    """No background threads running → is_active is False; start/stop are no-ops."""
+    svc = _make_svc(_make_tau())
+    svc.start()  # no-op
+    svc.stop()   # no-op
+    assert svc.is_active is False

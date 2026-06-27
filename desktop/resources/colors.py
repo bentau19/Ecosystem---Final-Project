@@ -438,6 +438,33 @@ class LightTopbarColors(ColorsEnum):
     BTN_PRESSED = "#7F1D1D"
 
 
+class SettingsColors(ColorsEnum):
+    """Component-scoped color tokens for the settings screen (dark mode)."""
+
+    BACKGROUND          = Colors.SURFACE_PRIMARY   # Main content area background
+    SECTION_LABEL       = Colors.TEXT_MUTED        # Muted uppercase section header text
+    PAGE_TITLE          = Colors.TEXT_PRIMARY       # Large "Settings" heading text
+    SETTING_TITLE       = Colors.TEXT_PRIMARY       # Individual setting name text
+    SETTING_DESCRIPTION = Colors.TEXT_SECONDARY    # Muted description text below each title
+    SEPARATOR           = Colors.BORDER_DEFAULT    # Horizontal rule between sections
+    ROW_HOVER           = Colors.SURFACE_SECONDARY  # Subtle row highlight on hover
+
+
+class LightSettingsColors(ColorsEnum):
+    """Light-mode component tokens for the settings screen.
+
+    Mirror of :class:`SettingsColors` — identical member names, light-appropriate values.
+    """
+
+    BACKGROUND          = LightColors.SURFACE_PRIMARY
+    SECTION_LABEL       = LightColors.TEXT_MUTED
+    PAGE_TITLE          = LightColors.TEXT_PRIMARY
+    SETTING_TITLE       = LightColors.TEXT_PRIMARY
+    SETTING_DESCRIPTION = LightColors.TEXT_SECONDARY
+    SEPARATOR           = LightColors.BORDER_DEFAULT
+    ROW_HOVER           = LightColors.SURFACE_SECONDARY
+
+
 class LoadingOverlayColors(ColorsEnum):
     """Component-scoped color tokens for the loading overlay (dark mode)."""
 

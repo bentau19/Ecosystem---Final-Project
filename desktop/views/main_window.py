@@ -23,6 +23,7 @@ from viewmodels.device import DeviceViewModel
 from viewmodels.file_transfer import FileTransferViewModel
 from views.screens.dashboard import DashboardScreen
 from views.screens.login import LoginScreen
+from views.screens.settings import SettingsScreen
 from views.widgets.backup.backup_dest_picker_dialog import BackupDestPickerDialog
 from views.widgets.backup.backup_progress_window import BackupProgressWindow
 from views.widgets.backup.backup_review_dialog import BackupReviewDialog
@@ -94,7 +95,8 @@ class MainWindow(QMainWindow):
 
         self._screens = {
             Screen.LOGIN: LoginScreen(),
-            Screen.DASHBOARD: DashboardScreen()
+            Screen.DASHBOARD: DashboardScreen(),
+            Screen.SETTINGS: SettingsScreen(),
         }
 
         for screen in self._screens.values():

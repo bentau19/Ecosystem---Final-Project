@@ -22,19 +22,26 @@ class Sidebar(QFrame):
     """
 
     def __init__(
-            self, sidebar_width: int = 230, logo_widget_height: int = 120, parent: QWidget | None = None
+            self,
+            sidebar_width: int = 230,
+            logo_widget_height: int = 120,
+            active_nav_index: int = 0,
+            parent: QWidget | None = None,
     ) -> None:
         """Initialize the Sidebar widget.
 
         Args:
             sidebar_width: The width of the sidebar, in pixels. Defaults to ``230``.
             logo_widget_height: The height of the logo widget, in pixels. Defaults to ``120``.
+            active_nav_index: Which nav item starts highlighted (0 = Dashboard,
+                1 = Settings). Defaults to ``0``.
             parent: Optional parent widget. Defaults to ``None``.
         """
         super().__init__(parent)
 
         self._logo_widget_height: int = logo_widget_height
         self._sidebar_width: int = sidebar_width
+        self._active_nav_index: int = active_nav_index
 
         self._logo_widget: LogoWidget
         self._nav_container: NavigationContainer
@@ -53,7 +60,7 @@ class Sidebar(QFrame):
     def _create_widgets(self) -> None:
         # Instantiate the logo widget, nav container, and pill wrapper.
         self._logo_widget = self._create_logo_widget()
-        self._nav_container = NavigationContainer()
+        self._nav_container = NavigationContainer(active_index=self._active_nav_index)
         self._pill_wrapper = PillWrapper()
 
     def _create_layout(self) -> None:

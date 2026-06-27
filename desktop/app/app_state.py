@@ -1,9 +1,12 @@
 from typing import Final
 
 from domain.enums.clipboard_channels import ClipboardChannels
+from domain.enums.settings_channels import SettingsChannels
 from domain.enums.webcam_channels import WebcamChannels
 from repositories.device import DeviceRepository
+from repositories.settings import SettingsRepository
 from repositories.tool import ToolRepository
+from services.settings import SettingsService
 from services.clipboard import ClipboardService
 from services.backup import BackupService
 from services.connectivity import ConnectivityService
@@ -17,6 +20,7 @@ from services.webcam import WebcamService
 from viewmodels.backup import BackupViewModel
 from viewmodels.device import DeviceViewModel
 from viewmodels.file_transfer import FileTransferViewModel
+from viewmodels.settings import SettingsViewModel
 from viewmodels.tool import ToolViewModel
 from viewmodels.webcam import WebcamViewModel
 
@@ -34,9 +38,16 @@ class AppState:
         # Repositories
         self.tools_repository: Final[ToolRepository] = ToolRepository()
         self.device_repository: Final[DeviceRepository] = DeviceRepository()
+        self.settings_repository: Final[SettingsRepository] = SettingsRepository()
 
         # Services
         self.connectivity_service: Final[ConnectivityService] = ConnectivityService()
+        # SettingsService needs connectivity for the tool-enabled sync, so it is
+        # constructed after connectivity_service rather than next to its repository.
+        self.settings_service: Final[SettingsService] = SettingsService(
+            repository=self.settings_repository,
+            connectivity=self.connectivity_service,
+        )
         self.device_info_service: Final[DeviceInfoService] = DeviceInfoService(
             connectivity=self.connectivity_service,
             repository=self.device_repository,
@@ -86,40 +97,55 @@ class AppState:
             file_transfer_service=self.file_transfer_service,
             backup_service=self.backup_service,
             device_info_service=self.device_info_service,
+            webcam_service=self.webcam_service,
+            clipboard_service=self.clipboard_service,
+            settings_service=self.settings_service,
         )
-        self.phone_request_service.operations[
-            ClipboardChannels.CLIPBOARD_ANDROID_TO_PC.value
-        ] = self.clipboard_service.receive
-
-        self.phone_request_service.operations[
-            WebcamChannels.WEBCAM_START.value
-        ] = self.webcam_service.receive_start
-
         # Wire service lifecycles to device connection events.
         # BackupService is wired first so its executor is initialized before
         # PhoneRequestService can dispatch receive_manifest() on the first poll.
         self.device_viewmodel.device_connected.connect(self.backup_service.start)
         self.device_viewmodel.device_connected.connect(self.phone_request_service.start)
-        self.device_viewmodel.device_connected.connect(self.virtual_drive_service.start)
+        # VirtualDriveService lifecycle is NOT wired here — SettingsViewModel
+        # conditionally connects device_connected/disconnected based on the persisted
+        # "virtual_drive_enabled" setting.  See viewmodels/settings.py.
 
         self.device_viewmodel.device_disconnected.connect(self.backup_service.stop)
         self.device_viewmodel.device_disconnected.connect(self.phone_request_service.stop)
-        self.device_viewmodel.device_disconnected.connect(self.virtual_drive_service.stop)
-        # Wire VirtualDriveService lifecycle to device connection events.
-        # start() opens \\.\pipe\SyncDoseVDrive and begins serving VirtualDrive.exe.
-        # stop() shuts the executor down after all in-flight ops complete.
 
         # Every background service, used by the app-exit shutdown poll
         # (stop_all / any_active).  VirtualDriveService is created after the
         # viewmodels above, so the tuple is assembled here once all exist.
+        # VirtualDriveService is always included even when disabled by settings
+        # so stop_all() safely calls stop() (which is a no-op if never started).
+        # ClipboardService and WebcamService are non-Lifecycle in spirit (no
+        # start-on-connect) but expose stop()/is_active so shutdown can release
+        # the virtual camera and drain in-flight sync threads.  They sit before
+        # connectivity_service, which stays last so its transport teardown
+        # unblocks any read the webcam stream is parked on.
         self._services: Final[tuple[Lifecycle, ...]] = (
             self.phone_request_service,
             self.backup_service,
-            self.virtual_drive_service,   # also terminates VirtualDrive.exe
+            self.virtual_drive_service,  # also terminates VirtualDrive.exe
             self.file_transfer_service,
             self.tool_service,
             self.device_info_service,
+            self.clipboard_service,
+            self.webcam_service,
             self.connectivity_service,
+        )
+
+        # SettingsViewModel is constructed last — it needs device_viewmodel,
+        # virtual_drive_service, and connectivity_service to already exist.
+        # It reads persisted settings and wires VirtualDrive lifecycle if enabled.
+        self.settings_viewmodel: Final[SettingsViewModel] = SettingsViewModel(
+            settings_service=self.settings_service,
+            device_viewmodel=self.device_viewmodel,
+            virtual_drive_service=self.virtual_drive_service,
+            connectivity_service=self.connectivity_service,
+            clipboard_service=self.clipboard_service,
+            webcam_service=self.webcam_service,
+            backup_service=self.backup_service,
         )
 
     def stop_all(self) -> None:

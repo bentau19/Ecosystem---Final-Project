@@ -497,7 +497,9 @@ public class TestTauSyncActivity extends AppCompatActivity {
         launchBlePairing();
     }
 
-    /** True if any cause in the chain is a {@link BluetoothTransport.BondLostException}. */
+    /**
+     * True if any cause in the chain is a {@link BluetoothTransport.BondLostException}.
+     */
     private static boolean isBondLost(Throwable throwable) {
         for (Throwable t = throwable; t != null; t = t.getCause()) {
             if (t instanceof BluetoothTransport.BondLostException) {
@@ -649,7 +651,9 @@ public class TestTauSyncActivity extends AppCompatActivity {
      * PC sends, so the channel behaves like a live chat window.
      */
     private final class ManualChannel {
-        /** Keep the incoming view bounded so append() stays cheap under heavy spam. */
+        /**
+         * Keep the incoming view bounded so append() stays cheap under heavy spam.
+         */
         private static final int MAX_INCOMING_CHARS = 20_000;
         private static final int TRIM_TO_CHARS = 15_000;
 
@@ -781,14 +785,18 @@ public class TestTauSyncActivity extends AppCompatActivity {
         });
     }
 
-    /** Records a test verdict for the final summary and logs it. */
+    /**
+     * Records a test verdict for the final summary and logs it.
+     */
     private void recordResult(String testId, boolean passed, long elapsedMs, String detail) {
         testResults.put(testId, passed);
         String suffix = (detail == null || detail.isEmpty()) ? "" : "  " + detail;
         appendLog("[" + testId + "] " + verdict(passed) + " (" + elapsedMs + "ms)" + suffix);
     }
 
-    /** Shows the single clear PASS/FAIL banner once every test has run. */
+    /**
+     * Shows the single clear PASS/FAIL banner once every test has run.
+     */
     private void publishSummary() {
         int total = testResults.size();
         int passedCount = 0;
@@ -805,7 +813,7 @@ public class TestTauSyncActivity extends AppCompatActivity {
         String summary = allPassed
                 ? ("✔  ALL " + total + " TESTS PASSED")
                 : ("✘  " + passedCount + " / " + total + " PASSED   —   FAILED: "
-                        + TextUtils.join(", ", failed));
+                   + TextUtils.join(", ", failed));
 
         summaryLabel.setText(summary);
         summaryLabel.setTextColor(allPassed ? COLOR_PASS : COLOR_FAIL);
@@ -866,7 +874,7 @@ public class TestTauSyncActivity extends AppCompatActivity {
         String summary = allPassed
                 ? ("✔  ALL " + total + " HYBRID TESTS PASSED")
                 : ("✘  " + passedCount + " / " + total + " HYBRID PASSED   —   FAILED: "
-                        + TextUtils.join(", ", failed));
+                   + TextUtils.join(", ", failed));
 
         hybridSummaryLabel.setText(summary);
         hybridSummaryLabel.setTextColor(allPassed ? COLOR_PASS : COLOR_FAIL);
@@ -978,7 +986,9 @@ public class TestTauSyncActivity extends AppCompatActivity {
         }
     }
 
-    /** Sends a sized payload, reads its echo, and verifies the SHA-256 round-trips. */
+    /**
+     * Sends a sized payload, reads its echo, and verifies the SHA-256 round-trips.
+     */
     private boolean echoBoundaryPayload(TauSyncStream stream, int size) throws Exception {
         byte[] data = randomBytes(size);
         String sha = computeSha256Hex(data);
@@ -1664,7 +1674,8 @@ public class TestTauSyncActivity extends AppCompatActivity {
 
         try {
             allDone.await(30, TimeUnit.SECONDS);
-        } catch (InterruptedException ignored) {}
+        } catch (InterruptedException ignored) {
+        }
 
         recordResult("Test 20", allPassed.get(), elapsed(startTime),
                 CONCURRENT_ID_COUNT + " concurrent channels, no cross-talk");
@@ -1691,7 +1702,7 @@ public class TestTauSyncActivity extends AppCompatActivity {
             boolean passed = payload.equals(reply);
             recordResult("Test 21", passed, elapsed(startTime),
                     passed ? "no corruption after concurrent close"
-                           : "expected=" + payload + " got=" + reply);
+                            : "expected=" + payload + " got=" + reply);
         } catch (Exception e) {
             recordResult("Test 21", false, elapsed(startTime), "ERROR: " + e.getMessage());
         }
@@ -1776,7 +1787,9 @@ public class TestTauSyncActivity extends AppCompatActivity {
         }
     }
 
-    /** Reads one '\n'-terminated line directly from a raw InputStream. */
+    /**
+     * Reads one '\n'-terminated line directly from a raw InputStream.
+     */
     private static String readLineFromRaw(InputStream in) throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         boolean sawAnyByte = false;

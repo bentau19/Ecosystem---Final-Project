@@ -699,7 +699,14 @@ public class ConnectionManager implements IConnectionManager {
             ConnectionContext.getInstance().unregisterSessionControlListener();
             ConnectionContext.getInstance().unregisterChannelControlListener();
             hybrid.dispose();
+            // The secondary (Wi-Fi) transport is ConnectionContext's process-wide singleton
+            // SocketTransport, reused across every session. disconnect() it (closes the socket but
+            // keeps it reusable) — NOT close(), which sets disposed=true permanently and, because the
+            // singleton is final and never recreated, makes every later connectTo() fail with
+            // "Transport disposed". disconnect() still decrements the ref-count, so channels are
+            // aborted and shared state is reset exactly as close() would have done.
             try { secondaryTransport.close(); } catch (Exception ignored) {}
+            // The Bluetooth primary is created fresh per hybrid session, so a permanent close() is fine.
             try { primaryTransport.close(); } catch (Exception ignored) {}
         }
     }

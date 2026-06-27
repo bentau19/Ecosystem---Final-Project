@@ -314,11 +314,6 @@ class ConnectivityService(LifecycleFlag, QObject):
             logger.debug("Disconnect notification sent to phone")
         except Exception as e:
             logger.warning("Failed to notify phone of disconnect: %s", e)
-
-    def _connect_to_device(self, hostname: str) -> None:
-        # TODO: connect via Bluetooth using the previously stored device ID.
-        pass
-
     def _reset_transport(self) -> None:
         # Clear a stale/stuck transport role so the next listen() re-arms a real accept.
         # tau.disconnect() always resets the process-wide role to NONE (and only touches

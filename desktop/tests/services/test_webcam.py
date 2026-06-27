@@ -248,3 +248,106 @@ def test_correct_channels_opened(qtbot: QtBot) -> None:
     channels = [call.args[0] for call in tau.connect.call_args_list]
     assert _CH_WEBCAM_START in channels
     assert _CH_WEBCAM_FRAMES in channels
+
+
+# ---------------------------------------------------------------------------
+# set_enabled() — feature toggle
+# ---------------------------------------------------------------------------
+
+
+def test_receive_start_noop_when_disabled() -> None:
+    """A disabled webcam ignores incoming start requests — no channel is opened."""
+    start_cm, _ = _make_stream_cm()
+    frames_cm, _ = _make_frame_stream_cm(b"", b"")
+    tau = _make_tau(start_cm, frames_cm)
+
+    svc = _make_svc(tau)
+    svc.set_enabled(False)
+    started: list[bool] = []
+    svc.webcam_started.connect(lambda: started.append(True))
+
+    with patch("services.webcam.pyvirtualcam.Camera"):
+        svc.receive_start()
+
+    tau.connect.assert_not_called()
+    assert not svc._running
+    assert started == []
+
+
+def test_stop_aborts_active_stream(qtbot: QtBot) -> None:
+    """stop() closes the live stream so the frame loop exits and the camera releases."""
+    started: list[bool] = []
+    stopped: list[bool] = []
+    errors: list[str] = []
+    release = threading.Event()
+
+    start_cm, _ = _make_stream_cm()
+
+    # Frame stream parks in read_exactly until close() releases it, then raises EOF
+    # (mirrors a stream disposed from another thread).
+    frame_stream = MagicMock()
+
+    def _blocked_read(_n: int) -> bytes:
+        release.wait(timeout=3)
+        raise EOFError("stream closed")
+
+    frame_stream.read_exactly.side_effect = _blocked_read
+    frame_stream.close.side_effect = lambda: release.set()
+    frame_cm = MagicMock()
+    frame_cm.__enter__.return_value = frame_stream
+    frame_cm.__exit__.return_value = False
+
+    tau = _make_tau(start_cm, frame_cm)
+    cam_cm, _ = _make_cam_cm()
+    svc = _make_svc(tau)
+    svc.webcam_started.connect(lambda: started.append(True))
+    svc.webcam_stopped.connect(lambda: stopped.append(True))
+    svc.webcam_error.connect(lambda msg: errors.append(msg))
+
+    with patch("services.webcam.pyvirtualcam.Camera", return_value=cam_cm):
+        svc.receive_start()
+        qtbot.waitUntil(lambda: len(started) > 0, timeout=3000)
+        assert svc.is_active  # streaming
+
+        svc.stop()
+        qtbot.waitUntil(lambda: len(stopped) > 0, timeout=3000)
+
+    frame_stream.close.assert_called()
+    assert not svc._running
+    assert not svc.is_active
+    assert errors == []  # deliberate stop is not surfaced as an error
+
+
+def test_disable_while_streaming_stops_it(qtbot: QtBot) -> None:
+    """set_enabled(False) mid-stream tears the stream down via stop()."""
+    started: list[bool] = []
+    stopped: list[bool] = []
+    release = threading.Event()
+
+    start_cm, _ = _make_stream_cm()
+    frame_stream = MagicMock()
+
+    def _blocked_read(_n: int) -> bytes:
+        release.wait(timeout=3)
+        raise EOFError("stream closed")
+
+    frame_stream.read_exactly.side_effect = _blocked_read
+    frame_stream.close.side_effect = lambda: release.set()
+    frame_cm = MagicMock()
+    frame_cm.__enter__.return_value = frame_stream
+    frame_cm.__exit__.return_value = False
+
+    tau = _make_tau(start_cm, frame_cm)
+    cam_cm, _ = _make_cam_cm()
+    svc = _make_svc(tau)
+    svc.webcam_started.connect(lambda: started.append(True))
+    svc.webcam_stopped.connect(lambda: stopped.append(True))
+
+    with patch("services.webcam.pyvirtualcam.Camera", return_value=cam_cm):
+        svc.receive_start()
+        qtbot.waitUntil(lambda: len(started) > 0, timeout=3000)
+
+        svc.set_enabled(False)
+        qtbot.waitUntil(lambda: len(stopped) > 0, timeout=3000)
+
+    assert not svc._running

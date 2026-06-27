@@ -91,4 +91,35 @@
 
     <!-- Toast shown when the PC dismisses the folder-picker before any file is sent -->
     <string name="backup_canceled_by_pc">Backup canceled</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_back_desc">Go back</string>
+    <string name="settings_section_app">APP</string>
+    <string name="settings_auto_launch_title">Launch on startup</string>
+    <string name="settings_auto_launch_sub">Start SyncDose when the device boots</string>
+    <string name="settings_auto_launch_desc">Toggle launch on device startup</string>
+    <string name="settings_section_tools">TOOLS</string>
+    <string name="settings_virtual_drive_title">Virtual Drive</string>
+    <string name="settings_virtual_drive_sub">Synced with PC</string>
+    <string name="settings_virtual_drive_desc">Toggle Virtual Drive tool</string>
+    <string name="settings_clipboard_title">Clipboard Sync</string>
+    <string name="settings_clipboard_sub">Synced with PC</string>
+    <string name="settings_clipboard_desc">Toggle clipboard sync with PC</string>
+    <string name="settings_webcam_title">Camera Mirror</string>
+    <string name="settings_webcam_sub">Synced with PC</string>
+    <string name="settings_webcam_desc">Toggle camera mirroring to PC</string>
+
+    <!-- Settings — File Backup tool toggle (phone-local, not synced to PC) -->
+    <string name="settings_backup_title">File Backup</string>
+    <string name="settings_backup_sub">Phone only</string>
+    <string name="settings_backup_desc">Toggle file backup tool</string>
+
+    <!-- "Tool Disabled" dialog — shown when user taps a feature that is off in Settings -->
+    <string name="tool_disabled_title">Tool Disabled</string>
+    <string name="tool_disabled_backup_msg">File Backup is disabled. Enable it in Settings to use this feature.</string>
+    <string name="tool_disabled_clipboard_msg">Clipboard Sync is disabled. Enable it in Settings to use this feature.</string>
+    <string name="tool_disabled_webcam_msg">Camera Mirror is disabled. Enable it in Settings to use this feature.</string>
+    <string name="tool_disabled_open_settings">Open Settings</string>
+    <string name="tool_disabled_dismiss">Dismiss</string>
 </resources>

@@ -1,9 +1,11 @@
 package com.example.android.viewmodel;
 
 import androidx.lifecycle.LiveData;
+import androidx.lifecycle.MutableLiveData;
 import androidx.lifecycle.ViewModel;
 
 import com.example.android.domain.enums.WebcamStatus;
+import com.example.android.repositories.SettingsRepository;
 import com.example.android.repositories.WebcamRepository;
 
 /**
@@ -22,7 +24,13 @@ import com.example.android.repositories.WebcamRepository;
  */
 public class WebcamViewModel extends ViewModel {
 
-    private final WebcamRepository repository = WebcamRepository.getInstance();
+    private final WebcamRepository   repository         = WebcamRepository.getInstance();
+
+    /**
+     * Emits {@code true} once when the user taps Start but webcam is disabled in Settings.
+     * The Fragment observes this to show a Snackbar/Toast and stay on the Start screen.
+     */
+    private final MutableLiveData<Boolean> webcamDisabledEvent = new MutableLiveData<>();
 
     // ── Observers ──────────────────────────────────────────────────────────────
 
@@ -31,10 +39,26 @@ public class WebcamViewModel extends ViewModel {
         return repository.getStatus();
     }
 
+    /**
+     * One-shot event fired when the user tries to start the webcam but it is disabled
+     * in Settings. The Fragment should observe this and show an error message.
+     */
+    public LiveData<Boolean> getWebcamDisabledEvent() {
+        return webcamDisabledEvent;
+    }
+
     // ── User actions ───────────────────────────────────────────────────────────
 
-    /** Called when the user taps Start — triggers the stream handshake. */
+    /**
+     * Called when the user taps Start.
+     * If webcam is disabled in Settings, fires {@link #getWebcamDisabledEvent()} instead
+     * of starting the stream so the Fragment can surface a helpful error.
+     */
     public void startStream() {
+        if (!SettingsRepository.getInstance().isWebcamEnabled()) {
+            webcamDisabledEvent.setValue(true);
+            return;
+        }
         repository.requestStart();
     }
 
@@ -46,5 +70,10 @@ public class WebcamViewModel extends ViewModel {
     /** Resets to IDLE after the UI has acknowledged a terminal state. */
     public void reset() {
         repository.reset();
+    }
+
+    /** Clears the one-shot disabled event after the Fragment has handled it. */
+    public void clearWebcamDisabledEvent() {
+        webcamDisabledEvent.setValue(null);
     }
 }

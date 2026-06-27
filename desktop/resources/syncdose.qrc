@@ -59,4 +59,8 @@
         <file alias="backup-classification-review.qss">styles/backup/backup-classification-review.qss</file>
     </qresource>
 
+    <qresource prefix="/styles/settings">
+        <file alias="settings.qss">styles/settings/settings.qss</file>
+    </qresource>
+
 </RCC>

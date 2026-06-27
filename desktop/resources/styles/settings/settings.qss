@@ -1,0 +1,67 @@
+/* ── Settings content area ────────────────────────────────────────────────── */
+
+#settingsScrollArea {
+    background: {{BACKGROUND}};
+    border: none;
+}
+
+#settingsScrollArea > QWidget {
+    background: {{BACKGROUND}};
+}
+
+#settingsInnerWidget {
+    background: {{BACKGROUND}};
+}
+
+/* ── Page title ─────────────────────────────────────────────────────────── */
+
+#pageTitle {
+    color: {{PAGE_TITLE}};
+    font-size: 26px;
+    font-weight: 700;
+    background: transparent;
+}
+
+/* ── Section labels ─────────────────────────────────────────────────────── */
+
+#sectionLabel {
+    color: {{SECTION_LABEL}};
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    background: transparent;
+}
+
+/* ── Section separator ──────────────────────────────────────────────────── */
+
+#sectionSeparator {
+    background: {{SEPARATOR}};
+    border: none;
+    max-height: 1px;
+    min-height: 1px;
+}
+
+/* ── Individual setting row ─────────────────────────────────────────────── */
+
+#settingRow {
+    background: transparent;
+    border-radius: 10px;
+}
+
+#settingRow:hover {
+    background: {{ROW_HOVER}};
+}
+
+#settingTitle {
+    color: {{SETTING_TITLE}};
+    font-size: 15px;
+    font-weight: 600;
+    background: transparent;
+}
+
+#settingDescription {
+    color: {{SETTING_DESCRIPTION}};
+    font-size: 13px;
+    font-weight: 400;
+    background: transparent;
+}
