@@ -144,4 +144,4 @@ class PhoneRequestService(LifecycleFlag):
                     logger.warning("Channel poll failed — peer may have disconnected: %s", exc)
                     self._connectivity.stop()
                 break
-            sleep(5)
+            sleep(0.2)

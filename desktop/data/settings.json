@@ -2,6 +2,6 @@
   "autostart": false,
   "virtual_drive_enabled": false,
   "clipboard_enabled": false,
-  "webcam_enabled": true,
+  "webcam_enabled": false,
   "backup_enabled": true
 }
