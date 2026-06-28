@@ -21,7 +21,10 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -754,8 +757,10 @@ public class IntegrationTest {
         {
             @Override public void initialize(ITransport t) {}
             @Override public CompletableFuture<Void> connectTransport(String id) { return CompletableFuture.completedFuture(null); }
+            @Override public CompletableFuture<Void> connectTransport(String id, Integer timeoutSeconds) { return CompletableFuture.completedFuture(null); }
             @Override public boolean isConnected() { return true; }
             @Override public CompletableFuture<TauSyncStream> connect(String word) { return null; }
+            @Override public CompletableFuture<TauSyncStream> connect(String word, int timeoutSec) { return null; }
             @Override public void sendStreamData(int id, byte[] buf, int off, int cnt) {}
             @Override public CompletableFuture<Void> sendStreamDataAsync(int id, byte[] buf, int off, int cnt) { return CompletableFuture.completedFuture(null); }
             @Override public void completeStream(int id) { completeStreamCalls.incrementAndGet(); }
@@ -797,8 +802,10 @@ public class IntegrationTest {
         IConnectionManager noopManager = new IConnectionManager() {
             @Override public void initialize(ITransport t) {}
             @Override public CompletableFuture<Void> connectTransport(String id) { return CompletableFuture.completedFuture(null); }
+            @Override public CompletableFuture<Void> connectTransport(String id, Integer timeoutSeconds) { return CompletableFuture.completedFuture(null); }
             @Override public boolean isConnected() { return true; }
             @Override public CompletableFuture<TauSyncStream> connect(String word) { return null; }
+            @Override public CompletableFuture<TauSyncStream> connect(String word, int timeoutSec) { return null; }
             @Override public void sendStreamData(int id, byte[] buf, int off, int cnt) {}
             @Override public CompletableFuture<Void> sendStreamDataAsync(int id, byte[] buf, int off, int cnt) { return CompletableFuture.completedFuture(null); }
             @Override public void completeStream(int id) { calls.incrementAndGet(); }
@@ -836,8 +843,10 @@ public class IntegrationTest {
         IConnectionManager spyManager = new IConnectionManager() {
             @Override public void initialize(ITransport t) {}
             @Override public CompletableFuture<Void> connectTransport(String id) { return CompletableFuture.completedFuture(null); }
+            @Override public CompletableFuture<Void> connectTransport(String id, Integer timeoutSeconds) { return CompletableFuture.completedFuture(null); }
             @Override public boolean isConnected() { return true; }
             @Override public CompletableFuture<TauSyncStream> connect(String word) { return null; }
+            @Override public CompletableFuture<TauSyncStream> connect(String word, int timeoutSec) { return null; }
             @Override public void sendStreamData(int id, byte[] buf, int off, int cnt) {
                 callCount.incrementAndGet();
                 if (cnt > CoreConfig.LARGE_TRANSFER_CHUNK_SIZE) oversizedChunkSeen.set(true);
@@ -859,4 +868,46 @@ public class IntegrationTest {
                 oversizedChunkSeen.get());
         assertEquals("Expected 4 slices (3 full + 1 tail) for a " + writeSize + "-byte write",
                 4, callCount.get());
-    }}
+    }
+
+    // ── Hybrid teardown must not dispose the shared Wi-Fi transport ──────────
+
+    /**
+     * Regression: connect over Bluetooth (hybrid) -> disconnect -> connect over Wi-Fi failed with
+     * "Transport disposed". Cause: {@link ConnectionManager#close()} called {@code close()} on the
+     * Wi-Fi {@link SocketTransport}, which in production is the process-wide singleton
+     * ({@link ConnectionContext#getWifiTransportAsSocket()}). {@code close()} sets disposed=true
+     * permanently and that singleton is never recreated, so the next {@code connectTo()} threw.
+     *
+     * <p>The fix makes the hybrid teardown {@code disconnect()} the shared Wi-Fi transport (which
+     * still decrements the ref-count and resets shared state) instead of {@code close()}-ing it. Here
+     * the secondary is a fresh {@link SocketTransport} so the assertion is isolated from singleton
+     * state, but it exercises the exact {@code close()} path that disposed the singleton.
+     */
+    @Test
+    public void hybridClose_disconnectsButDoesNotDisposeWifiTransport() {
+        SocketTransport wifi = new SocketTransport();
+        assertFalse("precondition: a fresh Wi-Fi transport is not disposed", wifi.isDisposed());
+
+        ConnectionManager hybrid = new ConnectionManager(new NoopTransport(), wifi);
+        hybrid.close();
+
+        assertFalse(
+                "hybrid close() must disconnect() (not close()) the shared Wi-Fi SocketTransport, "
+                        + "otherwise the next Wi-Fi connectTo() fails with \"Transport disposed\"",
+                wifi.isDisposed());
+    }
+
+    /** Minimal no-op {@link ITransport} standing in for the Bluetooth primary in hybrid tests. */
+    private static final class NoopTransport implements ITransport {
+        @Override public CompletableFuture<Void> connect(String targetId) { return CompletableFuture.completedFuture(null); }
+        @Override public CompletableFuture<Void> connect(String targetId, Integer timeoutSeconds) { return CompletableFuture.completedFuture(null); }
+        @Override public CompletableFuture<Void> sendRaw(byte[] data) { return CompletableFuture.completedFuture(null); }
+        @Override public boolean isConnected() { return false; }
+        @Override public void disconnect() { }
+        @Override public boolean isServerMode() { return false; }
+        @Override public TransportKind getTransportType() { return TransportKind.BLUETOOTH; }
+        @Override public void setOnDataReceivedListener(OnDataReceivedListener listener) { }
+        @Override public void close() { }
+    }
+}

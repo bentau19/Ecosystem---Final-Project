@@ -90,6 +90,15 @@ public class SocketTransport implements ITransport {
         return lastActivityMillis;
     }
 
+    /**
+     * @return true once {@link #close()} has permanently disposed this transport. A disposed
+     * transport rejects every {@link #connect(String, Integer)} with "Transport disposed"; only
+     * {@link #disconnect()} leaves it reusable. Exposed so the hybrid teardown can be asserted in tests.
+     */
+    public boolean isDisposed() {
+        return disposed;
+    }
+
     @Override
     public TransportKind getTransportType() {
         return TransportKind.WIFI;
