@@ -35,7 +35,7 @@ class ToolsSectionHeader(QWidget):
         self._setup_ui()
         self._setup_style()
         self._connect_signals()
-        self._tools_view_model.load_enabled_tools()
+        self._tools_view_model.load_tools()
 
     def _setup_ui(self) -> None:
         # Create title/tag widgets and build the horizontal layout.
@@ -83,7 +83,8 @@ class ToolsSectionHeader(QWidget):
         self._tools_view_model.tools_changed.connect(self._update_tag)
         theme_manager.theme_changed.connect(self._setup_style)
 
-    @Slot(int)
+    @Slot(list)
     def _update_tag(self, tools: list[ToolDTO]) -> None:
-        # Update the count badge text whenever the enabled-tool count changes.
-        self._tag.setText(f"{len(tools)} tools available")
+        # Count only enabled tools so the badge matches the cards shown on the grid.
+        enabled = sum(1 for t in tools if t.is_enabled)
+        self._tag.setText(f"{enabled} tools available")

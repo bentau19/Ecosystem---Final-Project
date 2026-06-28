@@ -6,3 +6,4 @@ class Screen(IntEnum):
 
     LOGIN = 0
     DASHBOARD = 1
+    SETTINGS = 2

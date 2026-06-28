@@ -1,12 +1,15 @@
 package com.example.android.viewmodel;
 
 import static org.junit.Assert.assertEquals;
+import static org.mockito.Mockito.lenient;
 
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule;
 
 import com.example.android.domain.enums.WebcamStatus;
+import com.example.android.repositories.SettingsRepository;
 import com.example.android.repositories.WebcamRepository;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -33,6 +36,9 @@ public class WebcamViewModelTest {
     @Mock
     private WebcamRepository.StreamActionListener mockActionListener;
 
+    @Mock
+    private SettingsRepository mockSettings;
+
     private WebcamViewModel viewModel;
     private WebcamRepository repository;
 
@@ -42,9 +48,27 @@ public class WebcamViewModelTest {
         instanceField.setAccessible(true);
         instanceField.set(null, null);
 
+        // startStream() now gates on SettingsRepository.getInstance().isWebcamEnabled(),
+        // which throws if the singleton was never initialized via getInstance(Context).
+        // Inject a mock that reports the webcam enabled so the lifecycle under test runs.
+        // lenient(): initialState_statusIsIdle never calls startStream(), so the stub is
+        // unused there and strict MockitoJUnitRunner would otherwise fail it.
+        Field settingsField = SettingsRepository.class.getDeclaredField("instance");
+        settingsField.setAccessible(true);
+        settingsField.set(null, mockSettings);
+        lenient().when(mockSettings.isWebcamEnabled()).thenReturn(true);
+
         repository = WebcamRepository.getInstance();
         repository.setActionListener(mockActionListener);
         viewModel = new WebcamViewModel();
+    }
+
+    @After
+    public void tearDown() throws Exception {
+        // Don't leak the injected mock into other test classes sharing this JVM.
+        Field settingsField = SettingsRepository.class.getDeclaredField("instance");
+        settingsField.setAccessible(true);
+        settingsField.set(null, null);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

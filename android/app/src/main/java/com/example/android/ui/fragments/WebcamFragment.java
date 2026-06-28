@@ -33,7 +33,9 @@ import androidx.lifecycle.ViewModelProvider;
 import com.example.android.R;
 import com.example.android.domain.enums.WebcamStatus;
 import com.example.android.repositories.WebcamRepository;
+import com.example.android.ui.MainActivity;
 import com.example.android.viewmodel.WebcamViewModel;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.io.ByteArrayOutputStream;
@@ -103,6 +105,24 @@ public class WebcamFragment extends Fragment {
         bindLayout();
 
         webcamViewModel.getStatus().observe(getViewLifecycleOwner(), this::updateUi);
+
+        // Safety-net: if the user presses "Start Streaming" while Camera Mirror is
+        // disabled in Settings (e.g. it was toggled off remotely after they navigated
+        // here), WebcamViewModel fires this one-shot event instead of starting the stream.
+        webcamViewModel.getWebcamDisabledEvent().observe(getViewLifecycleOwner(), fired -> {
+            if (fired == null || !fired) return;
+            new MaterialAlertDialogBuilder(requireContext())
+                    .setTitle(R.string.tool_disabled_title)
+                    .setMessage(R.string.tool_disabled_webcam_msg)
+                    .setPositiveButton(R.string.tool_disabled_open_settings, (dialog, which) -> {
+                        if (getActivity() instanceof MainActivity) {
+                            ((MainActivity) getActivity()).navigateToSettings();
+                        }
+                    })
+                    .setNegativeButton(R.string.tool_disabled_dismiss, null)
+                    .setOnDismissListener(d -> webcamViewModel.clearWebcamDisabledEvent())
+                    .show();
+        });
 
         if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED) {

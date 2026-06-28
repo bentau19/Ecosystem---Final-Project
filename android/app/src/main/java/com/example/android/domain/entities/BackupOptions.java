@@ -17,9 +17,9 @@ import com.example.android.ui.fragments.BackupFragment;
  *
  * @param classifyImages      Whether the PC should run image classification on the received files.
  *
- *                            <p>Derived from the "Don't classify junk files" checkbox in
- *                            {@code BackupFragment}: if the checkbox is <b>unchecked</b> (default),
- *                            {@code classifyImages} is {@code true}; if <b>checked</b>, it is {@code false}.
+ *                            <p>Derived from the "Classify junk files" checkbox in
+ *                            {@code BackupFragment}: if the checkbox is <b>checked</b> (default),
+ *                            {@code classifyImages} is {@code true}; if <b>unchecked</b>, it is {@code false}.
  * @param parallelSlots       Number of file slots to open concurrently on the TauSync transport.
  *
  *                            <p>Android sends {@code parallelSlots} backup slot channels simultaneously

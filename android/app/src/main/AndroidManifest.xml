@@ -36,6 +36,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Required by BootReceiver to start ConnectivityService on device boot.
+         Only takes effect when the user enables "Launch on startup" in Settings —
+         BootReceiver is declared android:enabled="false" by default and is toggled
+         at runtime via PackageManager.setComponentEnabledSetting(). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <uses-feature
         android:name="android.hardware.camera"
@@ -63,6 +68,21 @@
             <intent-filter>
                 <action android:name="com.example.android.FILE_TRANSFER_ACCEPT" />
                 <action android:name="com.example.android.FILE_TRANSFER_REJECT" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            BootReceiver starts ConnectivityService after device reboot when the
+            "Launch on startup" setting is enabled. Disabled by default
+            (android:enabled="false") — SettingsRepository.setAutoLaunch() toggles
+            it at runtime via PackageManager.setComponentEnabledSetting().
+        -->
+        <receiver
+            android:name=".services.BootReceiver"
+            android:enabled="false"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
 

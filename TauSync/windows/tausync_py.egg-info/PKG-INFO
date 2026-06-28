@@ -168,6 +168,79 @@ automatically and gives each side a private duplex stream.
 
 ---
 
+## Bluetooth & Hybrid Mode (server side)
+
+On Windows, TauSync can accept connections over **Bluetooth** instead of Wi‑Fi — handy when the phone
+and PC aren't on the same network. The PC is the Bluetooth **server**, so `connect_hybrid()` replaces
+`listen()`. It also **advertises the PC over BLE** so a phone can discover it without anyone typing a
+MAC address, and it brings **Wi‑Fi up automatically** only when a large payload (a file) needs the
+throughput. Once connected, channels work exactly as in Wi‑Fi mode (`connect("word")`, `read_*`,
+`write_*`).
+
+```python
+from tausync_py import TauSync
+
+tau = TauSync()
+tau.connect_hybrid()                       # advertise over BLE, wait for the phone, run the handshake
+
+with tau.connect("main") as stream:
+    line = stream.read_line()              # small messages arrive over Bluetooth
+    stream.write_file("bigfile.bin")       # large payloads automatically use Wi‑Fi
+```
+
+### Name shown on the phone
+
+The phone's "connect to this PC?" dialog shows a name you choose (defaults to the Windows computer
+name; ~14‑character cap):
+
+```python
+tau.connect_hybrid(device_name="Ben's Laptop")
+```
+
+### Approve connections on the PC — `on_approve`
+
+Pass a callback to **accept or reject each connecting phone before the session completes**. Return
+`True` to accept or `False` to reject (the phone is told and aborts cleanly). Remember the phones
+you've approved so you're only asked the first time:
+
+```python
+approved = set()
+
+def on_approve(phone_name):
+    if phone_name in approved:
+        return True                                   # already approved → silent
+    accept = input(f"Accept '{phone_name}'? [y/N] ").strip().lower() == "y"
+    if accept:
+        approved.add(phone_name)
+    return accept
+
+tau.connect_hybrid(device_name="Ben's Laptop", on_approve=on_approve)
+```
+
+> The callback runs on a **background thread** — if you show a GUI dialog, marshal it to your UI
+> thread and block for the answer.
+
+### Discovered Wi‑Fi address & link state
+
+```python
+tau.peer_wifi_ip   # the phone's Wi‑Fi IP, discovered over Bluetooth (str, or None)
+tau.wifi_active    # True only while a large transfer currently keeps the Wi‑Fi link up
+```
+
+### `connect_hybrid` signature
+
+```python
+tau.connect_hybrid(timeout_seconds=None, device_name=None, on_approve=None)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `timeout_seconds` | `int \| None` | `None` | Max seconds to wait for the phone to connect (`None` = forever) |
+| `device_name` | `str \| None` | `None` | Name shown in the phone's dialog (`None` = Windows computer name) |
+| `on_approve` | `callable(str\|None) -> bool` | `None` | Per‑connection accept/reject gate (`None` = accept all) |
+
+---
+
 ## API Reference
 
 ### `TauSync` - Connection Manager
@@ -213,7 +286,7 @@ tau = TauSync()
 tau.connect_to("192.168.1.50")
 ```
 
-##### `tau.connect(word, chunk_size=65536) -> TauSyncStream`
+##### `tau.connect(word, chunk_size=65536, timeout_seconds=60) -> TauSyncStream`
 
 Open a named duplex stream via a meeting-word handshake.
 Both sides must call `connect(word)` with the **same word** to be paired.
@@ -222,6 +295,7 @@ Both sides must call `connect(word)` with the **same word** to be paired.
 |-----------|------|---------|-------------|
 | `word` | `str` | *(required)* | Meeting word for the handshake |
 | `chunk_size` | `int` | `65536` | Default read buffer size for the returned stream |
+| `timeout_seconds` | `int \| None` | `60` | Max seconds to wait for the peer to pair (`None` = wait forever) |
 
 Returns a `TauSyncStream`.
 
@@ -229,7 +303,7 @@ Returns a `TauSyncStream`.
 stream = tau.connect("upload_channel")
 ```
 
-##### `tau.GetPeerWaitingWords() -> list[str]`
+##### `tau.get_peer_waiting_words() -> list[str]`
 
 Snapshot of meeting words the **peer** has fired REQ frames for, but which we
 have not paired with locally. Use this for diagnostics — e.g. to surface
@@ -243,7 +317,7 @@ A word appears in the list when:
 Once we call `connect(word)` and pair, the entry drops out of the list.
 
 ```python
-waiting = tau.GetPeerWaitingWords()
+waiting = tau.get_peer_waiting_words()
 print(f"Peer is waiting on: {waiting}")
 # Peer is waiting on: ['alpha', 'beta']
 ```
@@ -271,11 +345,19 @@ stream_b = mgr2.connect("channel_b")
 
 Dispose the underlying .NET `ConnectionManager`. Safe to call multiple times.
 
+##### `tau.disconnect()`
+
+Close the transport and reset the role, but keep this instance usable — you can call `listen()`,
+`connect_to()`, or `connect_hybrid()` again afterward (unlike `dispose()`). Safe on an already‑
+disconnected transport.
+
 #### Properties
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `tau.is_connected` | `bool` | Whether the TCP transport is up |
+| `tau.is_connected` | `bool` | Whether the transport is up |
+| `tau.peer_wifi_ip` | `str \| None` | Peer's Wi‑Fi IP discovered over Bluetooth (hybrid mode) |
+| `tau.wifi_active` | `bool` | Whether the lazy Wi‑Fi link is currently up (hybrid mode) |
 
 ---
 

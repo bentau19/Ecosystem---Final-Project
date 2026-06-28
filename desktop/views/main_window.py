@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from PySide6.QtCore import Slot, QEvent, QTimer, QCoreApplication
@@ -23,6 +24,7 @@ from viewmodels.device import DeviceViewModel
 from viewmodels.file_transfer import FileTransferViewModel
 from views.screens.dashboard import DashboardScreen
 from views.screens.login import LoginScreen
+from views.screens.settings import SettingsScreen
 from views.widgets.backup.backup_dest_picker_dialog import BackupDestPickerDialog
 from views.widgets.backup.backup_progress_window import BackupProgressWindow
 from views.widgets.backup.backup_review_dialog import BackupReviewDialog
@@ -51,6 +53,10 @@ class MainWindow(QMainWindow):
     # Message shown on the shutdown overlay (kept in one place: shown initially in
     # _begin_shutdown and re-applied in _change_page when the screen changes).
     _SHUTDOWN_OVERLAY_MESSAGE: str = "Shutting down…"
+
+    # Backstop: max poll ticks before the shutdown watchdog force-exits even if a
+    # service is still active. ~8.1s at the 150ms _poll_shutdown interval.
+    _MAX_SHUTDOWN_TICKS: int = 54
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Set up the window, screens, and system tray.
@@ -83,6 +89,7 @@ class MainWindow(QMainWindow):
         self._shutting_down: bool = False
         self._shutdown_overlay: LoadingOverlay | None = None
         self._shutdown_timer: QTimer | None = None
+        self._shutdown_ticks: int = 0
 
         self._setup_ui()
         self._connect_signals()
@@ -94,7 +101,8 @@ class MainWindow(QMainWindow):
 
         self._screens = {
             Screen.LOGIN: LoginScreen(),
-            Screen.DASHBOARD: DashboardScreen()
+            Screen.DASHBOARD: DashboardScreen(),
+            Screen.SETTINGS: SettingsScreen(),
         }
 
         for screen in self._screens.values():
@@ -233,18 +241,29 @@ class MainWindow(QMainWindow):
         # Keep the overlay up until no service is active, then exit cleanly.
         # Once every service has drained its executor we ask Qt to leave the event
         # loop: app.exec() returns and main.py's sys.exit() finalizes the
-        # interpreter normally.  The pythonnet finalization hang is already
-        # neutralised by main.py's atexit.unregister(pythonnet.unload), so no
-        # explicit transport disposal is needed here and no hard kill is used.
-        if app_state.any_active():
+        # interpreter normally.
+        #
+        # Backstop: the connectivity fix makes teardown prompt, but services own
+        # NON-daemon ThreadPoolExecutors and concurrent.futures joins every worker
+        # at interpreter exit (see tests/conftest.py) — so if one is ever genuinely
+        # wedged in a blocking .NET call, leaving the Qt loop would just hang at
+        # that atexit join. After _MAX_SHUTDOWN_TICKS we hard-exit to guarantee the
+        # process always dies.
+        self._shutdown_ticks += 1
+        timed_out = self._shutdown_ticks >= self._MAX_SHUTDOWN_TICKS
+        if app_state.any_active() and not timed_out:
             return
         if self._shutdown_timer is not None:
             self._shutdown_timer.stop()
+        if timed_out and app_state.any_active():
+            # A service is wedged; its non-daemon executor worker would hang the
+            # concurrent.futures atexit join after app.exec() returns. Hard-exit to
+            # bypass it (skips log flush — pathological path only).
+            os._exit(0)
         # Exit the event loop.  exit(0) (not quit()) is required: _poll_shutdown
         # runs one event-loop level deep, and quit() targets the base level and
         # is silently ignored here, whereas exit(0) leaves the current level so
         # app.exec() returns and main.py's sys.exit() finalizes the interpreter.
-
         QCoreApplication.exit()
 
     # ── Slots ──────────────────────────────────────────────────────────────────

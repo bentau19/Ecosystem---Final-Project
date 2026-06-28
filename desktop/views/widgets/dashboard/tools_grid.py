@@ -2,45 +2,58 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import QFileDialog, QLabel, QWidget
 
-from domain.dto.tool import ToolDTO
-from views.layouts.flow_layout import FlowLayout
 from app.app_state import app_state
 from app.theme_manager import theme_manager
+from domain.dto.tool import ToolDTO
+from domain.tool_catalog import (
+    TITLE_BACKUP,
+    TITLE_CLIPBOARD,
+    TITLE_SEND_FILE,
+    TITLE_VIRTUAL_DRIVE,
+    TITLE_WEBCAM,
+)
 from resources.colors import Palette, Colors, LightColors
 from resources.paths import DashboardStyles
 from resources.spacing import Spacing
 from utils.styles import load_stylesheet, themed
 from viewmodels.file_transfer import FileTransferViewModel
 from viewmodels.tool import ToolViewModel
+from views.layouts.flow_layout import FlowLayout
 from views.widgets.dashboard.tool_card import ToolCard
 
-# Title of the file-send tool — used to dispatch the click handler.
-_SEND_FILE_TOOL_TITLE: str = "Send File to Phone"
+# Per-tool hint shown on the card body.  Only "Send File" is interactive; the
+# feature tools are controlled by their toggle switch and are otherwise inert.
+_HINT_FROM_PHONE = "Only applicable from phone"
+_TOOL_HINTS: dict[str, str] = {
+    TITLE_VIRTUAL_DRIVE: "Open Explorer to view",
+    TITLE_CLIPBOARD: _HINT_FROM_PHONE,
+    TITLE_WEBCAM: _HINT_FROM_PHONE,
+    TITLE_BACKUP: _HINT_FROM_PHONE,
+}
 
 
 class ToolsGrid(QWidget):
-    """Flow-layout grid of enabled :class:`~views.widgets.dashboard.tool_card.ToolCard` widgets.
+    """Flow-layout grid of every tool as a :class:`~views.widgets.dashboard.tool_card.ToolCard`.
 
-    Loads the enabled tool list from a :class:`~viewmodels.tool.ToolViewModel`
-    on construction and renders one card per tool using a
-    :class:`~layouts.flow_layout.FlowLayout` that wraps automatically to fill
-    the available width.
+    Loads the full tool list from a :class:`~viewmodels.tool.ToolViewModel` and
+    renders one card per tool, each with an enable/disable toggle.  Only the
+    "Send File to Phone" card is clickable (it opens a file picker); the feature
+    cards carry a hint and are turned on/off via their toggle, which writes
+    through to ``tools.json`` and the matching background service.
     """
 
-    def __init__(self, card_width: int = 300, card_height: int = 170, parent: QWidget | None = None) -> None:
+    def __init__(self, card_width: int = 300, card_height: int = 210, parent: QWidget | None = None) -> None:
         """Initialize the ToolsGrid widget.
 
         Args:
             card_width: Width applied to each tool card. Defaults to 300.
-            card_height: Fixed height applied to each tool card. Defaults to 170.
+            card_height: Fixed height applied to each tool card. Defaults to 210.
             parent: Parent widget. Defaults to None.
         """
         super().__init__(parent)
 
         self._card_width: int = card_width
         self._card_height: int = card_height
-
-        self._active_tools: list[ToolCard] = []
 
         self._tool_view_model: ToolViewModel = app_state.tool_viewmodel
         self._file_transfer_viewmodel: FileTransferViewModel = app_state.file_transfer_viewmodel
@@ -49,7 +62,7 @@ class ToolsGrid(QWidget):
         self._setup_ui()
         self._setup_style()
         self._connect_signals()
-        self._tool_view_model.load_enabled_tools()
+        self._tool_view_model.load_tools()
 
     def _setup_ui(self) -> None:
         # Initialize the flow layout.
@@ -63,7 +76,7 @@ class ToolsGrid(QWidget):
 
     @staticmethod
     def _create_description_widget(text: str) -> QLabel:
-        # Create a word-wrapped, left-aligned description label for use inside a ToolCard.
+        # Create a word-wrapped, left-aligned description label for a ToolCard.
         label: QLabel = QLabel(text)
         label.setObjectName("description")
         label.setWordWrap(True)
@@ -79,36 +92,44 @@ class ToolsGrid(QWidget):
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
-        # Wire tools_loaded and theme_changed; add/update/delete signals are stubbed until needed.
-        # TODO: setup signals on changed tool, added, deleted if needed
-        # self._tool_view_model.tool_updated.connect(self._on_tool_updated)
-        # self._tool_view_model.tool_added.connect(self._on_tool_added)
-        # self._tool_view_model.tool_deleted.connect(self._on_tool_deleted)
+        # Populate on load; restyle on theme change.
         self._tool_view_model.tools_loaded.connect(self._load_tools)
         theme_manager.theme_changed.connect(self._setup_style)
 
     @Slot(list)
     def _load_tools(self, tools: list[ToolDTO]) -> None:
-        # Clear any previously rendered cards before repopulating (handles async re-fires).
+        # Clear any previously rendered cards before repopulating (handles re-fires).
         while self._main_layout.count():
             item = self._main_layout.takeAt(0)
             if item and item.widget():
                 item.widget().deleteLater()
 
-        # Create a ToolCard for each enabled tool DTO and add it to the flow layout.
+        # Render only enabled tools as display-only cards — enable/disable now
+        # lives on the Settings page, not on the dashboard.
         for tool in tools:
-            description_label: QLabel = self._create_description_widget(tool.description)
-            tool_card: ToolCard = ToolCard(
-                QIcon(tool.icon_path), QColor(Palette.CYAN_800), tool.title, description_label
-            )
-            tool_card.setMinimumWidth(self._card_width)
-            tool_card.setFixedHeight(self._card_height)
+            if not tool.is_enabled:
+                continue
+            self._main_layout.addWidget(self._build_card(tool))
 
-            # Dispatch click to the appropriate handler by tool title.
-            if tool.title == _SEND_FILE_TOOL_TITLE:
-                tool_card.clicked.connect(self._on_send_file_clicked)
+    def _build_card(self, tool: ToolDTO) -> ToolCard:
+        # Build a single display-only card; only "Send File" is clickable.
+        description_label: QLabel = self._create_description_widget(tool.description)
+        clickable: bool = tool.title == TITLE_SEND_FILE
+        card: ToolCard = ToolCard(
+            QIcon(tool.icon_path),
+            QColor(Palette.CYAN_800),
+            tool.title,
+            description_label,
+            checkable=False,
+            clickable=clickable,
+            hint=_TOOL_HINTS.get(tool.title, ""),
+        )
+        card.setMinimumWidth(self._card_width)
+        card.setFixedHeight(self._card_height)
 
-            self._main_layout.addWidget(tool_card)
+        if clickable:
+            card.clicked.connect(self._on_send_file_clicked)
+        return card
 
     @Slot()
     def _on_send_file_clicked(self) -> None:

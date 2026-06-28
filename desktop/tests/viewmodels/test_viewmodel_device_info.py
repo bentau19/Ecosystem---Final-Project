@@ -206,6 +206,23 @@ def test_on_device_info_ready_emits_device_infos_updated(
 
 
 # ---------------------------------------------------------------------------
+# prepare_shutdown
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_shutdown_arms_vm_and_connectivity(
+    view_model: DeviceViewModel,
+    mock_connectivity: MagicMock,
+) -> None:
+    # Arms the VM's own restart guard AND forwards to the connectivity service so
+    # its transport teardown skips the slow phone-notify handshake on app exit.
+    view_model.prepare_shutdown()
+
+    assert view_model._is_shutting_down is True
+    mock_connectivity.prepare_shutdown.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # _to_device_info_dtos (static helper)
 # ---------------------------------------------------------------------------
 
