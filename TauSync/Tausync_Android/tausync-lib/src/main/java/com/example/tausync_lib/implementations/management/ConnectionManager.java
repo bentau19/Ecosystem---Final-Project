@@ -38,10 +38,14 @@ public class ConnectionManager implements IConnectionManager {
      */
     private ITransport primaryTransport;
 
-    /** Secondary (lazy Wi-Fi) transport in hybrid mode; null in single-transport mode. */
+    /**
+     * Secondary (lazy Wi-Fi) transport in hybrid mode; null in single-transport mode.
+     */
     private final ITransport secondaryTransport;
 
-    /** Hybrid session orchestrator; null in single-transport mode (no routing/handshake). */
+    /**
+     * Hybrid session orchestrator; null in single-transport mode (no routing/handshake).
+     */
     private final HybridSessionCoordinator hybrid;
 
     private final IProtocolHandler protocolHandler;
@@ -122,8 +126,10 @@ public class ConnectionManager implements IConnectionManager {
      */
     public ConnectionManager(ITransport primary, ITransport secondary) {
         protocolHandler = new ProtocolHandler();
-        if (primary == null) throw new IllegalArgumentException("primary transport must not be null");
-        if (secondary == null) throw new IllegalArgumentException("secondary transport must not be null");
+        if (primary == null)
+            throw new IllegalArgumentException("primary transport must not be null");
+        if (secondary == null)
+            throw new IllegalArgumentException("secondary transport must not be null");
         if (!(secondary instanceof SocketTransport)) {
             throw new IllegalArgumentException("The secondary (Wi-Fi) transport must be a SocketTransport.");
         }
@@ -233,7 +239,9 @@ public class ConnectionManager implements IConnectionManager {
                 .thenCompose(f -> f);
     }
 
-    /** Runs the actual handshake for an already guard-acquired word. */
+    /**
+     * Runs the actual handshake for an already guard-acquired word.
+     */
     private CompletableFuture<TauSyncStream> connectCore(String wordTrimmed, int timeoutSec) {
         LinkedBlockingQueue<TauSyncStream> wordChannel = getOrCreateWordChannel(wordTrimmed);
         registerWordListener(wordTrimmed, wordChannel);
@@ -509,7 +517,8 @@ public class ConnectionManager implements IConnectionManager {
      * is never split across both links. Mirrors C# {@code ResolveSendTransport}.
      */
     private ITransport resolveSendTransport(int localId, boolean preferWifi) {
-        if (hybrid == null) return primaryTransport;  // single transport (Wi-Fi-only or Bluetooth-only)
+        if (hybrid == null)
+            return primaryTransport;  // single transport (Wi-Fi-only or Bluetooth-only)
 
         ITransport chosen = preferWifi ? hybrid.acquireWifiOrFallback() : primaryTransport;
 
@@ -705,9 +714,15 @@ public class ConnectionManager implements IConnectionManager {
             // singleton is final and never recreated, makes every later connectTo() fail with
             // "Transport disposed". disconnect() still decrements the ref-count, so channels are
             // aborted and shared state is reset exactly as close() would have done.
-            try { secondaryTransport.close(); } catch (Exception ignored) {}
+            try {
+                secondaryTransport.disconnect();
+            } catch (Exception ignored) {
+            }
             // The Bluetooth primary is created fresh per hybrid session, so a permanent close() is fine.
-            try { primaryTransport.close(); } catch (Exception ignored) {}
+            try {
+                primaryTransport.close();
+            } catch (Exception ignored) {
+            }
         }
     }
 
