@@ -317,7 +317,7 @@ class ConnectivityService(LifecycleFlag, QObject):
         try:
             logger.debug("Sending disconnect notification to phone")
             with tau.connect(
-                SessionChannels.DISCONNECT_FROM_PC.value, timeout_seconds=timeout_seconds
+                    SessionChannels.DISCONNECT_FROM_PC.value, timeout_seconds=timeout_seconds
             ) as stream:
                 stream.write_string("disconnect")
             logger.debug("Disconnect notification sent to phone")
