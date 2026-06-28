@@ -30,11 +30,14 @@ bidirectional file transfer via Windows shell integration, and a configurable to
     - [BackupService](#backupservice)
     - [VirtualDriveService](#virtualdriveservice)
     - [PhoneRequestService](#phonerequestservice)
+    - [ClipboardService](#clipboardservice)
+    - [SettingsService](#settingsservice)
+    - [WebcamService](#webcamservice)
     - [ToolService](#toolservice)
 17. [ViewModels](#viewmodels)
 18. [Repositories](#repositories)
 19. [Serializers](#serializers)
-20. [Database](#database)
+20. [Persistence](#persistence-json-files)
 21. [File Transfer & IPC](#file-transfer--ipc)
 22. [Qt Resources](#qt-resources)
 
@@ -503,11 +506,11 @@ desktop/
 │   ├── icons/                      # SVG icons (logo, battery, storage, android, smartphone, …)
 │   └── styles/                     # Per-component QSS stylesheets (mirrors the views/ tree)
 │
-├── serializers/                    # Convert entities ↔ SQLite row tuples / JSON
+├── serializers/                    # Convert entities ↔ dicts (JSON-ready)
 │   ├── serializer.py               # ISerializer[T, K] abstract base (serialize / deserialize)
-│   ├── device.py                   # DeviceSerializer — DeviceEntity ↔ 10-column row tuple
+│   ├── device.py                   # DeviceSerializer — DeviceEntity ↔ dict
 │   ├── file_metadata.py            # FileMetadataSerializer — FileMetadataDTO ↔ JSON string
-│   ├── tool.py                     # ToolSerializer — ToolEntity ↔ 4-column row tuple
+│   ├── tool.py                     # ToolSerializer — ToolEntity ↔ dict
 │   ├── backup_session.py           # BackupSessionSerializer — BackupSessionPromptDTO ↔ JSON
 │   └── schemas/                    # JSON Schema files for validating wire-format payloads
 │       └── file_metadata.json      # Schema for the file-metadata channel payload
@@ -520,7 +523,9 @@ desktop/
 │   ├── tool.py                     # ToolService — wraps ToolRepository, re-emits its signals
 │   ├── backup.py                   # BackupService — receives backup files, runs FileDetection pipeline
 │   ├── virtual_drive.py            # VirtualDriveService — bridges VirtualDrive.exe ↔ Android via TauSync
-│   └── clipboard.py                # ClipboardService — two-directional clipboard sync; SHA-256 anti-loop guard
+│   ├── clipboard.py                # ClipboardService — two-directional clipboard sync; SHA-256 anti-loop guard
+│   ├── webcam.py                   # WebcamService — receives JPEG frame stream, feeds OBS virtual camera
+│   └── settings.py                 # SettingsService — wraps SettingsRepository; syncs tool states with phone
 │
 ├── utils/                          # Shared utilities (no singletons here)
 │   ├── meta.py                     # ABCQObjectMeta — metaclass bridging ABC and QObject
@@ -533,7 +538,9 @@ desktop/
 │   ├── device.py                   # DeviceViewModel — drives login list + dashboard device cards
 │   ├── file_transfer.py            # FileTransferViewModel — gates send/receive behind connectivity
 │   ├── tool.py                     # ToolViewModel — drives the tools grid
-│   └── backup.py                   # BackupViewModel — backup session state + review queue
+│   ├── backup.py                   # BackupViewModel — backup session state + review queue
+│   ├── webcam.py                   # WebcamViewModel — bridges WebcamService to the view layer
+│   └── settings.py                 # SettingsViewModel — autostart flag + Windows Registry sync
 │
 ├── views/
 │   ├── main_window.py              # MainWindow — QStackedWidget + system tray
@@ -628,7 +635,7 @@ Views
 
 The Services layer is what separates this from a plain repository-in-ViewModel pattern:
 
-- **Repositories** are pure SQLite data stores — no networking, no threading of their own.
+- **Repositories** are pure JSON-file data stores — no networking, no threading of their own.
 - **Services** own all network I/O and background threading. They read from repositories and
   emit results via Qt Signals so ViewModels never directly touch a database or a TauSync stream.
 - **ViewModels** subscribe to Service signals, convert entities to DTOs, and re-emit
@@ -651,19 +658,23 @@ class AppState:
         # Repositories
         self.tools_repository    = ToolRepository()
         self.device_repository   = DeviceRepository()
+        self.settings_repository = SettingsRepository()
 
         # Services
         self.connectivity_service   = ConnectivityService()
+        self.settings_service       = SettingsService(settings_repository, connectivity_service)
         self.device_info_service    = DeviceInfoService(connectivity, device_repository)
         self.file_transfer_service  = FileTransferService(connectivity)
         self.tool_service           = ToolService(tools_repository)
         self.backup_service         = BackupService(connectivity)
         self.clipboard_service      = ClipboardService(connectivity)
+        self.webcam_service         = WebcamService(connectivity)
 
         # ViewModels
         self.device_viewmodel        = DeviceViewModel(connectivity_service, device_info_service)
         self.file_transfer_viewmodel = FileTransferViewModel(file_transfer_service, connectivity_service)
         self.backup_viewmodel        = BackupViewModel(backup_service, connectivity_service)
+        self.webcam_viewmodel        = WebcamViewModel(webcam_service)
 
         # VirtualDriveService bridges VirtualDrive.exe ↔ Android; depends on device_info_service
         self.virtual_drive_service  = VirtualDriveService(connectivity, device_info_service)
@@ -675,8 +686,9 @@ class AppState:
             virtual_drive_service, connectivity, device_viewmodel, settings_service,
         )
 
-        # PhoneRequestService depends on backup_service — constructed after viewmodels
+        # PhoneRequestService depends on all services — constructed last.
         self.phone_request_service  = PhoneRequestService(connectivity, file_transfer_service, backup_service, ...)
+        self.settings_viewmodel      = SettingsViewModel(settings_service)
 
         # Lifecycle wiring: start/stop services on device connection events.
         # (VirtualDrive is wired by ToolViewModel based on the "Virtual Drive" tool's state.)
@@ -997,6 +1009,27 @@ signal, so the clipboard change that results from `setText()` is silently droppe
 | `CLIPBOARD_ANDROID_TO_PC` | `clipboard_android_to_pc` | Android → PC | User-initiated push |
 | `CLIPBOARD_PC_TO_ANDROID` | `clipboard_pc_to_android` | PC → Android | Automatic push on PC clipboard change |
 
+### `SettingsService`
+
+Coordinates `SettingsRepository` persistence and the bidirectional tool-enabled-state sync with
+the connected phone over TauSync. Local settings I/O (`load` / `save`) is synchronous and fast
+(small JSON file); all TauSync operations run on daemon background threads.
+
+`PhoneRequestService` detects the phone waiting on `SettingsChannels.TOOLS_ANDROID_TO_PC` and
+calls `receive_tools_state()`. `ToolViewModel` calls `push_tools_state()` whenever the user
+toggles a feature tool, sending all four flags in a single JSON payload so the phone always has
+a complete and consistent picture. A 10-second handshake timeout ensures a failed push reverts
+the toggle quickly.
+
+| Signal | Payload | When |
+|---|---|---|
+| `tools_state_received` | `bool` | Virtual Drive enabled state received from phone |
+| `clipboard_state_received` | `bool` | Clipboard-sync enabled state received from phone |
+| `webcam_state_received` | `bool` | Webcam enabled state received from phone |
+| `backup_state_received` | `bool` | Backup enabled state received from phone |
+| `tools_push_succeeded` | `(bool, bool, bool, bool)` | Push completed — `(vdrive, clipboard, webcam, backup)` |
+| `tools_push_failed` | — | Push timed out or errored; `ToolViewModel` rolls back the toggle |
+
 ### `WebcamService`
 
 Receives a live camera stream from Android and feeds it into a virtual webcam via `pyvirtualcam`.
@@ -1101,11 +1134,33 @@ import from `services/` directly.
 | `backup_complete` | — | Session finished |
 | `backup_error` | `str` | Session failed |
 
+### `WebcamViewModel`
+
+Bridges `WebcamService` signals to the view layer. The view never imports from `services/`
+directly — it connects to `webcam_active_changed` and `webcam_error_occurred` to track stream
+state without touching TauSync.
+
+| Signal | Payload | When |
+|---|---|---|
+| `webcam_active_changed` | `bool` | `True` when streaming starts; `False` when it stops |
+| `webcam_error_occurred` | `str` | Unrecoverable stream error |
+
+### `SettingsViewModel`
+
+Manages the Windows autostart preference. Persists the flag to `settings.json` via
+`SettingsService` and writes / deletes the Windows Registry `Run` key on every change.
+Per-tool enable/disable state is coordinated by `ToolViewModel`; this ViewModel owns only
+the autostart flag.
+
+| Signal | Payload | When |
+|---|---|---|
+| `autostart_changed` | `bool` | Autostart preference changed (emitted after the Registry key is updated) |
+
 ---
 
 ## Repositories
 
-Both repositories use the same `IRepository[T, K]` interface from `repositories/repository.py`:
+The tool and device repositories each implement the `IRepository[T, K]` interface from `repositories/repository.py`:
 
 | Method | Description |
 |---|---|
@@ -1114,7 +1169,7 @@ Both repositories use the same `IRepository[T, K]` interface from `repositories/
 | `save(entity: T) → None` | Insert or replace an entity (upsert keyed on primary key) |
 | `delete(id: K) → None` | Remove an entity by primary key |
 
-Both also emit `entity_saved: Signal` and `entity_deleted: Signal` after mutations.
+Both emit `entity_saved: Signal` and `entity_deleted: Signal` after mutations.
 
 Each repository holds its data in memory and writes the backing JSON file atomically on every
 mutation (write a `.tmp` sibling, then rename). A lock guards mutations so the repositories are

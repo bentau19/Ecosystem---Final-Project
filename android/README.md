@@ -495,44 +495,6 @@ network/handlers/ClipboardFromPCHandler.java
 
 ---
 
-## Clipboard Sync
-
-Two-directional clipboard sync between Android and the desktop PC.
-
-### Android → PC
-
-The user taps **"Send Clipboard to PC"** in the Actions screen. `ActionsFragment` reads the current clipboard via `ClipboardManager` before sending:
-
-- If the clipboard is empty, a toast is shown and nothing is sent.
-- If there is content, a preview toast shows the first 20 characters, the button switches to "Sent!" + checkmark and is disabled for 2 seconds, and `ClipboardSyncUseCase.execute()` is called on a background thread.
-
-`ClipboardSyncUseCase` serialises the text as `{"type": "text", "content": "..."}` and writes it to the `clipboard_android_to_pc` TauSync channel.
-
-### PC → Android
-
-The desktop `ClipboardService` monitors clipboard changes automatically and pushes new content to the `clipboard_pc_to_android` channel. `ClipboardFromPCHandler` reads the payload and sets the Android clipboard.
-
-### Anti-loop Guard
-
-An SHA-256 hash of the last synced content is stored on the desktop. When the desktop receives text from Android and sets its own clipboard, the resulting clipboard-change event matches the stored hash and is silently dropped — preventing an echo send back to Android.
-
-### TauSync Channels Used
-
-| Channel enum | Wire value | Direction | Purpose |
-|---|---|---|---|
-| `CLIPBOARD_ANDROID_TO_PC` | `clipboard_android_to_pc` | Android → PC | User-initiated clipboard push |
-| `CLIPBOARD_PC_TO_ANDROID` | `clipboard_pc_to_android` | PC → Android | Automatic desktop clipboard push |
-
-### New files added for this feature
-
-```text
-enums/ClipboardChannels.java
-domain/usecases/ClipboardSyncUseCase.java
-network/handlers/ClipboardFromPCHandler.java
-```
-
----
-
 ## Camera Mirror (Webcam Streaming)
 
 Streams the phone camera to the PC as a virtual webcam over TauSync, so the phone can act as a high-quality webcam in video calls or OBS.

@@ -28,8 +28,8 @@ Ecosystem/
 ├── desktop/                    # SyncDose Windows app (Python + PySide6)
 │   ├── app/                    # DI root (AppState), NavigationManager, ThemeManager
 │   ├── domain/                 # DTOs, Entities, Enums
-│   ├── repositories/           # SQLite persistence (sqlite3)
-│   ├── serializers/            # Entity ↔ row-tuple conversion
+│   ├── repositories/           # JSON-backed data stores (atomic writes)
+│   ├── serializers/            # Entity ↔ dict (JSON) conversion
 │   ├── services/               # Background threads: connectivity, file transfer, etc.
 │   ├── viewmodels/             # Qt Signals + DTOs consumed by Views
 │   ├── views/                  # PySide6 widgets and screens
