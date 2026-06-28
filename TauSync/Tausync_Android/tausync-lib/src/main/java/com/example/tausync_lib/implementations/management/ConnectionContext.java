@@ -218,7 +218,7 @@ public final class ConnectionContext {
      */
     public void initializeTransports(String targetId, Integer timeoutSeconds) throws Exception {
         if (wifiTransport.isConnected()) {
-            throw new IllegalStateException("Transport already connected.");
+            wifiTransport.disconnect();
         }
         // Clear any routing/discovery state left over from a previous session before
         // re-establishing, so stale handlers and pending REQs are not replayed on the
