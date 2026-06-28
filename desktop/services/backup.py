@@ -224,8 +224,8 @@ class BackupService(LifecycleFlag, QObject):
         self._connectivity: ConnectivityService = connectivity
 
         # ── Feature gate ──────────────────────────────────────────────────────
-        # Controlled by SettingsViewModel.set_backup_enabled(); defaults to True
-        # (opt-out) to preserve the previous always-on behaviour.
+        # Controlled by the "Backup" tool via ToolViewModel.set_tool_enabled();
+        # defaults to True (opt-out) to preserve the previous always-on behaviour.
         self._enabled: bool = True
 
         # ── Threading primitives ──────────────────────────────────────────────

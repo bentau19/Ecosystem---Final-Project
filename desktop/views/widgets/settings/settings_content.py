@@ -16,15 +16,18 @@ from views.widgets.settings.setting_row import SettingRow
 class SettingsContent(QScrollArea):
     """Scrollable settings content area.
 
-    Displays two sections:
+    Two sections:
 
-    * **System** — Launch at startup toggle.
-    * **Features** — Virtual Drive toggle.
+    * **System** — "Launch SyncDose at startup" (autostart).
+    * **Tools** — one on/off row per feature tool (Virtual Drive, Clipboard Sync,
+      Webcam, Backup), backed by ``tools.json``. Toggling a row writes through
+      :meth:`~viewmodels.tool.ToolViewModel.set_tool_enabled`, which persists the
+      change, applies it to the matching service, and syncs it with the phone.
+      "Send File to Phone" is always enabled and has no row.
 
-    Reads initial toggle states from :data:`~app.app_state.app_state` and
-    wires each toggle to the appropriate :class:`~viewmodels.settings.SettingsViewModel`
-    slot.  External changes (via ViewModel signals) are reflected back with
-    ``set_checked`` so there is no signal-write-back loop.
+    External changes (autostart via ``SettingsViewModel``, tool state via
+    ``ToolViewModel``) are reflected back with ``set_checked`` so there is no
+    signal-write-back loop.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -32,10 +35,7 @@ class SettingsContent(QScrollArea):
         super().__init__(parent)
 
         self._autostart_row: SettingRow
-        self._vdrive_row: SettingRow
-        self._clipboard_row: SettingRow
-        self._webcam_row: SettingRow
-        self._backup_row: SettingRow
+        self._tool_rows: dict[str, SettingRow] = {}
 
         self._setup_ui()
         self._apply_style()
@@ -56,8 +56,6 @@ class SettingsContent(QScrollArea):
         self._build_inner_layout(inner)
 
     def _build_inner_layout(self, parent: QWidget) -> None:
-        vm = app_state.settings_viewmodel
-
         layout = QVBoxLayout(parent)
         layout.setContentsMargins(Spacing.XXL, Spacing.XXL, Spacing.XXL, Spacing.XXL)
         layout.setSpacing(Spacing.NONE)
@@ -76,7 +74,7 @@ class SettingsContent(QScrollArea):
         self._autostart_row = SettingRow(
             title="Launch SyncDose at startup",
             description="Start SyncDose automatically when you log in to Windows.",
-            checked=vm.autostart,
+            checked=app_state.settings_viewmodel.autostart,
         )
         layout.addWidget(self._autostart_row)
         layout.addSpacing(Spacing.LG)
@@ -85,52 +83,21 @@ class SettingsContent(QScrollArea):
         layout.addWidget(self._make_separator())
         layout.addSpacing(Spacing.LG)
 
-        # ── Features section ──────────────────────────────────────────────────
-        layout.addWidget(self._make_section_label("FEATURES"))
+        # ── Tools section ──────────────────────────────────────────────────────
+        # One on/off row per feature tool (Send File is always on, so it is
+        # excluded by ToolViewModel.feature_tools()).
+        layout.addWidget(self._make_section_label("TOOLS"))
         layout.addSpacing(Spacing.SM)
 
-        self._vdrive_row = SettingRow(
-            title="Virtual Drive",
-            description=(
-                "Mount your phone as a Windows drive letter whenever a device is connected, "
-                "so you can browse phone files directly in Explorer."
-            ),
-            checked=vm.virtual_drive_enabled,
-        )
-        layout.addWidget(self._vdrive_row)
-        layout.addSpacing(Spacing.LG)
-
-        self._clipboard_row = SettingRow(
-            title="Clipboard Sync",
-            description=(
-                "Keep the clipboard in sync between this PC and your phone while a "
-                "device is connected."
-            ),
-            checked=vm.clipboard_enabled,
-        )
-        layout.addWidget(self._clipboard_row)
-        layout.addSpacing(Spacing.LG)
-
-        self._webcam_row = SettingRow(
-            title="Webcam",
-            description=(
-                "Let your phone stream its camera to a virtual webcam that other "
-                "apps (Zoom, OBS, …) can use."
-            ),
-            checked=vm.webcam_enabled,
-        )
-        layout.addWidget(self._webcam_row)
-        layout.addSpacing(Spacing.LG)
-
-        self._backup_row = SettingRow(
-            title="Backup",
-            description=(
-                "Allow your phone to back up photos and files to this PC. "
-                "Disabling this prevents new backup sessions from starting."
-            ),
-            checked=vm.backup_enabled,
-        )
-        layout.addWidget(self._backup_row)
+        for tool in app_state.tool_viewmodel.feature_tools():
+            row = SettingRow(
+                title=tool.title,
+                description=tool.description,
+                checked=tool.is_enabled,
+            )
+            self._tool_rows[tool.title] = row
+            layout.addWidget(row)
+            layout.addSpacing(Spacing.LG)
 
         layout.addStretch()
 
@@ -161,21 +128,20 @@ class SettingsContent(QScrollArea):
     # ── Signals ────────────────────────────────────────────────────────────────
 
     def _connect_signals(self) -> None:
-        vm = app_state.settings_viewmodel
+        settings_vm = app_state.settings_viewmodel
+        tool_vm = app_state.tool_viewmodel
 
-        # UI → ViewModel: user flips a toggle
-        self._autostart_row.toggled.connect(vm.set_autostart)
-        self._vdrive_row.toggled.connect(vm.set_virtual_drive_enabled)
-        self._clipboard_row.toggled.connect(vm.set_clipboard_enabled)
-        self._webcam_row.toggled.connect(vm.set_webcam_enabled)
-        self._backup_row.toggled.connect(vm.set_backup_enabled)
+        # Autostart (System)
+        self._autostart_row.toggled.connect(settings_vm.set_autostart)
+        settings_vm.autostart_changed.connect(self._on_autostart_changed)
 
-        # ViewModel → UI: setting changed externally (or on construction echo)
-        vm.autostart_changed.connect(self._on_autostart_changed)
-        vm.virtual_drive_changed.connect(self._on_vdrive_changed)
-        vm.clipboard_changed.connect(self._on_clipboard_changed)
-        vm.webcam_changed.connect(self._on_webcam_changed)
-        vm.backup_changed.connect(self._on_backup_changed)
+        # Tools — each row drives ToolViewModel.set_tool_enabled; external changes
+        # (e.g. pushed from the phone) flip the row back via tool_enabled_changed.
+        for title, row in self._tool_rows.items():
+            row.toggled.connect(
+                lambda enabled, t=title: tool_vm.set_tool_enabled(t, enabled)
+            )
+        tool_vm.tool_enabled_changed.connect(self._on_tool_enabled_changed)
 
         # Re-apply stylesheet when system theme changes.
         theme_manager.theme_changed.connect(self._apply_style)
@@ -184,18 +150,8 @@ class SettingsContent(QScrollArea):
     def _on_autostart_changed(self, value: bool) -> None:
         self._autostart_row.set_checked(value)
 
-    @Slot(bool)
-    def _on_vdrive_changed(self, value: bool) -> None:
-        self._vdrive_row.set_checked(value)
-
-    @Slot(bool)
-    def _on_clipboard_changed(self, value: bool) -> None:
-        self._clipboard_row.set_checked(value)
-
-    @Slot(bool)
-    def _on_webcam_changed(self, value: bool) -> None:
-        self._webcam_row.set_checked(value)
-
-    @Slot(bool)
-    def _on_backup_changed(self, value: bool) -> None:
-        self._backup_row.set_checked(value)
+    @Slot(str, bool)
+    def _on_tool_enabled_changed(self, title: str, enabled: bool) -> None:
+        row = self._tool_rows.get(title)
+        if row is not None:
+            row.set_checked(enabled)

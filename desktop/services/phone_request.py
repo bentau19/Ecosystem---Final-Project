@@ -8,9 +8,9 @@ from domain.enums.backup_channels import BackupChannels
 from domain.enums.file_transfer_channels import FileTransferChannels
 from domain.enums.session_channels import SessionChannels
 from domain.enums.device_info_channels import DeviceInfoChannels
-from enums.clipboard_channels import ClipboardChannels
-from enums.settings_channels import SettingsChannels
-from enums.webcam_channels import WebcamChannels
+from domain.enums.clipboard_channels import ClipboardChannels
+from domain.enums.settings_channels import SettingsChannels
+from domain.enums.webcam_channels import WebcamChannels
 from services.backup import BackupService
 from services.clipboard import ClipboardService
 from services.connectivity import ConnectivityService

@@ -85,6 +85,16 @@ public class TauSyncTransportManager implements TransportManager {
     private int currentRetryAttempt = 0;
     private long nextRetryDelayMs = INITIAL_RETRY_DELAY_MS;
 
+    // Connection-health watchdog. The PC only sends DISCONNECT_FROM_PC on a *clean* exit; a
+    // crash / network drop just closes the socket. The poll loop checks tauSync.isConnected()
+    // (which reflects the real socket and stays false while the transport transparently
+    // reconnects) and only surfaces a disconnect if the link stays down past the grace window —
+    // so a brief Wi-Fi blip (transport reconnects) never tears the session down.
+    private static final long CONNECTION_LOST_GRACE_MS = 10_000L; // ~4 reconnect attempts; ≤10s UI lag
+    // [0] = 0 when healthy, else epoch-ms of the first down tick. A 1-element holder (not a bare
+    // long) so the pure static evaluateHealth() can update it. Touched only on the poll thread.
+    private final long[] connectionLostSince = {0L};
+
     /**
      * @param context any Context; the application context is extracted defensively so a Service
      *                context can never be retained by this long-lived manager.
@@ -96,7 +106,17 @@ public class TauSyncTransportManager implements TransportManager {
     @Override
     public void connect(RemoteDeviceInfo remoteDevice, TransportListener transportListener) {
         if (status == TransportStatus.CONNECTING || status == TransportStatus.CONNECTED) {
-            Log.w(TAG, "Already connected or connecting. Skipping duplicate connect request.");
+            // A connect() arriving while one is already in flight or established is a duplicate
+            // (e.g. a fragment's onResume auto-connect, or a service restart). Re-arming the
+            // singleton transport would fail, so we still skip the reconnect — but we must NOT
+            // return silently: a caller that already flipped its UI to "Connecting…" would hang
+            // there until its own timeout. Echo the true current status so the UI reconciles.
+            Log.w(TAG, "Duplicate connect request while " + status
+                    + " — re-notifying status instead of reconnecting.");
+            final TransportStatus current = status;
+            if (transportListener != null) {
+                mainHandler.post(() -> transportListener.onStatusChanged(current));
+            }
             return;
         }
 
@@ -248,11 +268,28 @@ public class TauSyncTransportManager implements TransportManager {
             });
         }
 
+        connectionLostSince[0] = 0L; // fresh health window for this session
         pollingExecutor.scheduleWithFixedDelay(() -> {
             // tauSync may be null during the reconnect window (handlePollingFailure
             // has already cleared it before attemptConnection creates the new instance).
             if (isShuttingDown.get() || status != TransportStatus.CONNECTED || tauSync == null) {
                 return;
+            }
+
+            // Connection-health watchdog. getPeerWaitingWords() is a discovery snapshot that does
+            // NOT throw on a dropped socket, so it can't detect a vanished PC by itself; isConnected()
+            // can. evaluateHealth() applies the grace window so a transient blip (transport
+            // reconnects) is tolerated and only a sustained loss is surfaced as a disconnect.
+            switch (evaluateHealth(connectionLostSince, tauSync.isConnected(),
+                    System.currentTimeMillis(), CONNECTION_LOST_GRACE_MS)) {
+                case LOST:
+                    handleConnectionLost();
+                    return;
+                case WITHIN_GRACE:
+                    return;          // down but still inside the grace window — wait it out
+                case HEALTHY:
+                default:
+                    break;           // fall through to the normal peer-request dispatch
             }
 
             try {
@@ -268,6 +305,57 @@ public class TauSyncTransportManager implements TransportManager {
         }, POLLING_INTERVAL_MS, POLLING_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
         Log.d(TAG, "Started polling loop with " + POLLING_INTERVAL_MS + "ms interval");
+    }
+
+    /** Outcome of a single connection-health evaluation in the poll loop. */
+    enum Health { HEALTHY, WITHIN_GRACE, LOST }
+
+    /**
+     * Pure decision for the poll-loop health watchdog (static + package-private so it is unit
+     * testable without constructing the manager).
+     *
+     * <p>Reads/updates {@code lostSince[0]} (0 = healthy, else epoch-ms of the first down tick)
+     * and classifies the link:
+     * <ul>
+     *   <li>{@code isConnected} → {@link Health#HEALTHY}; the down-marker is cleared.</li>
+     *   <li>first down tick → records {@code nowMs} and returns {@link Health#WITHIN_GRACE}.</li>
+     *   <li>still down but {@code < graceMs} elapsed → {@link Health#WITHIN_GRACE}.</li>
+     *   <li>down for {@code >= graceMs} → {@link Health#LOST}.</li>
+     * </ul>
+     * Called only on the single polling-executor thread, so the marker needs no locking.
+     * (A real {@code System.currentTimeMillis()} is never 0, so the 0-sentinel never collides.)
+     */
+    static Health evaluateHealth(long[] lostSince, boolean isConnected, long nowMs, long graceMs) {
+        if (isConnected) {
+            lostSince[0] = 0L;
+            return Health.HEALTHY;
+        }
+        if (lostSince[0] == 0L) {
+            lostSince[0] = nowMs;
+            return Health.WITHIN_GRACE;
+        }
+        return (nowMs - lostSince[0] >= graceMs) ? Health.LOST : Health.WITHIN_GRACE;
+    }
+
+    /**
+     * Surfaces a true (unclean) connection loss exactly once.
+     *
+     * <p>Flips the status to {@link TransportStatus#DISCONNECTING} so the next 20 ms tick
+     * early-returns (no second fire), then hands off on the main thread to the listener, which
+     * runs the same {@code cleanup()} the clean {@code DISCONNECT_FROM_PC} path uses. We do NOT
+     * call {@link #stopPolling()} here — that blocks on {@code awaitTermination} and self-deadlocks
+     * when invoked from inside a polling task; {@code cleanup() → shutdown() → disconnect()} stops
+     * the poller from the main thread instead.
+     */
+    private void handleConnectionLost() {
+        if (isShuttingDown.get() || status != TransportStatus.CONNECTED) {
+            return;
+        }
+        Log.w(TAG, "Connection lost (down >= grace window) — surfacing disconnect");
+        updateStatus(TransportStatus.DISCONNECTING);
+        if (listener != null) {
+            mainHandler.post(listener::onConnectionLost);
+        }
     }
 
     /**

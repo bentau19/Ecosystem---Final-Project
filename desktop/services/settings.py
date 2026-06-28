@@ -17,6 +17,11 @@ _WIRE_KEY_CLIPBOARD: str = "clipboard"
 _WIRE_KEY_WEBCAM: str = "webcam"
 _WIRE_KEY_BACKUP: str = "backup"
 
+# How long the PC waits for the phone to meet on the push channel before the
+# handshake is declared timed out.  Kept short (vs. TauSync's 60 s default) so
+# a failed push reverts the toggle quickly enough to feel responsive.
+_PUSH_TIMEOUT_SECONDS: int = 10
+
 
 class SettingsService(QObject):
     """Service layer over :class:`~repositories.settings.SettingsRepository`.
@@ -43,12 +48,21 @@ class SettingsService(QObject):
             enabled state.
         backup_state_received (Signal[bool]): Emitted with the phone's backup
             enabled state.
+        tools_push_succeeded (Signal[bool, bool, bool, bool]): Emitted after a
+            push to the phone completes, carrying the four values the phone
+            accepted ``(virtual_drive, clipboard, webcam, backup)``.  Lets the
+            viewmodel advance its "last approved" baseline.
+        tools_push_failed (Signal): Emitted when a push errors or times out, so
+            the viewmodel can roll the tool state back to the last value the
+            phone agreed to.
     """
 
     tools_state_received: Signal = Signal(bool)
     clipboard_state_received: Signal = Signal(bool)
     webcam_state_received: Signal = Signal(bool)
     backup_state_received: Signal = Signal(bool)
+    tools_push_succeeded: Signal = Signal(bool, bool, bool, bool)
+    tools_push_failed: Signal = Signal()
 
     def __init__(
         self,
@@ -167,6 +181,9 @@ class SettingsService(QObject):
         backup_enabled: bool,
     ) -> None:
         # Background worker: connect, write JSON payload with all four fields, close channel.
+        # On success the phone has the new state — emit tools_push_succeeded so the
+        # viewmodel can advance its baseline.  On any failure (most importantly a
+        # handshake timeout) emit tools_push_failed so it can revert the toggle.
         try:
             payload = json.dumps({
                 _WIRE_KEY_VIRTUAL_DRIVE: virtual_drive_enabled,
@@ -175,7 +192,15 @@ class SettingsService(QObject):
                 _WIRE_KEY_BACKUP: backup_enabled,
             })
             tau = self._connectivity.tau
-            with tau.connect(SettingsChannels.TOOLS_PC_TO_ANDROID.value) as stream:
+            with tau.connect(
+                SettingsChannels.TOOLS_PC_TO_ANDROID.value,
+                timeout_seconds=_PUSH_TIMEOUT_SECONDS,
+            ) as stream:
                 stream.write_string(payload)
         except Exception as exc:
             print(f"[SettingsService] Error pushing tool state to phone: {exc}")
+            self.tools_push_failed.emit()
+            return
+        self.tools_push_succeeded.emit(
+            virtual_drive_enabled, clipboard_enabled, webcam_enabled, backup_enabled
+        )

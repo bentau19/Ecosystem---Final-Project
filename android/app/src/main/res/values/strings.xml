@@ -20,7 +20,7 @@
     <string name="backup_btn_folder">Backup Folder Files</string>
     <string name="backup_btn_folder_sub">Choose a subfolder (e.g. DCIM/Camera)</string>
     <string name="backup_section_options">OPTIONS</string>
-    <string name="backup_opt_no_junk">Don\'t classify junk files</string>
+    <string name="backup_opt_classify">Classify junk files</string>
     <string name="backup_opt_delete_after">Delete originals after backup</string>
     <string name="backup_start">Start Backup</string>
     <string name="backup_back_desc">Go back</string>

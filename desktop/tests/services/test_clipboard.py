@@ -45,12 +45,20 @@ def _make_svc(tau: MagicMock) -> ClipboardService:
 
 
 def _wait_threads(svc: ClipboardService, qtbot: QtBot) -> None:
-    """Block until all background threads spawned by *svc* have finished."""
+    """Block until all background threads finish, then flush queued signals.
+
+    A worker emits its Qt signal and *then* exits; that cross-thread emit is
+    delivered via a queued event on the main-thread loop. ``waitUntil`` returns
+    as soon as ``is_alive()`` is False — which can happen before the queued slot
+    runs — so flush the event loop once the threads are gone. By then the emit
+    has already posted its event, so a single pass delivers it.
+    """
     def _all_done() -> bool:
         with svc._threads_lock:
             return all(not t.is_alive() for t in svc._threads)
 
     qtbot.waitUntil(_all_done, timeout=2000)
+    qtbot.wait(1)
 
 
 # ---------------------------------------------------------------------------

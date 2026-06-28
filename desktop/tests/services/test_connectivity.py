@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 from pytestqt.qtbot import QtBot
 
+from domain.enums.session_channels import SessionChannels
 from services.connectivity import ConnectivityService
 
 
@@ -108,6 +109,47 @@ def test_connection_error_emitted_when_listen_raises_while_running(qtbot: QtBot)
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
     assert received == ["connection refused"]
+
+
+def test_bt_timeout_resets_transport_then_reconnects(qtbot: QtBot) -> None:
+    """A Bluetooth listen timeout is normal, not an error.
+
+    Locks in the connect/disconnect leak fix: a ``TimeoutError`` from
+    ``connect_hybrid`` must NOT surface as ``connection_error``, must reset the
+    transport (``tau.disconnect`` — releasing any still-advertising RFCOMM
+    listener so it cannot accumulate across retries), and must still reach
+    ``device_connected`` once the next attempt sees a real peer.
+    """
+    mock_tau = _make_tau()
+    attempts: list[int] = []
+
+    def _timeout_then_succeed(**kwargs: object) -> None:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise TimeoutError("no client connected within the timeout")
+        mock_tau.is_connected = True  # a peer attaches on the retry → loop exits
+
+    mock_tau.connect_hybrid.side_effect = _timeout_then_succeed
+
+    with patch("services.connectivity.TauSync", return_value=mock_tau):
+        svc = ConnectivityService()
+        errors: list[str] = []
+        connected: list[bool] = []
+        svc.connection_error.connect(lambda msg: errors.append(msg))
+        svc.device_connected.connect(lambda: connected.append(True))
+        svc._start()
+
+    qtbot.waitUntil(lambda: len(connected) > 0, timeout=3000)
+    assert connected == [True]
+    assert errors == []                 # a timeout is never a connection_error
+    assert len(attempts) >= 2           # it retried after the timeout
+    assert mock_tau.disconnect.called   # the transport was reset on the timeout
+
+    # Tear the service down so the test leaves no running listener/executor behind.
+    disconnected: list[bool] = []
+    svc.device_disconnected.connect(lambda: disconnected.append(True))
+    svc.stop()
+    qtbot.waitUntil(lambda: len(disconnected) > 0, timeout=2000)
 
 
 def test_no_connection_error_when_listen_aborted_by_stop(qtbot: QtBot) -> None:
@@ -237,6 +279,62 @@ def test_stop_is_idempotent_when_not_running(qtbot: QtBot) -> None:
     svc._stop()  # synchronous — returns immediately via the running guard
 
     assert received == []
+
+
+# ---------------------------------------------------------------------------
+# prepare_shutdown() — app-exit teardown skips the slow phone-notify
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_shutdown_sets_flag() -> None:
+    """prepare_shutdown() arms the shutdown flag (default False)."""
+    with patch("services.connectivity.TauSync", return_value=_make_tau()):
+        svc = ConnectivityService()
+
+    assert svc._shutting_down is False
+    svc.prepare_shutdown()
+    assert svc._shutting_down is True
+
+
+def test_prepare_shutdown_uses_short_notify_timeout(qtbot: QtBot) -> None:
+    """On app shutdown the phone IS still notified (it only leaves its session screen on
+    the explicit DISCONNECT_FROM_PC message), but with the short bounded timeout (3s)
+    instead of 10s so a slow/gone phone can't stall the shutdown overlay."""
+    gate = threading.Event()
+    mock_tau = _gated_tau(gate)
+    svc = _start_service(mock_tau)
+    _wait_connected(qtbot, svc, gate)  # is_connected is now True
+
+    received: list[bool] = []
+    svc.device_disconnected.connect(lambda: received.append(True))
+
+    svc.prepare_shutdown()
+    svc.stop()
+
+    qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
+    mock_tau.connect.assert_called_once_with(
+        SessionChannels.DISCONNECT_FROM_PC.value, timeout_seconds=3
+    )
+    assert mock_tau.disconnect.called          # transport still torn down
+
+
+def test_stop_without_shutdown_still_notifies_phone(qtbot: QtBot) -> None:
+    """Regression guard: a normal (non-shutdown) disconnect with a live peer still
+    sends the DISCONNECT_FROM_PC notify — the flag gates only the app-exit path."""
+    gate = threading.Event()
+    mock_tau = _gated_tau(gate)
+    svc = _start_service(mock_tau)
+    _wait_connected(qtbot, svc, gate)  # is_connected is now True
+
+    received: list[bool] = []
+    svc.device_disconnected.connect(lambda: received.append(True))
+
+    svc.stop()  # no prepare_shutdown()
+
+    qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
+    mock_tau.connect.assert_called_once_with(
+        SessionChannels.DISCONNECT_FROM_PC.value, timeout_seconds=10
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -83,21 +83,27 @@ public class SettingsRepository {
     private SettingsRepository(Context appContext) {
         this.appContext = appContext;
         prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        // Hydrate LiveData with persisted values on startup.
-        // Clipboard and webcam default to true (opt-out) to match the desktop SettingsDTO.
-        // Backup defaults to true (phone-local — not synced to PC).
-        virtualDriveEnabled.setValue(prefs.getBoolean(KEY_VIRTUAL_DRIVE, false));
-        autoLaunch.setValue(prefs.getBoolean(KEY_AUTO_LAUNCH, false));
+        // Hydrate LiveData with persisted values on startup. Every setting defaults to
+        // true (opt-out) so a fresh install has all tools — and auto-launch — enabled,
+        // matching the desktop SettingsDTO.
+        virtualDriveEnabled.setValue(prefs.getBoolean(KEY_VIRTUAL_DRIVE, true));
+        autoLaunch.setValue(prefs.getBoolean(KEY_AUTO_LAUNCH, true));
         clipboardEnabled.setValue(prefs.getBoolean(KEY_CLIPBOARD_ENABLED, true));
         webcamEnabled.setValue(prefs.getBoolean(KEY_WEBCAM_ENABLED, true));
         backupEnabled.setValue(prefs.getBoolean(KEY_BACKUP_ENABLED, true));
+
+        // Reconcile the BootReceiver component with the persisted/default auto-launch
+        // value. The receiver is android:enabled="false" in the manifest, so a fresh
+        // install with auto-launch defaulting ON needs this to actually arm boot start.
+        // Idempotent and safe from any entry point (including BootReceiver itself).
+        applyBootReceiverState(prefs.getBoolean(KEY_AUTO_LAUNCH, true));
     }
 
     // ── Virtual Drive ─────────────────────────────────────────────────────────
 
     /** Current persisted value — safe to call from any thread. */
     public boolean isVirtualDriveEnabled() {
-        return prefs.getBoolean(KEY_VIRTUAL_DRIVE, false);
+        return prefs.getBoolean(KEY_VIRTUAL_DRIVE, true);
     }
 
     /** Observed by {@link com.example.android.ui.fragments.SettingsFragment}. */
@@ -136,7 +142,7 @@ public class SettingsRepository {
 
     /** Current persisted value — safe to call from any thread. */
     public boolean isAutoLaunch() {
-        return prefs.getBoolean(KEY_AUTO_LAUNCH, false);
+        return prefs.getBoolean(KEY_AUTO_LAUNCH, true);
     }
 
     /** Observed by {@link com.example.android.ui.fragments.SettingsFragment}. */
@@ -155,7 +161,20 @@ public class SettingsRepository {
     public void setAutoLaunch(boolean enabled) {
         prefs.edit().putBoolean(KEY_AUTO_LAUNCH, enabled).apply();
         autoLaunch.postValue(enabled);
+        applyBootReceiverState(enabled);
+    }
 
+    /**
+     * Enables or disables {@link BootReceiver} via
+     * {@link PackageManager#setComponentEnabledSetting} to match {@code enabled}.
+     *
+     * <p>Shared by {@link #setAutoLaunch(boolean)} (user toggle) and the constructor
+     * (startup reconcile). Idempotent — calling it repeatedly with the same value is a
+     * no-op. The receiver is {@code android:enabled="false"} in the manifest, so this is
+     * what actually arms boot-start when auto-launch is on (including the first run, when
+     * it defaults ON).
+     */
+    private void applyBootReceiverState(boolean enabled) {
         ComponentName receiver = new ComponentName(appContext, BootReceiver.class);
         int newState = enabled
                 ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED

@@ -22,6 +22,8 @@ class Icons(PathsEnum):
     SMARTPHONE = ":/icons/smartphone.svg"
     DISCONNECT = ":/icons/disconnect.svg"
     REFRESH = ":/icons/refresh.svg"
+    CLIPBOARD = ":/icons/clipboard.svg"
+    WEBCAM = ":/icons/webcam.svg"
 
 
 class Styles(PathsEnum):

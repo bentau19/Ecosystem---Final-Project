@@ -47,12 +47,20 @@ def _make_svc(tau: MagicMock, connected: bool = True) -> SettingsService:
 
 
 def _wait_threads(svc: SettingsService, qtbot: QtBot) -> None:
-    """Block until all background threads spawned by *svc* have finished."""
+    """Block until all background threads finish, then flush queued signals.
+
+    A worker emits its Qt signal and *then* exits; that cross-thread emit is
+    delivered via a queued event on the main-thread loop. ``waitUntil`` returns
+    as soon as ``is_alive()`` is False — which can happen before the queued slot
+    runs — so flush the event loop once the threads are gone. By then the emit
+    has already posted its event, so a single pass delivers it.
+    """
     def _all_done() -> bool:
         with svc._threads_lock:
             return all(not t.is_alive() for t in svc._threads)
 
     qtbot.waitUntil(_all_done, timeout=2000)
+    qtbot.wait(1)
 
 
 # ---------------------------------------------------------------------------
@@ -224,11 +232,44 @@ def test_push_writes_payload_to_correct_channel(qtbot: QtBot) -> None:
     svc.push_tools_state(True, False, True, False)
     _wait_threads(svc, qtbot)
 
-    tau.connect.assert_called_once_with(_CH_PC_TO_ANDROID)
+    tau.connect.assert_called_once_with(_CH_PC_TO_ANDROID, timeout_seconds=10)
     written = stream.write_string.call_args[0][0]
     assert json.loads(written) == {
         "virtualDrive": True, "clipboard": False, "webcam": True, "backup": False
     }
+
+
+def test_push_emits_succeeded_with_pushed_values(qtbot: QtBot) -> None:
+    tau = _make_tau()
+
+    svc = _make_svc(tau, connected=True)
+    succeeded: list[tuple] = []
+    failed: list[bool] = []
+    svc.tools_push_succeeded.connect(lambda *vals: succeeded.append(vals))
+    svc.tools_push_failed.connect(lambda: failed.append(True))
+
+    svc.push_tools_state(True, False, True, False)
+    _wait_threads(svc, qtbot)
+
+    assert succeeded == [(True, False, True, False)]
+    assert failed == []
+
+
+def test_push_emits_failed_on_timeout(qtbot: QtBot) -> None:
+    tau = _make_tau()
+    tau.connect.side_effect = TimeoutError("handshake timed out")
+
+    svc = _make_svc(tau, connected=True)
+    succeeded: list[tuple] = []
+    failed: list[bool] = []
+    svc.tools_push_succeeded.connect(lambda *vals: succeeded.append(vals))
+    svc.tools_push_failed.connect(lambda: failed.append(True))
+
+    svc.push_tools_state(True, True, True, True)
+    _wait_threads(svc, qtbot)
+
+    assert failed == [True]
+    assert succeeded == []
 
 
 def test_push_is_noop_when_disconnected() -> None:

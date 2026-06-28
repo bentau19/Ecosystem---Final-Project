@@ -167,8 +167,14 @@ class DeviceViewModel(QObject):
         flag that makes :meth:`_on_device_disconnected` skip its normal
         connectivity restart — otherwise stopping the connectivity service
         would immediately spawn a fresh listener as the process is exiting.
+
+        Also arms the connectivity service's own shutdown mode so its transport
+        teardown uses a short, bounded phone-notify timeout (instead of the normal
+        10s) — fast enough to not hang the "Shutting down…" overlay, but the phone
+        still gets the DISCONNECT_FROM_PC message it needs to leave its session screen.
         """
         self._is_shutting_down = True
+        self._connectivity_service.prepare_shutdown()
         self._refresh_timer.stop()
 
     # ── Private helpers ────────────────────────────────────────────────────────

@@ -232,16 +232,17 @@
                 app:layout_constraintStart_toStartOf="parent"
                 app:layout_constraintTop_toBottomOf="@id/tvSectionOptions">
 
-                <!-- Checkbox: Don't classify junk files -->
+                <!-- Checkbox: Classify junk files (on by default) -->
                 <CheckBox
-                    android:id="@+id/cbNoJunk"
+                    android:id="@+id/cbClassify"
                     android:layout_width="match_parent"
                     android:layout_height="56dp"
                     android:layout_marginStart="12dp"
                     android:buttonTint="@color/accent_cyan"
+                    android:checked="true"
                     android:paddingStart="20dp"
                     android:paddingEnd="20dp"
-                    android:text="@string/backup_opt_no_junk"
+                    android:text="@string/backup_opt_classify"
                     android:textColor="@color/text_primary"
                     android:textSize="14sp" />
 

@@ -77,9 +77,6 @@ class AppState:
             file_transfer_service=self.file_transfer_service,
             connectivity_service=self.connectivity_service,
         )
-        self.tool_viewmodel: Final[ToolViewModel] = ToolViewModel(
-            tool_service=self.tool_service,
-        )
         self.backup_viewmodel: Final[BackupViewModel] = BackupViewModel(
             backup_service=self.backup_service,
             connectivity_service=self.connectivity_service,
@@ -87,6 +84,22 @@ class AppState:
         self.virtual_drive_service: Final[VirtualDriveService] = VirtualDriveService(
             connectivity=self.connectivity_service,
             device_info=self.device_info_service,
+        )
+
+        # ToolViewModel is the tools coordinator: it owns the enable/disable side
+        # effects for the four feature tools (Clipboard/Webcam/Backup set_enabled
+        # and the VirtualDrive lifecycle) plus the bidirectional tool-state sync
+        # with the phone.  Constructed after the services + device_viewmodel it
+        # depends on.
+        self.tool_viewmodel: Final[ToolViewModel] = ToolViewModel(
+            tool_service=self.tool_service,
+            clipboard_service=self.clipboard_service,
+            webcam_service=self.webcam_service,
+            backup_service=self.backup_service,
+            virtual_drive_service=self.virtual_drive_service,
+            connectivity_service=self.connectivity_service,
+            device_viewmodel=self.device_viewmodel,
+            settings_service=self.settings_service,
         )
 
         self.webcam_viewmodel: Final[WebcamViewModel] = WebcamViewModel(
@@ -106,9 +119,9 @@ class AppState:
         # PhoneRequestService can dispatch receive_manifest() on the first poll.
         self.device_viewmodel.device_connected.connect(self.backup_service.start)
         self.device_viewmodel.device_connected.connect(self.phone_request_service.start)
-        # VirtualDriveService lifecycle is NOT wired here — SettingsViewModel
-        # conditionally connects device_connected/disconnected based on the persisted
-        # "virtual_drive_enabled" setting.  See viewmodels/settings.py.
+        # VirtualDriveService lifecycle is NOT wired here — ToolViewModel
+        # conditionally connects device_connected/disconnected based on the
+        # "Virtual Drive" tool's enabled state.  See viewmodels/tool.py.
 
         self.device_viewmodel.device_disconnected.connect(self.backup_service.stop)
         self.device_viewmodel.device_disconnected.connect(self.phone_request_service.stop)
@@ -135,17 +148,10 @@ class AppState:
             self.connectivity_service,
         )
 
-        # SettingsViewModel is constructed last — it needs device_viewmodel,
-        # virtual_drive_service, and connectivity_service to already exist.
-        # It reads persisted settings and wires VirtualDrive lifecycle if enabled.
+        # SettingsViewModel now owns only the autostart flag; per-tool enable
+        # state is coordinated by ToolViewModel (tools.json is the source of truth).
         self.settings_viewmodel: Final[SettingsViewModel] = SettingsViewModel(
             settings_service=self.settings_service,
-            device_viewmodel=self.device_viewmodel,
-            virtual_drive_service=self.virtual_drive_service,
-            connectivity_service=self.connectivity_service,
-            clipboard_service=self.clipboard_service,
-            webcam_service=self.webcam_service,
-            backup_service=self.backup_service,
         )
 
     def stop_all(self) -> None:

@@ -151,7 +151,7 @@ public class BackupFragment extends Fragment {
     private View dotAllMedia;
     private View dotFolder;
     private TextView tvFolderSubtitle;
-    private CheckBox cbNoJunk;
+    private CheckBox cbClassify;
     private CheckBox cbDeleteAfter;
     private SwitchCompat switchStorageSaver;
     private TextView tvStorageSaverState;
@@ -204,7 +204,7 @@ public class BackupFragment extends Fragment {
         dotAllMedia = root.findViewById(R.id.dotAllMedia);
         dotFolder = root.findViewById(R.id.dotFolder);
         tvFolderSubtitle = root.findViewById(R.id.tvFolderSubtitle);
-        cbNoJunk = root.findViewById(R.id.cbNoJunk);
+        cbClassify = root.findViewById(R.id.cbClassify);
         cbDeleteAfter = root.findViewById(R.id.cbDeleteAfter);
         switchStorageSaver = root.findViewById(R.id.switchStorageSaver);
         tvStorageSaverState = root.findViewById(R.id.tvStorageSaverState);
@@ -685,8 +685,8 @@ public class BackupFragment extends Fragment {
      * (sticky {@code BackupProgressChannel} notification).
      */
     private void startScan() {
-        // "Don't classify junk files" checked → classify_images = false
-        boolean classifyImages = !cbNoJunk.isChecked();
+        // "Classify junk files" checked (default) → classify_images = true
+        boolean classifyImages = cbClassify.isChecked();
         boolean deleteAfter    = cbDeleteAfter.isChecked();
         boolean storageSaver   = switchStorageSaver.isChecked();
         int     parallelSlots  = computeParallelSlots();
@@ -926,7 +926,7 @@ public class BackupFragment extends Fragment {
         // Lock mode cards and option controls to prevent mid-transfer reconfiguration.
         cardAllMedia.setClickable(!inProgress);
         cardFolder.setClickable(!inProgress);
-        cbNoJunk.setEnabled(!inProgress);
+        cbClassify.setEnabled(!inProgress);
         cbDeleteAfter.setEnabled(!inProgress);
         switchStorageSaver.setEnabled(!inProgress);
     }

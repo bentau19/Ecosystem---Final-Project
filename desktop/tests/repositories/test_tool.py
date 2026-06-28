@@ -1,6 +1,5 @@
-"""Unit tests for ToolRepository (SQLite-backed)."""
+"""Unit tests for ToolRepository (JSON-backed)."""
 
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -45,17 +44,13 @@ def tool_another_enabled() -> ToolEntity:
 
 
 @pytest.fixture()
-def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ToolRepository:
-    """Provide a ToolRepository backed by a temp SQLite database.
+def repository(tmp_path: Path) -> ToolRepository:
+    """Provide a ToolRepository backed by a temp ``tools.json`` in tmp_path.
 
-    Monkeypatches ``sqlite3.connect`` so all calls within ToolRepository are
-    redirected to a fresh, empty database in ``tmp_path`` instead of the
-    production file.  Seeds are inserted by ``_configure_db`` as normal.
+    Each test gets a fresh file, so only the seed tools are present until the
+    test saves more.
     """
-    db_path = str(tmp_path / "test_tools.db")
-    original_connect = sqlite3.connect
-    monkeypatch.setattr(sqlite3, "connect", lambda path, **kw: original_connect(db_path, **kw))
-    return ToolRepository()
+    return ToolRepository(path=tmp_path / "tools.json")
 
 
 # ---------------------------------------------------------------------------
@@ -323,3 +318,20 @@ def test_delete_all_entities_results_in_only_seeded_tools_removed(
     titles = {t.title for t in repository.get_all()}
     assert tool_enabled.title not in titles
     assert tool_disabled.title not in titles
+
+
+# ---------------------------------------------------------------------------
+# Persistence across instances
+# ---------------------------------------------------------------------------
+
+
+def test_saved_tool_persists_to_a_new_repository(
+        tmp_path: Path,
+        tool_enabled: ToolEntity,
+) -> None:
+    path = tmp_path / "tools.json"
+    repo = ToolRepository(path=path)
+    repo.save(tool_enabled)
+
+    reloaded = ToolRepository(path=path)
+    assert reloaded.get_by_id(tool_enabled.title) == tool_enabled

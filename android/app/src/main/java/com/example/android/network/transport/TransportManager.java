@@ -44,6 +44,14 @@ public interface TransportManager {
          * Called when the transport is about to attempt reconnection.
          */
         void onReconnectAttempt(int attemptNumber, int maxRetries);
+
+        /**
+         * Called when the transport detects the peer connection is truly lost — the socket
+         * stayed down past the transient-blip grace window, as opposed to a clean
+         * PC-initiated disconnect (which arrives as a {@code DISCONNECT_FROM_PC} message).
+         * Default is a no-op so existing/alternate listeners need not implement it.
+         */
+        default void onConnectionLost() {}
     }
 
     /**

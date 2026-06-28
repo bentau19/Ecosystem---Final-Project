@@ -32,6 +32,9 @@ def _make_service() -> tuple[PhoneRequestService, MagicMock, MagicMock]:
         file_transfer_service=mock_file_transfer,
         device_info_service=mock_device_info,
         backup_service=mock_backup,
+        settings_service=MagicMock(),
+        clipboard_service=MagicMock(),
+        webcam_service=MagicMock(),
     )
     svc._is_running.set()
     return svc, mock_connectivity, mock_file_transfer

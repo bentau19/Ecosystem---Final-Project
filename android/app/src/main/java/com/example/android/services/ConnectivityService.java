@@ -678,6 +678,29 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     }
 
     /**
+     * Transport detected the peer connection is truly lost (e.g. PC crash / network drop — no
+     * {@code DISCONNECT_FROM_PC} message ever arrives) and sustained past the blip grace window.
+     *
+     * <p>Runs the same {@link #cleanup()} the clean PC-initiated disconnect uses (via
+     * {@code DisconnectChannelHandler}'s {@code this::cleanup}), so the UI returns to the connect
+     * screen (DISCONNECTED) and the foreground service stops. Posted on the main thread by the
+     * transport manager, where {@code cleanup()} is safe to run.
+     */
+    @Override
+    public void onConnectionLost() {
+        Log.w(TAG, "Transport reported connection lost — running clean teardown");
+        if (isCleaningUp) {
+            return; // a clean disconnect is already in flight
+        }
+        if (deviceRepository != null) {
+            // Mark it PC-initiated so ConnectFragment.onResume does not auto-redial a PC
+            // that just vanished — consistent with the clean-disconnect UX (manual reconnect).
+            deviceRepository.setJustDisconnectedByPc();
+        }
+        cleanup();
+    }
+
+    /**
      * Maps the internal, concrete transport statuses directly into the generic domain model ConnectionStatus.
      */
     private ConnectionStatus mapTransportStatusToConnectionStatus(TransportStatus transportStatus) {
