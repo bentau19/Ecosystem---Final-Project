@@ -47,8 +47,7 @@ bidirectional file transfer via Windows shell integration, and a configurable to
 
 - **Device Dashboard** — Battery level, charging status, storage usage, OS info, and device
   name in real time
-- **Login Screen** — QR code pairing panel (displays local IP) + scrollable list of previously
-  connected devices with one-click reconnect cards
+- **Login Screen** — Bluetooth pairing panel + scrollable list of previously connected devices with one-click reconnect cards
 - **File Transfer** — Send files to the phone from the dashboard; receive files from the phone
   with an accept/reject toast prompt. Also integrates with the Windows "Send with SyncDose"
   shell context menu via a named pipe between two executables
@@ -81,7 +80,6 @@ bidirectional file transfer via Windows shell integration, and a configurable to
 | PySide6           | ≥ 6.11.1   | `requirements.txt`                  | Qt bindings |
 | pythonnet         | ≥ 3.0.0    | `TauSync/windows/requirements.txt`  | CLR bridge for TauSync .NET calls — installed in setup step 5 |
 | tausync_py        | local pkg   | `pip install ../TauSync/windows`    | TauSync Python wrapper — requires the `.dll` (see setup) |
-| qrcode[pil]       | ≥ 7.4.2    | `requirements.txt`                  | QR image generation for the login panel |
 | xxhash            | ≥ 3.7.0    | `requirements.txt`                  | xxh3_128 content hashing for duplicate detection |
 | jsonschema        | ≥ 4.17.3   | `requirements.txt`                  | JSON schema validation (file metadata) |
 | pytest-qt         | ≥ 4.4.0    | `requirements.txt`                  | Dev only — `QApplication` fixtures; also pulls in `pytest` |
@@ -566,9 +564,8 @@ desktop/
 │       │   ├── pill_wraper.py          # PillWrapper — layout host for ConnectionPill
 │       │   └── pulsing_dot.py          # PulsingDot — animated dot for "Waiting…" indicator
 │       ├── login/
-│       │   ├── left_panel.py           # LeftPanel — QR code + Refresh button + PulsingDot
+│       │   ├── left_panel.py           # LeftPanel — Bluetooth connect button + PulsingDot
 │       │   ├── previous_device_card.py # PreviousDeviceCard — hover-to-connect device entry
-│       │   ├── qr.py                   # QR — QR code image with rounded corners + brackets
 │       │   └── right_panel.py          # RightPanel — scrollable previously connected devices
 │       ├── navigation/
 │       │   ├── container.py            # NavigationContainer — sidebar + main content wrapper
@@ -853,15 +850,7 @@ All services share the same internal lifecycle pattern:
 
 ### `ConnectivityService`
 
-Manages the TauSync TCP connection lifecycle. Supports two connection modes:
-
-- **Bluetooth (default)** — calls `tau.connect_hybrid()`, which advertises a BLE beacon so the
-  phone can discover the PC by name. Requires the user to approve the first connection via a
-  dialog; subsequent connections from the same phone are auto-approved.
-- **Wi-Fi** — calls `tau.listen()` (plain TCP). The phone connects by scanning a QR code
-  that encodes this PC's local IP.
-
-The active mode is toggled at runtime with `set_mode(use_bluetooth: bool)`.
+Manages the TauSync TCP connection lifecycle. Connects via Bluetooth — calls `tau.connect_hybrid()`, which advertises a BLE beacon so the phone can discover the PC by name. Requires the user to approve the first connection via a dialog; subsequent connections from the same phone are auto-approved.
 
 | Signal | Payload | When |
 |---|---|---|
@@ -869,7 +858,6 @@ The active mode is toggled at runtime with `set_mode(use_bluetooth: bool)`.
 | `device_disconnecting` | — | Teardown starts (transport still open) |
 | `device_disconnected` | — | Transport closed; safe to call `start()` to re-listen |
 | `connection_error` | `str` | Unexpected exception while listening (not a normal stop) |
-| `mode_changed` | `bool` | `set_mode()` changed the active mode; `True` = BT, `False` = Wi-Fi |
 | `phone_approval_requested` | `str` | New (unknown) phone is asking to connect over BT — show approve/reject dialog; call `resolve_phone_approval()` to unblock |
 
 `disconnect_device()` checks whether the phone sent a disconnect first (via
