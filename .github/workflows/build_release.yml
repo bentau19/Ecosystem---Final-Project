@@ -17,12 +17,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/tau_sync
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
-
+      - uses: ./.github/actions/tau_sync
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -120,14 +119,26 @@ jobs:
           key: gradle-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/libs.versions.toml') }}
           restore-keys: gradle-
 
-      - name: Build DEBUG APK
-        run: cd android && ./gradlew :app:assembleDebug
+      - name: Decode keystore
+        # KEYSTORE_BASE64 secret = base64 of the release .jks. Decoded to a file
+        # the signingConfig in app/build.gradle.kts reads via KEYSTORE_PATH below.
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "${{ github.workspace }}/android/app/release.jks"
 
-      - name: Upload Debug APK artifact
+      - name: Build RELEASE APK
+        env:
+          # app/build.gradle.kts release signingConfig reads these four env vars.
+          # KEYSTORE_PATH is absolute so Gradle file() resolves it unambiguously.
+          KEYSTORE_PATH: ${{ github.workspace }}/android/app/release.jks
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+        run: cd android && ./gradlew :app:assembleRelease
+
+      - name: Upload Release APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: release-apk
+          path: android/app/build/outputs/apk/release/*.apk
 
 
   # =========================
@@ -152,7 +163,7 @@ jobs:
       - name: Download Android artifacts
         uses: actions/download-artifact@v4
         with:
-          name: debug-apk
+          name: release-apk
           path: artifacts/android
 
       - name: Create GitHub Release

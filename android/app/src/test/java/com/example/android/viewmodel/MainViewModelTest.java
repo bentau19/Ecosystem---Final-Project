@@ -20,7 +20,6 @@ import com.example.android.domain.enums.DiscoveryStatus;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
 import com.example.android.domain.usecases.DisconnectDeviceUseCase;
 import com.example.android.domain.usecases.PairWithPcUseCase;
-import com.example.android.domain.usecases.ParseQrDataUseCase;
 import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
 
 import org.junit.Before;
@@ -50,9 +49,6 @@ public class MainViewModelTest {
     private ConnectToDeviceUseCase mockConnectUseCase;
 
     @Mock
-    private ParseQrDataUseCase mockParseQrUseCase;
-
-    @Mock
     private DisconnectDeviceUseCase mockDisconnectUseCase;
 
     @Mock
@@ -67,7 +63,6 @@ public class MainViewModelTest {
                 mockRepository,
                 mockRefreshUseCase,
                 mockConnectUseCase,
-                mockParseQrUseCase,
                 mockDisconnectUseCase,
                 mockPairWithPcUseCase
         );
@@ -110,34 +105,6 @@ public class MainViewModelTest {
 
         // Assert: Verify the execution of the refresh UseCase
         verify(mockRefreshUseCase).execute();
-    }
-
-    @Test
-    public void handleQr_validData_callsConnectUseCase() {
-        // Arrange: Setup successful QR parsing
-        RemoteDeviceInfo fakeInfo =
-                new RemoteDeviceInfo("Ben-PC", "192.168.1.15", ConnectionType.WIFI);
-
-        when(mockParseQrUseCase.execute("qr_data")).thenReturn(fakeInfo);
-
-        // Act: Process the QR data
-        boolean result = viewModel.handleQr("qr_data");
-
-        // Assert: Verify connection is initiated with correct parameters
-        assertTrue(result);
-        verify(mockConnectUseCase).execute(fakeInfo);
-    }
-
-    @Test
-    public void handleQr_invalidData_returnsFalse() {
-        // Arrange: Simulate a parsing failure
-        when(mockParseQrUseCase.execute("bad_qr")).thenReturn(null);
-
-        // Act: Process invalid QR
-        boolean result = viewModel.handleQr("bad_qr");
-
-        // Assert: Ensure failure is reported and no connection is attempted
-        assertEquals(false, result);
     }
 
     // ── justDisconnected flag ─────────────────────────────────────────────────
