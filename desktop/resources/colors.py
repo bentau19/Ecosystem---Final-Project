@@ -35,7 +35,7 @@ class Palette(ColorsEnum):
     SLATE_200 = "#c9d1d9"  # Light tertiary text
     SLATE_100 = "#E2E8F0"  # Secondary text color
 
-    CYAN_400 = "#38BDF8"  # Primary accent color
+    CYAN_400 = "#22D3EE"  # Primary accent color
     VIOLET_500 = "#7B61FF"  # Secondary accent color
     PINK_500 = "#FF5C87"  # Tertiary accent color
 
@@ -59,8 +59,8 @@ class Palette(ColorsEnum):
     PURPLE_400 = "#6959F0"  # Secondary purple color
 
     # Muted deep-tint backgrounds for icon containers (dark-UI accent pits)
-    CYAN_900   = "#0c2233"  # deep sky tint
-    CYAN_800   = "#0e3350"  # mid sky tint
+    CYAN_900   = "#0d2d36"  # deep cyan tint
+    CYAN_800   = "#0f3d4f"  # mid cyan tint
     VIOLET_900 = "#1c1642"  # deep violet tint
     VIOLET_800 = "#221450"  # mid violet tint
     PINK_900   = "#2e1225"  # deep pink tint
@@ -165,7 +165,7 @@ class LoginColors(ColorsEnum):
     # Right-panel extended tokens
     TEXT_FAINT        = Palette.SLATE_600  # Device timestamp, idle badge, footer link
     TEXT_FOOTER       = Palette.SLATE_700  # Very muted footer body text
-    ACCENT_HOVER      = "#7DD3FC"          # Lighter sky for ConnectBtn hover (sky-300)
+    ACCENT_HOVER      = "#67E8F9"          # Lighter cyan for ConnectBtn hover (sky-300)
 
 
 class LogoColors(ColorsEnum):
@@ -254,7 +254,7 @@ class LightPalette(ColorsEnum):
     SLATE_100 = "#0F172A"  # Secondary text color (inverted — near-black)
 
     # Accent hues are identical in both themes
-    CYAN_400   = "#38BDF8"
+    CYAN_400   = "#22D3EE"
     VIOLET_500 = "#7B61FF"
     PINK_500   = "#FF5C87"
 
@@ -278,8 +278,8 @@ class LightPalette(ColorsEnum):
     PURPLE_400 = "#6959F0"
 
     # Light-mode tint backgrounds for icon containers (inverted from dark)
-    CYAN_900   = "#E0F2FE"  # Light sky tint — icon container bg  (sky-100)
-    CYAN_800   = "#BAE6FD"  # Mid sky tint — icon container border (sky-200)
+    CYAN_900   = "#D0F4FA"  # Light cyan tint — icon container bg
+    CYAN_800   = "#A5E8F5"  # Mid cyan tint — icon container border
     VIOLET_900 = "#EDE9FE"
     VIOLET_800 = "#DDD6FE"
     PINK_900   = "#FCE7F3"
@@ -386,7 +386,7 @@ class LightLoginColors(ColorsEnum):
     # Right-panel extended tokens
     TEXT_FAINT        = LightPalette.SLATE_600  # device timestamp, idle badge, footer link
     TEXT_FOOTER       = LightPalette.SLATE_700  # very muted footer body text
-    ACCENT_HOVER      = "#7DD3FC"               # sky-300 lighter sky — theme-invariant
+    ACCENT_HOVER      = "#67E8F9"               # sky-300 lighter cyan — theme-invariant
 
 
 class LightLogoColors(ColorsEnum):

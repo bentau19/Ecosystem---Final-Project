@@ -16,7 +16,6 @@ _WIRE_KEY_VIRTUAL_DRIVE: str = "virtualDrive"
 _WIRE_KEY_CLIPBOARD: str = "clipboard"
 _WIRE_KEY_WEBCAM: str = "webcam"
 _WIRE_KEY_BACKUP: str = "backup"
-_WIRE_KEY_DARK_MODE: str = "darkMode"
 
 # How long the PC waits for the phone to meet on the push channel before the
 # handshake is declared timed out.  Kept short (vs. TauSync's 60 s default) so
@@ -62,7 +61,6 @@ class SettingsService(QObject):
     clipboard_state_received: Signal = Signal(bool)
     webcam_state_received: Signal = Signal(bool)
     backup_state_received: Signal = Signal(bool)
-    dark_mode_received: Signal = Signal(bool)
     tools_push_succeeded: Signal = Signal(bool, bool, bool, bool)
     tools_push_failed: Signal = Signal()
 
@@ -150,27 +148,6 @@ class SettingsService(QObject):
             self._threads.append(t)
         t.start()
 
-    def push_dark_mode(self, dark: bool) -> None:
-        """Push only the dark mode flag to the phone.
-
-        Sends ``{"darkMode": <value>}`` on ``TOOLS_PC_TO_ANDROID``.  The phone
-        uses ``optBoolean`` with its current persisted value as default, so all
-        other tool flags are unaffected.  No-op when not connected.
-
-        Args:
-            dark: ``True`` to push dark mode on, ``False`` for light mode.
-        """
-        if not self._connectivity.connected:
-            return
-        t = threading.Thread(
-            target=self._push_dark_mode,
-            args=(dark,),
-            daemon=True,
-        )
-        with self._threads_lock:
-            self._threads.append(t)
-        t.start()
-
     # ── Private ──────────────────────────────────────────────────────────────────
 
     def _receive_tools_state(self) -> None:
@@ -192,8 +169,6 @@ class SettingsService(QObject):
                 self.webcam_state_received.emit(bool(payload[_WIRE_KEY_WEBCAM]))
             if _WIRE_KEY_BACKUP in payload:
                 self.backup_state_received.emit(bool(payload[_WIRE_KEY_BACKUP]))
-            if _WIRE_KEY_DARK_MODE in payload:
-                self.dark_mode_received.emit(bool(payload[_WIRE_KEY_DARK_MODE]))
 
         except Exception as exc:
             print(f"[SettingsService] Error receiving tool state: {exc}")
@@ -229,17 +204,3 @@ class SettingsService(QObject):
         self.tools_push_succeeded.emit(
             virtual_drive_enabled, clipboard_enabled, webcam_enabled, backup_enabled
         )
-
-    def _push_dark_mode(self, dark: bool) -> None:
-        # Background worker: write only {"darkMode": <value>} so the phone updates its
-        # theme without touching the other tool flags (phone keeps them via optBoolean).
-        try:
-            payload = json.dumps({_WIRE_KEY_DARK_MODE: dark})
-            tau = self._connectivity.tau
-            with tau.connect(
-                SettingsChannels.TOOLS_PC_TO_ANDROID.value,
-                timeout_seconds=_PUSH_TIMEOUT_SECONDS,
-            ) as stream:
-                stream.write_string(payload)
-        except Exception as exc:
-            print(f"[SettingsService] Error pushing dark mode to phone: {exc}")

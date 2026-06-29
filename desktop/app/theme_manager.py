@@ -41,9 +41,6 @@ class ThemeManager(QObject):
     (most reliable) and re-emits :attr:`theme_changed` whenever the user
     switches the system preference while the app is running.
 
-    An in-app override set via :meth:`force` takes precedence over the system
-    value until the app is restarted or :meth:`force` is called again.
-
     Usage::
 
         from app.theme_manager import theme_manager
@@ -58,7 +55,6 @@ class ThemeManager(QObject):
     def __init__(self) -> None:
         super().__init__()
         self._is_dark: bool = _detect_is_dark()
-        self._override: bool | None = None
         # Qt's colorSchemeChanged fires even when colorScheme() reads wrong initially
         QGuiApplication.styleHints().colorSchemeChanged.connect(self._on_scheme_changed)
 
@@ -66,31 +62,13 @@ class ThemeManager(QObject):
 
     @property
     def is_dark(self) -> bool:
-        """``True`` when dark mode is active (override takes precedence over system)."""
-        if self._override is not None:
-            return self._override
+        """``True`` when the system is currently in dark mode."""
         return self._is_dark
-
-    def force(self, dark: bool) -> None:
-        """Override the system theme with an explicit in-app value.
-
-        Emits :attr:`theme_changed` if the effective ``is_dark`` value changes.
-
-        Args:
-            dark: ``True`` to force dark mode, ``False`` to force light mode.
-        """
-        if self._override == dark:
-            return
-        self._override = dark
-        self.theme_changed.emit()
 
     # ── Private slots ──────────────────────────────────────────────────────────
 
     @Slot(Qt.ColorScheme)
     def _on_scheme_changed(self, scheme: Qt.ColorScheme) -> None:
-        # When an override is active, system changes don't affect is_dark.
-        if self._override is not None:
-            return
         # Re-read the authoritative source; skip emit if nothing actually changed.
         new_is_dark = _detect_is_dark()
         if new_is_dark == self._is_dark:

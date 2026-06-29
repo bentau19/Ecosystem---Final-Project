@@ -2,7 +2,6 @@ import sys
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from app.theme_manager import theme_manager
 from domain.dto.settings import SettingsDTO
 from services.settings import SettingsService
 
@@ -19,7 +18,6 @@ class SettingsViewModel(QObject):
     """
 
     autostart_changed: Signal = Signal(bool)
-    dark_mode_changed: Signal = Signal(bool)
 
     def __init__(
         self,
@@ -43,22 +41,10 @@ class SettingsViewModel(QObject):
         # entry self-heals if it drifts. No-op in dev builds (guarded by sys.frozen).
         self._apply_autostart(self._settings.autostart)
 
-        # Apply any persisted dark mode override so the UI opens in the right theme.
-        if self._settings.dark_mode:
-            theme_manager.force(True)
-
-        # Phone → PC: apply dark mode pushed by the phone without echoing back.
-        settings_service.dark_mode_received.connect(self._on_dark_mode_from_phone)
-
     @property
     def autostart(self) -> bool:
         """Whether SyncDose is currently set to launch with Windows."""
         return self._settings.autostart
-
-    @property
-    def dark_mode(self) -> bool:
-        """Whether dark mode is currently active."""
-        return self._settings.dark_mode
 
     @Slot(bool)
     def set_autostart(self, value: bool) -> None:
@@ -79,34 +65,6 @@ class SettingsViewModel(QObject):
         self._service.save(self._settings)
         self._apply_autostart(value)
         self.autostart_changed.emit(value)
-
-    @Slot(bool)
-    def set_dark_mode(self, value: bool) -> None:
-        """Persist dark mode, apply theme, and push to the connected phone.
-
-        Args:
-            value: ``True`` to enable dark mode, ``False`` for light mode.
-
-        Emits:
-            dark_mode_changed: With the new value.
-        """
-        if value == self._settings.dark_mode:
-            return
-        self._settings.dark_mode = value
-        self._service.save(self._settings)
-        theme_manager.force(value)
-        self._service.push_dark_mode(value)
-        self.dark_mode_changed.emit(value)
-
-    @Slot(bool)
-    def _on_dark_mode_from_phone(self, value: bool) -> None:
-        # Phone pushed dark mode — apply and save without pushing back to avoid a loop.
-        if value == self._settings.dark_mode:
-            return
-        self._settings.dark_mode = value
-        self._service.save(self._settings)
-        theme_manager.force(value)
-        self.dark_mode_changed.emit(value)
 
     def _apply_autostart(self, enabled: bool) -> None:
         # Write / delete the Windows Registry run key.

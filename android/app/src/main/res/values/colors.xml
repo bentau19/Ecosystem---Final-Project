@@ -1,24 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="background_main">#F8FAFC</color>
+    <color name="background_main">#0B141B</color>
 
-    <color name="surface_dark">#F1F5F9</color>
-    <color name="border_color">#94A3B8</color>
+    <color name="surface_dark">#1C212A</color>
+    <color name="border_color">#1E3A4A</color>
 
-    <color name="accent_cyan">#38BDF8</color>
-    <color name="accent_purple">#7B61FF</color>
+    <color name="accent_cyan">#2196F3</color> <color name="accent_purple">#7B61FF</color>
     <color name="accent_pink">#FF5C87</color>
     <color name="status_green">#00E676</color>
 
-    <color name="text_primary">#0F172A</color>
+    <color name="text_primary">#F0F2F8</color>
     <color name="white">#FFFFFF</color>
-    <color name="text_muted">#6e7681</color>
+    <color name="text_muted">#6B7280</color>
 
-    <!-- Card / outlined-button tokens -->
-    <color name="surface_card">#E8F0F8</color>
-    <color name="stroke_card">#CBD5E1</color>
+    <!-- Card / outlined-button tokens (were previously hardcoded inline) -->
+    <color name="surface_card">#1A1A2E</color>
+    <color name="stroke_card">#30475E</color>
     <color name="icon_blue">#4592AF</color>
-
-    <!-- Text/icon color for buttons that sit on an accent-colored background -->
-    <color name="accent_button_text">#0F172A</color>
 </resources>

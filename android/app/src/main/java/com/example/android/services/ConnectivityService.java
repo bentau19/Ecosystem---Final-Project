@@ -584,15 +584,14 @@ public class ConnectivityService extends Service implements TransportManager.Tra
             Log.d(TAG, "Settings push already in progress, skipping");
             return;
         }
-        // Snapshot all settings synchronously before the background thread runs.
+        // Snapshot all four settings synchronously before the background thread runs.
         boolean vd = settingsRepository.isVirtualDriveEnabled();
         boolean cb = settingsRepository.isClipboardEnabled();
         boolean wc = settingsRepository.isWebcamEnabled();
         boolean bk = settingsRepository.isBackupEnabled();
-        boolean dm = settingsRepository.isDarkMode();
         new Thread(() -> {
             try {
-                settingsUseCase.pushToolsState(vd, cb, wc, bk, dm);
+                settingsUseCase.pushToolsState(vd, cb, wc, bk);
             } finally {
                 inProgressChannels.remove(channel);
             }
