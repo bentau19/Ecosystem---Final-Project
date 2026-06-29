@@ -44,7 +44,6 @@ public class SettingsFragment extends Fragment {
 
     private SettingsViewModel settingsViewModel;
 
-    private SwitchCompat switchDarkMode;
     private SwitchCompat switchAutoLaunch;
     private SwitchCompat switchBackup;
     private SwitchCompat switchVirtualDrive;
@@ -67,7 +66,6 @@ public class SettingsFragment extends Fragment {
 
         // 2. View references
         ImageButton btnBack    = view.findViewById(R.id.btnBack);
-        switchDarkMode         = view.findViewById(R.id.switchDarkMode);
         switchAutoLaunch       = view.findViewById(R.id.switchAutoLaunch);
         switchBackup           = view.findViewById(R.id.switchBackup);
         switchVirtualDrive     = view.findViewById(R.id.switchVirtualDrive);
@@ -76,7 +74,6 @@ public class SettingsFragment extends Fragment {
 
         // 3. Set initial switch states BEFORE attaching listeners so the first
         //    setChecked() does not trigger a repository write or a PC push.
-        switchDarkMode.setChecked(settingsViewModel.isDarkMode());
         switchAutoLaunch.setChecked(settingsViewModel.isAutoLaunch());
         switchBackup.setChecked(settingsViewModel.isBackupEnabled());
         switchVirtualDrive.setChecked(settingsViewModel.isVirtualDriveEnabled());
@@ -84,17 +81,6 @@ public class SettingsFragment extends Fragment {
         switchWebcam.setChecked(settingsViewModel.isWebcamEnabled());
 
         // 4. Observe LiveData for all tool settings.
-        //    Dark mode synced bidirectionally: observer fires when PC pushes a change.
-        settingsViewModel.getDarkMode().observe(getViewLifecycleOwner(), enabled -> {
-            if (switchDarkMode.isChecked() != enabled) {
-                programmaticUpdate = true;
-                switchDarkMode.setChecked(enabled);
-                programmaticUpdate = false;
-                // Theme application is handled by the MainActivity observer so it works
-                // regardless of which fragment is visible (including when PC pushes).
-            }
-        });
-
         //    Backup is phone-local (no PC push) but observed for consistency — if
         //    the setting ever changes programmatically the switch stays in sync.
         settingsViewModel.getBackupEnabled().observe(getViewLifecycleOwner(), enabled -> {
@@ -137,13 +123,6 @@ public class SettingsFragment extends Fragment {
         // initial value set in step 3 is sufficient.
 
         // 5. Attach listeners AFTER initial state is set
-        switchDarkMode.setOnCheckedChangeListener((btn, checked) -> {
-            if (!programmaticUpdate) {
-                // setDarkMode() persists + postValue → MainActivity observer applies theme.
-                settingsViewModel.setDarkMode(checked);
-            }
-        });
-
         switchAutoLaunch.setOnCheckedChangeListener((btn, checked) ->
                 settingsViewModel.setAutoLaunch(checked));
 

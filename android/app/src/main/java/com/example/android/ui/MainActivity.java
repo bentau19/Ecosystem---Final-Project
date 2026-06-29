@@ -12,7 +12,6 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
@@ -32,7 +31,6 @@ import com.example.android.viewmodel.FileTransferViewModel;
 import com.example.android.viewmodel.MainViewModel;
 import com.example.android.viewmodel.MainViewModelFactory;
 import com.example.android.services.ConnectivityService;
-import com.example.android.repositories.SettingsRepository;
 
 /**
  * Main Activity serves as the primary host for fragments.
@@ -52,13 +50,6 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Apply persisted dark/light mode before inflation so the first frame is correct.
-        SettingsRepository settingsRepo = SettingsRepository.getInstance(this);
-        AppCompatDelegate.setDefaultNightMode(
-                settingsRepo.isDarkMode()
-                        ? AppCompatDelegate.MODE_NIGHT_YES
-                        : AppCompatDelegate.MODE_NIGHT_NO);
-
         setupStatusBar();
         setContentView(R.layout.activity_main);
 
@@ -69,20 +60,7 @@ public class MainActivity extends AppCompatActivity {
         // 2. Initialize notification manager
         appNotificationManager = new AppNotificationManager(this);
 
-        // 3. Observe dark mode changes — this runs regardless of which fragment is
-        //    active, so a push from the PC applies the theme even when SettingsFragment
-        //    is not on screen.  The guard prevents the initial sticky LiveData delivery
-        //    from triggering a redundant recreate() call.
-        settingsRepo.getDarkModeLiveData().observe(this, dark -> {
-            int mode = Boolean.TRUE.equals(dark)
-                    ? AppCompatDelegate.MODE_NIGHT_YES
-                    : AppCompatDelegate.MODE_NIGHT_NO;
-            if (AppCompatDelegate.getDefaultNightMode() != mode) {
-                AppCompatDelegate.setDefaultNightMode(mode);
-            }
-        });
-
-        // 4. Observe file transfer state (receive)
+        // 3. Observe file transfer state (receive)
         observeFileTransfer();
 
         // 4. Smart navigation logic: Check current connection state from the repository.
@@ -99,11 +77,14 @@ public class MainActivity extends AppCompatActivity {
             if (status == null) return;
             switch (status) {
                 case CONNECTING:
+                    Toast.makeText(this, "Connecting...", Toast.LENGTH_SHORT).show();
                     break;
                 case CONNECTED:
                     navigateToActions();
+                    Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
                     break;
                 case DISCONNECTING:
+                    Toast.makeText(this, "Disconnecting...", Toast.LENGTH_SHORT).show();
                     break;
                 case DISCONNECTED:
                     // Clear the entire back stack synchronously so any intermediate
@@ -121,6 +102,7 @@ public class MainActivity extends AppCompatActivity {
                     break;
                 case FAILED:
                     navigateToConnect();
+                    Toast.makeText(this, "Connection failed. Try again.", Toast.LENGTH_LONG).show();
                     break;
                 default:
                     break;

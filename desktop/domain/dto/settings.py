@@ -19,4 +19,3 @@ class SettingsDTO:
     """
 
     autostart: bool = True
-    dark_mode: bool = False

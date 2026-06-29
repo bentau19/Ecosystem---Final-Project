@@ -13,36 +13,15 @@
         android:layout_height="wrap_content"
         android:padding="24dp">
 
-        <!-- ── App identity row — logo + name ── -->
-
-        <LinearLayout
-            android:id="@+id/appIdentityRow"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:gravity="center_horizontal"
-            android:orientation="vertical"
+        <ImageView
+            android:id="@+id/mainIllustration"
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:layout_marginTop="20dp"
+            android:src="@drawable/ic_sync"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent">
-
-            <ImageView
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:layout_gravity="center_horizontal"
-                android:contentDescription="SyncDose logo"
-                android:src="@mipmap/ic_launcher_round" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:letterSpacing="0.01"
-                android:text="SyncDose"
-                android:textColor="@color/text_muted"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-        </LinearLayout>
+            app:layout_constraintTop_toTopOf="parent" />
 
         <TextView
             android:id="@+id/welcomeTitle"
@@ -55,7 +34,7 @@
             android:textStyle="bold"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/appIdentityRow" />
+            app:layout_constraintTop_toBottomOf="@id/mainIllustration" />
 
         <TextView
             android:id="@+id/descriptionText"
@@ -106,7 +85,7 @@
             android:backgroundTint="@color/accent_cyan"
             android:text="Scan QR Code"
             android:textAllCaps="false"
-            android:textColor="@color/accent_button_text"
+            android:textColor="@color/background_main"
             android:textSize="16sp"
             android:textStyle="bold"
             app:layout_constraintEnd_toEndOf="parent"

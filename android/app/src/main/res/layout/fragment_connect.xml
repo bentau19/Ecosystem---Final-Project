@@ -7,51 +7,30 @@
     android:background="@color/background_main"
     android:padding="24dp">
 
-    <!-- ── App identity row — logo + name ── -->
+    <!-- ── Top: illustration + title + description ── -->
 
-    <LinearLayout
-        android:id="@+id/appIdentityRow"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="40dp"
-        android:gravity="center_horizontal"
-        android:orientation="vertical"
+    <ImageView
+        android:id="@+id/mainIllustration"
+        android:layout_width="96dp"
+        android:layout_height="96dp"
+        android:layout_marginTop="64dp"
+        android:src="@drawable/ic_sync"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent">
-
-        <ImageView
-            android:layout_width="72dp"
-            android:layout_height="72dp"
-            android:layout_gravity="center_horizontal"
-            android:contentDescription="SyncDose logo"
-            android:src="@mipmap/ic_launcher_round" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:letterSpacing="0.01"
-            android:text="SyncDose"
-            android:textColor="@color/text_muted"
-            android:textSize="18sp"
-            android:textStyle="bold" />
-    </LinearLayout>
-
-    <!-- ── Top: title + description ── -->
+        app:layout_constraintTop_toTopOf="parent" />
 
     <TextView
         android:id="@+id/welcomeTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="40dp"
+        android:layout_marginTop="24dp"
         android:text="Link Your Device"
         android:textColor="@color/text_primary"
         android:textSize="32sp"
         android:textStyle="bold"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/appIdentityRow" />
+        app:layout_constraintTop_toBottomOf="@id/mainIllustration" />
 
     <TextView
         android:id="@+id/descriptionText"
@@ -79,13 +58,13 @@
         android:layout_marginBottom="8dp"
         android:text="Scan Nearby Devices"
         android:textAllCaps="false"
-        android:textColor="@color/accent_button_text"
+        android:textColor="@color/background_main"
         android:textSize="17sp"
         android:textStyle="bold"
         app:backgroundTint="@color/accent_cyan"
         app:cornerRadius="30dp"
         app:icon="@drawable/ic_laptop"
-        app:iconTint="@color/accent_button_text"
+        app:iconTint="@color/background_main"
         app:iconGravity="textStart"
         app:iconPadding="10dp"
         app:layout_constraintBottom_toBottomOf="parent"
@@ -100,7 +79,7 @@
         android:layout_marginHorizontal="16dp"
         android:layout_marginBottom="8dp"
         android:visibility="gone"
-        app:cardBackgroundColor="@color/surface_card"
+        app:cardBackgroundColor="#111827"
         app:cardCornerRadius="20dp"
         app:strokeColor="@color/accent_cyan"
         app:strokeWidth="1dp"
@@ -165,7 +144,7 @@
                     app:cornerRadius="20dp"
                     android:paddingHorizontal="20dp"
                     android:text="Connect"
-                    android:textColor="@color/accent_button_text"
+                    android:textColor="@color/background_main"
                     android:textSize="13sp"
                     android:textAllCaps="false"
                     android:textStyle="bold" />
