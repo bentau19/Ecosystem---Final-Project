@@ -42,21 +42,24 @@ public class SettingsUseCase {
      * @param clipboardEnabled    {@code true} if clipboard sync is enabled.
      * @param webcamEnabled       {@code true} if webcam mirroring is enabled.
      * @param backupEnabled       {@code true} if backup sessions are allowed.
+     * @param darkModeEnabled     {@code true} if dark mode is active.
      */
     public void pushToolsState(boolean virtualDriveEnabled,
                                boolean clipboardEnabled,
                                boolean webcamEnabled,
-                               boolean backupEnabled) {
+                               boolean backupEnabled,
+                               boolean darkModeEnabled) {
         try {
             JSONObject payload = new JSONObject();
             payload.put("virtualDrive", virtualDriveEnabled);
             payload.put("clipboard",    clipboardEnabled);
             payload.put("webcam",       webcamEnabled);
             payload.put("backup",       backupEnabled);
+            payload.put("darkMode",     darkModeEnabled);
 
             Log.d(TAG, "Pushing tool state to PC: virtualDrive=" + virtualDriveEnabled
                     + ", clipboard=" + clipboardEnabled + ", webcam=" + webcamEnabled
-                    + ", backup=" + backupEnabled);
+                    + ", backup=" + backupEnabled + ", darkMode=" + darkModeEnabled);
             transportManager.writeToChannel(
                     SettingsChannels.TOOLS_ANDROID_TO_PC.getValue(),
                     payload.toString()

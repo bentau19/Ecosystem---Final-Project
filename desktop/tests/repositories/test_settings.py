@@ -28,11 +28,11 @@ def test_save_then_load_round_trips_autostart(repository: SettingsRepository) ->
     assert repository.load() == SettingsDTO(autostart=False)
 
 
-def test_save_persists_only_autostart_to_disk(repository: SettingsRepository) -> None:
-    repository.save(SettingsDTO(autostart=False))
+def test_save_persists_settings_to_disk(repository: SettingsRepository) -> None:
+    repository.save(SettingsDTO(autostart=False, dark_mode=True))
 
     data = json.loads(repository._path.read_text(encoding="utf-8"))
-    assert data == {"autostart": False}
+    assert data == {"autostart": False, "dark_mode": True}
 
 
 def test_load_defaults_when_key_missing(repository: SettingsRepository) -> None:

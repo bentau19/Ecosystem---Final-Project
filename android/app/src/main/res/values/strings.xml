@@ -95,6 +95,10 @@
     <!-- Settings screen -->
     <string name="settings_title">Settings</string>
     <string name="settings_back_desc">Go back</string>
+    <string name="settings_section_appearance">APPEARANCE</string>
+    <string name="settings_dark_mode_title">Dark mode</string>
+    <string name="settings_dark_mode_sub">Synced with PC</string>
+    <string name="settings_dark_mode_desc">Toggle dark color scheme</string>
     <string name="settings_section_app">APP</string>
     <string name="settings_auto_launch_title">Launch on startup</string>
     <string name="settings_auto_launch_sub">Start SyncDose when the device boots</string>

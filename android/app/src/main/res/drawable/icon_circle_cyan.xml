@@ -3,8 +3,8 @@
      Matches the SyncDose handler-dialog icon-circle style. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">
-    <solid android:color="#1F2196F3" />
+    <solid android:color="#1F38BDF8" />
     <stroke
         android:width="1dp"
-        android:color="#732196F3" />
+        android:color="#7338BDF8" />
 </shape>
