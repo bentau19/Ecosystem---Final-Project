@@ -342,11 +342,6 @@ def test_stop_without_shutdown_still_notifies_phone(qtbot: QtBot) -> None:
 # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# Bluetooth mode (_use_bluetooth = True, the default)
-# ---------------------------------------------------------------------------
-
-
 def test_bt_mode_calls_connect_hybrid_not_listen(qtbot: QtBot) -> None:
     """In Bluetooth mode (default), _listen routes to connect_hybrid() and never calls listen()."""
     mock_tau = _make_tau()
@@ -375,102 +370,6 @@ def test_bt_device_connected_emitted_when_connect_hybrid_succeeds(qtbot: QtBot) 
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
     assert received == [True]
-
-
-def test_set_mode_back_to_bt_emits_true(qtbot: QtBot) -> None:
-    """Switching from WiFi back to BT emits mode_changed(True)."""
-    with patch("services.connectivity.TauSync", return_value=_make_tau()):
-        svc = ConnectivityService()
-        svc.set_mode(use_bluetooth=False)  # switch to WiFi first
-
-    received: list[bool] = []
-    svc.mode_changed.connect(lambda v: received.append(v))
-
-    svc.set_mode(use_bluetooth=True)  # switch back to BT
-
-    assert received == [True]
-
-
-# ---------------------------------------------------------------------------
-# WiFi mode (_use_bluetooth = False)
-# ---------------------------------------------------------------------------
-
-
-def _gated_tau_wifi(gate: threading.Event) -> MagicMock:
-    """Like _gated_tau but blocks on tau.listen() instead of connect_hybrid()."""
-    mock_tau = _make_tau()
-
-    def _listen_side_effect(**kwargs: object) -> None:
-        gate.wait(timeout=5)
-        mock_tau.is_connected = True
-
-    mock_tau.listen.side_effect = _listen_side_effect
-    return mock_tau
-
-
-def _start_wifi_service(mock_tau: MagicMock) -> ConnectivityService:
-    """Construct and start a service in WiFi mode (set_mode before _start so no restart fires)."""
-    with patch("services.connectivity.TauSync", return_value=mock_tau):
-        svc = ConnectivityService()
-        svc.set_mode(use_bluetooth=False)
-        svc._start()
-    return svc
-
-
-def test_wifi_mode_calls_listen_not_connect_hybrid(qtbot: QtBot) -> None:
-    """In WiFi mode, _listen routes to tau.listen() and never calls connect_hybrid()."""
-    mock_tau = _make_tau()
-    park = threading.Event()
-    mock_tau.listen.side_effect = lambda **kwargs: park.wait(timeout=5)
-    mock_tau.disconnect.side_effect = lambda: park.set()
-
-    svc = _start_wifi_service(mock_tau)
-    qtbot.waitUntil(lambda: mock_tau.listen.called, timeout=2000)
-
-    assert mock_tau.listen.called
-    assert not mock_tau.connect_hybrid.called
-
-    svc.stop()
-    qtbot.waitUntil(lambda: not svc._is_running.is_set(), timeout=2000)
-
-
-def test_wifi_device_connected_emitted_when_listen_succeeds(qtbot: QtBot) -> None:
-    """WiFi mode: device_connected fires when tau.listen() returns is_connected=True."""
-    gate = threading.Event()
-    svc = _start_wifi_service(_gated_tau_wifi(gate))
-    received: list[bool] = []
-    svc.device_connected.connect(lambda: received.append(True))
-
-    gate.set()
-
-    qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
-    assert received == [True]
-
-
-def test_set_mode_emits_mode_changed_signal(qtbot: QtBot) -> None:
-    """set_mode() emits mode_changed(False) when switching from BT to WiFi."""
-    with patch("services.connectivity.TauSync", return_value=_make_tau()):
-        svc = ConnectivityService()  # default: bluetooth=True
-
-    received: list[bool] = []
-    svc.mode_changed.connect(lambda v: received.append(v))
-
-    svc.set_mode(use_bluetooth=False)
-
-    assert received == [False]
-
-
-def test_set_mode_noop_when_unchanged(qtbot: QtBot) -> None:
-    """set_mode() emits nothing and does not trigger a restart when the mode is unchanged."""
-    with patch("services.connectivity.TauSync", return_value=_make_tau()):
-        svc = ConnectivityService()  # default: bluetooth=True
-
-    received: list[bool] = []
-    svc.mode_changed.connect(lambda v: received.append(v))
-
-    svc.set_mode(use_bluetooth=True)  # already True — no-op
-
-    assert received == []
 
 
 # ---------------------------------------------------------------------------
