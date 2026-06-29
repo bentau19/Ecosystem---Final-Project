@@ -1,4 +1,7 @@
 {
   "autostart": true,
-  "dark_mode": true
+  "virtual_drive_enabled": true,
+  "clipboard_enabled": true,
+  "webcam_enabled": true,
+  "backup_enabled": true
 }
