@@ -70,7 +70,7 @@ Important files:
 
 - `MainActivity.java` - Main host activity.
 - `ShareReceiverActivity.java` - Invisible trampoline Activity for Android's share sheet (`ACTION_SEND`). Has no UI — it validates the intent, checks connection state, and forwards the file URI directly to `ConnectivityService` via a `startService()` Intent with `FLAG_GRANT_READ_URI_PERMISSION` (URI Intent Delegation). This is required to transfer the share-sheet URI grant from the Activity to the Service, since URI permissions are not automatically inherited by services. Calls `finish()` immediately. Not part of the Single Activity Architecture; acts as a system entry point (similar role to a `BroadcastReceiver`).
-- `fragments/ConnectFragment.java` - Connection screen and QR flow.
+- `fragments/ConnectFragment.java` - Connection screen and Bluetooth discovery flow.
 - `fragments/ActionsFragment.java` - Main connected dashboard/actions screen.
 - `fragments/BackupFragment.java` - Backup configuration and progress screen. Lets the user choose a backup mode (all media or a specific folder), configure options, start the transfer, and monitor progress via `BackupViewModel`.
 - `fragments/FolderPickerFragment.java` - Bottom-sheet fragment for browsing and selecting a folder on the device filesystem. Used by `BackupFragment` to pick the source folder for folder-mode backups.
@@ -87,7 +87,7 @@ viewmodel/
 
 Important files:
 
-- `MainViewModel.java` - Coordinates connection state and user actions (QR scan, BLE discovery, hybrid connect, disconnect, refresh stats). Also owns the one-shot `justDisconnected` / `justDisconnectedByPc` flags that prevent `ConnectFragment.onResume` from auto-reconnecting after an intentional disconnect.
+- `MainViewModel.java` - Coordinates connection state and user actions (BLE discovery, hybrid connect, disconnect, refresh stats). Also owns the one-shot `justDisconnected` / `justDisconnectedByPc` flags that prevent `ConnectFragment.onResume` from auto-reconnecting after an intentional disconnect.
 - `MainViewModelFactory.java` - Manual dependency creation for `MainViewModel`.
 - `FileTransferViewModel.java` - Coordinates incoming file transfer state (PC → Android). Exposes `getPendingRequest()` and `getTransferStatus()` LiveData, and handles user Accept / Reject decisions.
 - `BackupViewModel.java` - Coordinates the backup scan phase. Registers itself as `BackupRepository.ScanActionListener`, owns the background thread that runs `ScanBackupFilesUseCase`, and feeds results back to `BackupRepository`. Does not touch the network — the scan→transfer handoff is owned by the repository.
@@ -115,7 +115,6 @@ Subfolders:
 
 Current use cases:
 
-- `ParseQrDataUseCase.java`
 - `ConnectToDeviceUseCase.java`
 - `PairWithPcUseCase.java` - Wraps BLE discovery and bonding. `discover()` scans for the PC's BLE beacon; `pair()` bonds with the found MAC and saves it for instant reconnect. `savedAddress()` / `savedPcName()` expose the remembered PC so `ConnectFragment.onResume` can skip scanning and connect directly.
 - `DisconnectDeviceUseCase.java`
@@ -712,18 +711,6 @@ These values are read from `SystemDataSource` and sent through `ConnectivityServ
 
 The desktop can also request values later through registered device-info channels handled by `DeviceInfoChannelHandler`.
 
-## Serializers
-
-Location:
-
-```text
-serializers/
-```
-
-Important file:
-
-- `DeviceSerializer.java` - Converts device objects to and from JSON.
-
 ## Utils
 
 Location:
@@ -767,7 +754,7 @@ Current tests include:
 
 - `DeviceRepositoryTest.java` - Covers connection state, battery/IP updates, `connectHybrid()` (BT path), and `justDisconnectedByPc` consume-once semantics.
 - `DeviceSerializerTest.java`
-- `MainViewModelTest.java` - Covers QR handling, hybrid connect, BLE discovery lifecycle (`startDiscovery`, `cancelDiscovery`), and `justDisconnected` / `justDisconnectedByPc` one-shot flags.
+- `MainViewModelTest.java` - Covers hybrid connect, BLE discovery lifecycle (`startDiscovery`, `cancelDiscovery`), and `justDisconnected` / `justDisconnectedByPc` one-shot flags.
 - `FileTransferRepositoryTest.java` - Verifies all state-machine transitions (IDLE → PENDING_APPROVAL → RECEIVING → COMPLETED / REJECTED / FAILED → IDLE) and that `FileTransferActionListener` / `IncomingRequestListener` callbacks fire at the correct moments.
 - `FileTransferViewModelTest.java` - Verifies that `acceptTransfer()`, `rejectTransfer()`, and `reset()` produce the expected LiveData state changes, and that `getPendingRequest()` / `getTransferStatus()` correctly reflect repository state.
 - `SendFileRepositoryTest.java` - Verifies all state-machine transitions for the Android→PC send flow (IDLE → WAITING_FOR_RESPONSE → SENDING → COMPLETED / REJECTED / FAILED → IDLE) and that `SendFileActionListener` fires at the correct moments.
