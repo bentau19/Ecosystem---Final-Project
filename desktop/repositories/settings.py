@@ -35,13 +35,16 @@ class SettingsRepository:
         """
         try:
             if not self._path.exists():
-                return SettingsDTO(autostart=_DEFAULTS.autostart)
+                return SettingsDTO(autostart=_DEFAULTS.autostart, dark_mode=_DEFAULTS.dark_mode)
             with open(self._path, "r", encoding="utf-8") as fh:
                 data: dict = json.load(fh)
-            return SettingsDTO(autostart=bool(data.get("autostart", _DEFAULTS.autostart)))
+            return SettingsDTO(
+                autostart=bool(data.get("autostart", _DEFAULTS.autostart)),
+                dark_mode=bool(data.get("dark_mode", _DEFAULTS.dark_mode)),
+            )
         except (json.JSONDecodeError, OSError, TypeError, ValueError):
             # Corrupt file or permission error — return defaults silently.
-            return SettingsDTO(autostart=_DEFAULTS.autostart)
+            return SettingsDTO(autostart=_DEFAULTS.autostart, dark_mode=_DEFAULTS.dark_mode)
 
     def save(self, settings: SettingsDTO) -> None:
         """Persist *settings* to disk atomically.
@@ -52,7 +55,7 @@ class SettingsRepository:
         tmp = self._path.with_suffix(".tmp")
         try:
             with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump({"autostart": settings.autostart}, fh, indent=2)
+                json.dump({"autostart": settings.autostart, "dark_mode": settings.dark_mode}, fh, indent=2)
             tmp.replace(self._path)
         except OSError:
             # Best-effort write — if the disk is full or the path is read-only

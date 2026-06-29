@@ -84,6 +84,13 @@ public class SettingsViewModel extends AndroidViewModel {
         return repository.getAutoLaunchLiveData();
     }
 
+    /**
+     * Dark mode enabled state. Synced bidirectionally with the PC.
+     */
+    public LiveData<Boolean> getDarkMode() {
+        return repository.getDarkModeLiveData();
+    }
+
     // ── Synchronous reads (used for initial switch state before observers fire) ─
 
     public boolean isVirtualDriveEnabled() {
@@ -104,6 +111,10 @@ public class SettingsViewModel extends AndroidViewModel {
 
     public boolean isAutoLaunch() {
         return repository.isAutoLaunch();
+    }
+
+    public boolean isDarkMode() {
+        return repository.isDarkMode();
     }
 
     // ── User actions ──────────────────────────────────────────────────────────
@@ -150,6 +161,14 @@ public class SettingsViewModel extends AndroidViewModel {
      */
     public void setAutoLaunch(boolean enabled) {
         repository.setAutoLaunch(enabled);
+    }
+
+    /**
+     * Persists the dark mode preference and pushes all settings (including darkMode) to the PC.
+     */
+    public void setDarkMode(boolean enabled) {
+        repository.setDarkMode(enabled);
+        pushSettingsToService();
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

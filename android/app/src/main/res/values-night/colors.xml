@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="background_main">#111827</color>
+
+    <color name="surface_dark">#141C26</color>
+    <color name="border_color">#1E3A4A</color>
+
+    <color name="accent_cyan">#38BDF8</color>
+    <color name="accent_purple">#7B61FF</color>
+    <color name="accent_pink">#FF5C87</color>
+    <color name="status_green">#00E676</color>
+
+    <color name="text_primary">#E2E8F0</color>
+    <color name="white">#FFFFFF</color>
+    <color name="text_muted">#64748B</color>
+
+    <color name="surface_card">#1a2535</color>
+    <color name="stroke_card">#243547</color>
+    <color name="icon_blue">#4592AF</color>
+
+    <!-- In dark mode buttons sit on cyan — dark text still has good contrast -->
+    <color name="accent_button_text">#0F172A</color>
+</resources>

@@ -78,14 +78,18 @@ public class SettingsChannelHandler implements ChannelHandler {
                     settingsRepository.isWebcamEnabled());
             boolean bk = payload.optBoolean("backup",
                     settingsRepository.isBackupEnabled());
+            boolean dm = payload.optBoolean("darkMode",
+                    settingsRepository.isDarkMode());
 
             settingsRepository.setVirtualDriveEnabledFromPc(vd);
             settingsRepository.setClipboardEnabledFromPc(cb);
             settingsRepository.setWebcamEnabledFromPc(wc);
             settingsRepository.setBackupEnabledFromPc(bk);
+            settingsRepository.setDarkModeFromPc(dm);
 
             Log.d(TAG, "Settings received from PC: virtualDrive=" + vd
-                    + ", clipboard=" + cb + ", webcam=" + wc + ", backup=" + bk);
+                    + ", clipboard=" + cb + ", webcam=" + wc + ", backup=" + bk
+                    + ", darkMode=" + dm);
 
         } catch (Exception e) {
             Log.e(TAG, "Failed to receive settings from PC: " + e.getMessage());

@@ -92,7 +92,7 @@
         android:backgroundTint="@color/accent_cyan"
         android:text="Start Streaming"
         android:textAllCaps="false"
-        android:textColor="@color/background_main"
+        android:textColor="@color/accent_button_text"
         android:textSize="17sp"
         android:textStyle="bold"
         app:layout_constraintBottom_toBottomOf="parent"

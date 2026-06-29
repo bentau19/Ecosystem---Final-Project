@@ -410,7 +410,7 @@
         android:enabled="false"
         android:text="@string/backup_start"
         android:textAllCaps="false"
-        android:textColor="@color/background_main"
+        android:textColor="@color/accent_button_text"
         android:textSize="17sp"
         android:textStyle="bold"
         app:layout_constraintBottom_toBottomOf="parent"

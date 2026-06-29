@@ -39,6 +39,7 @@ public class SettingsRepository {
     private static final String KEY_CLIPBOARD_ENABLED  = "clipboard_enabled";
     private static final String KEY_WEBCAM_ENABLED     = "webcam_enabled";
     private static final String KEY_BACKUP_ENABLED     = "backup_enabled";
+    private static final String KEY_DARK_MODE          = "dark_mode";
 
     // ── Singleton ─────────────────────────────────────────────────────────────
 
@@ -79,6 +80,7 @@ public class SettingsRepository {
     private final MutableLiveData<Boolean> clipboardEnabled    = new MutableLiveData<>();
     private final MutableLiveData<Boolean> webcamEnabled       = new MutableLiveData<>();
     private final MutableLiveData<Boolean> backupEnabled       = new MutableLiveData<>();
+    private final MutableLiveData<Boolean> darkMode            = new MutableLiveData<>();
 
     private SettingsRepository(Context appContext) {
         this.appContext = appContext;
@@ -91,6 +93,7 @@ public class SettingsRepository {
         clipboardEnabled.setValue(prefs.getBoolean(KEY_CLIPBOARD_ENABLED, true));
         webcamEnabled.setValue(prefs.getBoolean(KEY_WEBCAM_ENABLED, true));
         backupEnabled.setValue(prefs.getBoolean(KEY_BACKUP_ENABLED, true));
+        darkMode.setValue(prefs.getBoolean(KEY_DARK_MODE, false));
 
         // Reconcile the BootReceiver component with the persisted/default auto-launch
         // value. The receiver is android:enabled="false" in the manifest, so a fresh
@@ -277,5 +280,35 @@ public class SettingsRepository {
     public void setBackupEnabledFromPc(boolean enabled) {
         prefs.edit().putBoolean(KEY_BACKUP_ENABLED, enabled).apply();
         backupEnabled.postValue(enabled);
+    }
+
+    // ── Dark mode ─────────────────────────────────────────────────────────────
+
+    /** Current persisted value — safe to call from any thread. */
+    public boolean isDarkMode() {
+        return prefs.getBoolean(KEY_DARK_MODE, false);
+    }
+
+    /** Observed by {@link com.example.android.ui.fragments.SettingsFragment}. */
+    public LiveData<Boolean> getDarkModeLiveData() {
+        return darkMode;
+    }
+
+    /**
+     * Persists and broadcasts the new dark mode state (user interaction).
+     * After calling this, trigger {@code ACTION_PUSH_SETTINGS} to sync to the PC.
+     */
+    public void setDarkMode(boolean enabled) {
+        prefs.edit().putBoolean(KEY_DARK_MODE, enabled).apply();
+        darkMode.postValue(enabled);
+    }
+
+    /**
+     * Called by {@link com.example.android.network.handlers.SettingsChannelHandler} when the PC
+     * pushes its dark mode state. Does NOT trigger a return-push.
+     */
+    public void setDarkModeFromPc(boolean enabled) {
+        prefs.edit().putBoolean(KEY_DARK_MODE, enabled).apply();
+        darkMode.postValue(enabled);
     }
 }

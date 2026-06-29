@@ -34,6 +34,7 @@ class SettingsContent(QScrollArea):
         """Build and wire the settings content widget."""
         super().__init__(parent)
 
+        self._dark_mode_row: SettingRow
         self._autostart_row: SettingRow
         self._tool_rows: dict[str, SettingRow] = {}
 
@@ -66,6 +67,22 @@ class SettingsContent(QScrollArea):
         page_title.setObjectName("pageTitle")
         layout.addWidget(page_title)
         layout.addSpacing(Spacing.XL)
+
+        # ── Appearance section ────────────────────────────────────────────────
+        layout.addWidget(self._make_section_label("APPEARANCE"))
+        layout.addSpacing(Spacing.SM)
+
+        self._dark_mode_row = SettingRow(
+            title="Dark mode",
+            description="Switch to a dark color scheme. Synced with the phone.",
+            checked=app_state.settings_viewmodel.dark_mode,
+        )
+        layout.addWidget(self._dark_mode_row)
+        layout.addSpacing(Spacing.LG)
+
+        # ── Section divider ────────────────────────────────────────────────────
+        layout.addWidget(self._make_separator())
+        layout.addSpacing(Spacing.LG)
 
         # ── System section ────────────────────────────────────────────────────
         layout.addWidget(self._make_section_label("SYSTEM"))
@@ -131,6 +148,10 @@ class SettingsContent(QScrollArea):
         settings_vm = app_state.settings_viewmodel
         tool_vm = app_state.tool_viewmodel
 
+        # Dark mode (Appearance) — bidirectional with the phone
+        self._dark_mode_row.toggled.connect(settings_vm.set_dark_mode)
+        settings_vm.dark_mode_changed.connect(self._on_dark_mode_changed)
+
         # Autostart (System)
         self._autostart_row.toggled.connect(settings_vm.set_autostart)
         settings_vm.autostart_changed.connect(self._on_autostart_changed)
@@ -145,6 +166,10 @@ class SettingsContent(QScrollArea):
 
         # Re-apply stylesheet when system theme changes.
         theme_manager.theme_changed.connect(self._apply_style)
+
+    @Slot(bool)
+    def _on_dark_mode_changed(self, value: bool) -> None:
+        self._dark_mode_row.set_checked(value)
 
     @Slot(bool)
     def _on_autostart_changed(self, value: bool) -> None:
