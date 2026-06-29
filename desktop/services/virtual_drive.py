@@ -82,11 +82,11 @@ class VirtualDriveService(LifecycleFlag, QObject):
     _READ_SESSION_IDLE_TIMEOUT_S: float = 300.0  # 5 minutes idle
 
     # ─ Connect timeouts ──────────────────────────────────────────────────────
-    _LIST_FULL_TIMEOUT_S: int = 60
+    _LIST_FULL_TIMEOUT_S: int = 120
     # Short so a slow phone causes Explorer lag, not a frozen pipe pool.
-    _META_CONNECT_TIMEOUT_S: int = 3
+    _META_CONNECT_TIMEOUT_S: int = 15
     # Read/write ops stream large payloads — allow more time to establish the channel.
-    _DATA_CONNECT_TIMEOUT_S: int = 30
+    _DATA_CONNECT_TIMEOUT_S: int = 60
 
     # ─ Read / stall timeouts ─────────────────────────────────────────────────
     # Time-since-last-byte stall timer; slow-but-steady links still complete.

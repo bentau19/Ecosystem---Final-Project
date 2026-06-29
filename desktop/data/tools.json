@@ -15,7 +15,7 @@
     "title": "Clipboard Sync",
     "description": "Keep the clipboard in sync between this PC and your phone while a device is connected.",
     "icon_path": ":/icons/clipboard.svg",
-    "is_enabled": false
+    "is_enabled": true
   },
   {
     "title": "Webcam",
