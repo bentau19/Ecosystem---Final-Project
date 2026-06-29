@@ -77,14 +77,11 @@ public class MainActivity extends AppCompatActivity {
             if (status == null) return;
             switch (status) {
                 case CONNECTING:
-                    Toast.makeText(this, "Connecting...", Toast.LENGTH_SHORT).show();
                     break;
                 case CONNECTED:
                     navigateToActions();
-                    Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
                     break;
                 case DISCONNECTING:
-                    Toast.makeText(this, "Disconnecting...", Toast.LENGTH_SHORT).show();
                     break;
                 case DISCONNECTED:
                     // Clear the entire back stack synchronously so any intermediate
