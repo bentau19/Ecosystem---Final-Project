@@ -52,7 +52,6 @@ public class ConnectFragment extends Fragment {
     private MainViewModel viewModel;
 
     // Connection-progress UI
-    private Button btnConnect;
     private Button btnConnectBluetooth;
     private TextView waitingText;
     private View progressConnecting;
@@ -109,8 +108,6 @@ public class ConnectFragment extends Fragment {
         viewModel = new ViewModelProvider(requireActivity()).get(MainViewModel.class);
 
         // 2. Initialize UI components
-        TextView ipDisplayText = view.findViewById(R.id.ipDisplayText);
-        btnConnect = view.findViewById(R.id.btnConnect);
         btnConnectBluetooth = view.findViewById(R.id.btnConnectBluetooth);
         waitingText = view.findViewById(R.id.waitingText);
         progressConnecting = view.findViewById(R.id.progressConnecting);
@@ -130,27 +127,10 @@ public class ConnectFragment extends Fragment {
 
         refreshSavedDeviceCard();
 
-        // 3. Observer: Monitors changes in the unified ConnectionState (local IP display)
-        viewModel.getConnectionState().observe(getViewLifecycleOwner(), state -> {
-            if (state != null && state.getLocalDevice() != null && ipDisplayText != null) {
-                String currentIp = state.getLocalDevice().getIpAddress();
-                ipDisplayText.setText("Your IP: " + currentIp);
-            }
-        });
-
-        // 4. Observer: Drives the connection spinner / error UI off the status machine.
+        // 3. Observer: Drives the connection spinner / error UI off the status machine.
         viewModel.getConnectionStatus().observe(getViewLifecycleOwner(), this::renderConnectionStatus);
 
-        // 5. QR Button: Triggers the QR scan process in MainActivity (existing Wi-Fi path)
-        if (btnConnect != null) {
-            btnConnect.setOnClickListener(v -> {
-                if (getActivity() instanceof MainActivity) {
-                    ((MainActivity) getActivity()).handleConnection();
-                }
-            });
-        }
-
-        // 6. Bluetooth Button: starts BLE discovery (or reuses a remembered PC)
+        // 5. Bluetooth Button: starts BLE discovery (or reuses a remembered PC)
         if (btnConnectBluetooth != null) {
             btnConnectBluetooth.setOnClickListener(v -> onBluetoothConnectClicked());
         }
@@ -337,30 +317,27 @@ public class ConnectFragment extends Fragment {
         setVisible(progressConnecting, true);
         setVisible(tvConnectingStatus, true);
         setVisible(tvConnectError, false);
-        setVisible(btnConnect, false);
         setVisible(btnConnectBluetooth, false);
         setVisible(savedDeviceCard, false);
         setVisible(waitingText, false);
     }
 
-    /** Error message visible; connect buttons re-enabled so the user can retry. */
+    /** Error message visible; connect button re-enabled so the user can retry. */
     private void showErrorUI(String message) {
         if (tvConnectError != null) tvConnectError.setText(message);
         setVisible(progressConnecting, false);
         setVisible(tvConnectingStatus, false);
         setVisible(tvConnectError, true);
-        setVisible(btnConnect, true);
         setVisible(btnConnectBluetooth, true);
         setVisible(waitingText, true);
         refreshSavedDeviceCard();
     }
 
-    /** Default resting state: just the connect buttons and their hint. */
+    /** Default resting state: just the connect button and its hint. */
     private void showIdleUI() {
         setVisible(progressConnecting, false);
         setVisible(tvConnectingStatus, false);
         setVisible(tvConnectError, false);
-        setVisible(btnConnect, true);
         setVisible(btnConnectBluetooth, true);
         setVisible(waitingText, true);
         refreshSavedDeviceCard();

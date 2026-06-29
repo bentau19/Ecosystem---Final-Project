@@ -295,11 +295,7 @@ public class ActionsFragment extends Fragment {
      */
     private static String formatConnectionStatus(RemoteDeviceInfo pc) {
         String typeLabel = pc.getConnectionType() == ConnectionType.BLUETOOTH ? "Bluetooth" : "WiFi";
-        String endpoint = pc.getConnectionEndpointDisplay();
-        if (endpoint == null || endpoint.isEmpty()) {
-            return "Connected via " + typeLabel;
-        }
-        return "Connected via " + typeLabel + " (" + endpoint + ")";
+        return "Connected via " + typeLabel;
     }
 
     /**

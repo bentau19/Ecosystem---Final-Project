@@ -83,8 +83,6 @@ class ConnectivityService(LifecycleFlag, QObject):
     #: :meth:`resolve_phone_approval`. Emitted from a TauSync background thread, so the connection
     #: is a queued (cross-thread) signal — the dialog is never opened off the UI thread.
     phone_approval_requested: Signal = Signal(str)
-    #: Emitted when the connection mode changes. True = Bluetooth, False = WiFi.
-    mode_changed: Signal = Signal(bool)
 
     def __init__(self, parent: QObject | None = None) -> None:
         """Initialize the service and inject the device repository.
@@ -111,7 +109,6 @@ class ConnectivityService(LifecycleFlag, QObject):
         self._approval_event: threading.Event = threading.Event()
         self._approval_result: bool = False
         self._approved_devices: set[str] = _load_approved_devices()
-        self._use_bluetooth: bool = True
         # Set once on app exit (see prepare_shutdown). Makes _teardown_transport use a
         # short, bounded phone-notify timeout so shutdown closes promptly while the phone
         # still receives the DISCONNECT_FROM_PC message it needs to return to its connect screen.
@@ -171,33 +168,6 @@ class ConnectivityService(LifecycleFlag, QObject):
         no lock is needed.  Never reset — the process is exiting.
         """
         self._shutting_down = True
-
-    @property
-    def is_bluetooth_mode(self) -> bool:
-        """``True`` when the service is listening for Bluetooth connections."""
-        return self._use_bluetooth
-
-    def set_mode(self, use_bluetooth: bool) -> None:
-        """Switch between Bluetooth and WiFi connection modes.
-
-        If the service is currently running (listening), it is stopped, the mode
-        is changed, and then restarted — so the new listen() or connect_hybrid()
-        takes effect immediately on the next connection attempt.
-
-        Args:
-            use_bluetooth: ``True`` for Bluetooth+WiFi hybrid mode,
-                ``False`` for WiFi-only (QR code) mode.
-        """
-        if self._use_bluetooth == use_bluetooth:
-            return
-        self._use_bluetooth = use_bluetooth
-        self.mode_changed.emit(use_bluetooth)
-        if self._is_running.is_set():
-            threading.Thread(target=self._restart_after_mode_change, daemon=True).start()
-
-    def _restart_after_mode_change(self) -> None:
-        self._stop()
-        self._start()
 
     def connect_to_device(self, hostname: str) -> None:
         """Initiate an outbound connection to *hostname* on a background thread.
@@ -336,48 +306,39 @@ class ConnectivityService(LifecycleFlag, QObject):
     def _listen(self) -> None:
         # Retries on timeout; surfaces unexpected exceptions via connection_error.
         while self._is_running.is_set() and not self.connected:
-            mode = "bluetooth" if self._use_bluetooth else "wifi"
-            logger.debug("_listen: [%s] waiting for connection", mode)
+            logger.debug("_listen: [bluetooth] waiting for connection")
             try:
-                if self._use_bluetooth:
-                    # Hybrid server: Bluetooth primary + lazy Wi-Fi. Advertises a BLE beacon
-                    # so the phone can discover this PC without typing a MAC address.
-                    self._tau.connect_hybrid(
-                        timeout_seconds=10,
-                        device_name=utils.network.get_pc_name(),
-                        on_approve=self._on_phone_approval,
-                    )
-                else:
-                    # WiFi-only server: plain TCP listen. Phone connects by scanning the QR
-                    # code shown on the login screen (encodes this PC's local IP).
-                    logger.info("_listen: [wifi] listening on %s", utils.network.get_ip())
-                    self._tau.listen(timeout_seconds=10)
+                # Hybrid server: Bluetooth primary + lazy Wi-Fi. Advertises a BLE beacon
+                # so the phone can discover this PC without typing a MAC address.
+                self._tau.connect_hybrid(
+                    timeout_seconds=10,
+                    device_name=utils.network.get_pc_name(),
+                    on_approve=self._on_phone_approval,
+                )
                 # A returning call does NOT guarantee a live peer: a stale transport can
                 # return instantly with is_connected still False (the "phantom connect").
                 # Never emit a phantom device_connected — reset the role so the next
                 # attempt re-arms a real accept, then back off and retry.
                 if not self.connected:
-                    logger.warning("_listen: [%s] returned with no live peer — resetting", mode)
+                    logger.warning("_listen: [bluetooth] returned with no live peer — resetting")
                     self._reset_transport()
                     time.sleep(1)
                     continue
-                logger.info("_listen: device connected (mode=%s)", mode)
+                logger.info("_listen: device connected")
                 self.device_connected.emit()
             except TimeoutError:
-                logger.debug("_listen: [%s] timed out — retrying", mode)
+                logger.debug("_listen: [bluetooth] timed out — retrying")
                 # Defense-in-depth: fully tear the transport down before the next attempt so a
                 # still-advertising Bluetooth RFCOMM listener can never accumulate across retries.
-                # connect_hybrid already self-cleans on timeout; this also covers the wifi listen()
-                # path and guards against any future regression there.
                 self._reset_transport()
                 time.sleep(1)
             except Exception as exc:
                 # A deliberate stop() aborts the blocking listen() via
                 # tau.disconnect() — that is normal teardown, not an error.
                 if not self._is_running.is_set():
-                    logger.debug("_listen: [%s] aborted by stop() — exiting", mode)
+                    logger.debug("_listen: [bluetooth] aborted by stop() — exiting")
                     return
-                logger.error("_listen: [%s] error: %s", mode, exc)
+                logger.error("_listen: [bluetooth] error: %s", exc)
                 self.connection_error.emit(str(exc))
                 # Clear any stuck role (e.g. a surfaced "already connected" RuntimeError)
                 # so the next attempt can re-arm a real listen.

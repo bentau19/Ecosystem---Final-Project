@@ -1,20 +1,18 @@
 import sys
 
-from PySide6.QtCore import Qt, QRectF, QTimer, Slot
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen
+from PySide6.QtCore import Qt, QRectF, QTimer
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
 
 import utils.styles
-from app.app_state import app_state
 from app.theme_manager import theme_manager
 from resources.colors import LoginColors, LightLoginColors, Colors, LightColors
-from resources.paths import Icons, LoginStyles
+from resources.paths import LoginStyles
 from utils.styles import themed
 from resources.spacing import Spacing
 from views.widgets.indicators.pulsing_dot import PulsingDot
-from views.widgets.login.qr import QR
 from views.widgets.logo_widget import Logo, LogoNameLabel
 
 
@@ -85,44 +83,25 @@ class _BtSonarWidget(QWidget):
 
 
 class LeftPanel(QWidget):
-    """Left panel of the login screen.
-
-    In Bluetooth mode (default) displays a Bluetooth icon and connection
-    instructions. In WiFi mode displays the live QR code and scan
-    instructions (identical to the previous design). A small toggle link
-    at the bottom lets the user switch between the two modes.
-    """
+    """Left panel of the login screen. Displays the Bluetooth waiting indicator."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._device_vm = app_state.device_viewmodel
 
         self._logo: Logo
         self._logo_name: LogoNameLabel
         self._app_description: QLabel
 
-        # WiFi panel widgets
-        self._qr: QR
-        self._generic_scan_instructions: QLabel
-        self._detailed_scan_instructions: QLabel
-        self._refresh_button: QPushButton
-
-        # Bluetooth panel widgets
         self._bt_icon_label: QWidget
         self._bt_title: QLabel
         self._bt_instructions: QLabel
 
-        # Shared
         self._waiting_for_connection: QWidget
-        self._switch_mode_btn: QPushButton
-        self._wifi_content: QWidget
         self._bt_content: QWidget
 
         self._setup_ui()
         self._setup_style()
         self._connect_signals()
-        # Initialise to the current service mode (Bluetooth by default).
-        self._update_mode(self._device_vm.is_bluetooth_mode)
 
     # ── Setup ──────────────────────────────────────────────────────────────────
 
@@ -137,22 +116,12 @@ class LeftPanel(QWidget):
         self._logo_name = self._create_logo_name()
         self._app_description = self._create_description()
 
-        # WiFi content
-        self._qr = self._create_qr()
-        self._generic_scan_instructions = self._create_generic_scan_instructions()
-        self._detailed_scan_instructions = self._create_detailed_scan_instructions()
-        self._refresh_button = self._create_refresh_button()
-        self._wifi_content = self._build_wifi_content()
-
-        # Bluetooth content
         self._bt_icon_label = _BtSonarWidget()
         self._bt_title = self._create_bt_title()
         self._bt_instructions = self._create_bt_instructions()
         self._bt_content = self._build_bt_content()
 
-        # Shared
         self._waiting_for_connection = self._create_waiting_for_connection_widget()
-        self._switch_mode_btn = self._create_switch_mode_button()
 
     def _setup_layout(self) -> None:
         layout = QVBoxLayout(self)
@@ -167,33 +136,15 @@ class LeftPanel(QWidget):
 
         layout.addSpacing(Spacing.MD)
 
-        # Both content panels live here; only one is visible at a time.
-        layout.addWidget(self._wifi_content)
         layout.addWidget(self._bt_content)
 
         layout.addSpacing(Spacing.SM)
 
         layout.addWidget(self._waiting_for_connection, alignment=Qt.AlignmentFlag.AlignHCenter)
-        layout.addSpacing(Spacing.XS)
-        layout.addWidget(self._switch_mode_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         layout.addStretch(3)
 
     # ── Content panel builders ─────────────────────────────────────────────────
-
-    def _build_wifi_content(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(self._qr, alignment=Qt.AlignmentFlag.AlignHCenter)
-        layout.addSpacing(Spacing.LG)
-        layout.addWidget(self._generic_scan_instructions,
-                         alignment=Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(self._detailed_scan_instructions)
-        layout.addSpacing(Spacing.XS)
-        layout.addWidget(self._refresh_button, alignment=Qt.AlignmentFlag.AlignHCenter)
-        return widget
 
     def _build_bt_content(self) -> QWidget:
         widget = QWidget()
@@ -208,14 +159,6 @@ class LeftPanel(QWidget):
         return widget
 
     # ── Widget factories ───────────────────────────────────────────────────────
-
-    @staticmethod
-    def _create_qr() -> QR:
-        qr_size: int = 420
-        qr = QR()
-        qr.setMaximumSize(qr_size, qr_size)
-        qr.setObjectName("QR")
-        return qr
 
     @staticmethod
     def _create_logo() -> Logo:
@@ -234,32 +177,6 @@ class LeftPanel(QWidget):
         logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo_label.setObjectName("LogoName")
         return logo_label
-
-    @staticmethod
-    def _create_generic_scan_instructions() -> QLabel:
-        label = QLabel()
-        label.setText("Scan with SyncDose on your phone")
-        label.setObjectName("GenericScanInstructions")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        return label
-
-    @staticmethod
-    def _create_detailed_scan_instructions() -> QLabel:
-        label = QLabel()
-        label.setText("Open the app → tap the scan icon → point your camera here")
-        label.setWordWrap(True)
-        label.setObjectName("DetailedScanInstructions")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        return label
-
-    @staticmethod
-    def _create_refresh_button() -> QPushButton:
-        button = QPushButton()
-        button.setIcon(QIcon(Icons.REFRESH))
-        button.setText("  Refresh QR")
-        button.setFixedSize(140, 36)
-        button.setObjectName("RefreshButton")
-        return button
 
     @staticmethod
     def _create_bt_title() -> QLabel:
@@ -289,25 +206,6 @@ class LeftPanel(QWidget):
         layout.addWidget(label)
         return widget
 
-    @staticmethod
-    def _create_switch_mode_button() -> QPushButton:
-        button = QPushButton()
-        button.setObjectName("SwitchModeButton")
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setFlat(True)
-        return button
-
-    # ── Mode switching ─────────────────────────────────────────────────────────
-
-    @Slot(bool)
-    def _update_mode(self, use_bluetooth: bool) -> None:
-        self._bt_content.setVisible(use_bluetooth)
-        self._wifi_content.setVisible(not use_bluetooth)
-        if use_bluetooth:
-            self._switch_mode_btn.setText("Switch to WiFi mode →")
-        else:
-            self._switch_mode_btn.setText("← Switch to Bluetooth mode")
-
     # ── Style ──────────────────────────────────────────────────────────────────
 
     def _setup_style(self) -> None:
@@ -318,14 +216,7 @@ class LeftPanel(QWidget):
         self.setStyleSheet(qss)
 
     def _connect_signals(self) -> None:
-        self._refresh_button.clicked.connect(self._refresh_qr_code)
-        self._switch_mode_btn.clicked.connect(self._device_vm.toggle_connection_mode)
-        self._device_vm.mode_changed.connect(self._update_mode)
         theme_manager.theme_changed.connect(self._setup_style)
-
-    @Slot()
-    def _refresh_qr_code(self) -> None:
-        self._qr.refresh_qr()
 
 
 if __name__ == '__main__':
