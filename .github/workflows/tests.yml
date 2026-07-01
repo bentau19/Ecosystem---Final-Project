@@ -72,6 +72,9 @@ jobs:
             desktop/native/windows/pipe/build/Release/pipe_module.cp313-win_amd64.pyd `
             desktop/native/windows/pipe/
 
+      - name: Compile Qt resources
+        run: pyside6-rcc desktop/resources/syncdose.qrc -o desktop/resources_qrc.py
+
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen

@@ -172,7 +172,21 @@ role as a deterministic tiebreaker.
 
 ## CI/CD
 
-GitHub Actions (`.github/workflows/desktop.yml`) runs on every push:
+Two GitHub Actions workflows live under `.github/workflows/`:
 
-1. **test** — builds TauSync DLL → builds native pipe module (MSVC) → `pip install` → `pytest desktop/`
-2. **build** — builds both PyInstaller executables (SyncDose + FileHandler) → `dotnet build` Bundle → uploads `SyncDoseSetup.exe` artifact
+### `tests.yml` — runs on **every push**
+
+| Job | Runner | Steps |
+|---|---|---|
+| `android-test` | ubuntu | `./gradlew :app:testDebugUnitTest` |
+| `windows-test` | windows | build TauSync DLL → install deps → build native pipe module (MSVC) → install WinFSP → compile Qt resources → `pytest desktop/` |
+| `filedetection-test` | ubuntu | `pytest FileDetection/tests/` |
+| `tausync-android-test` | ubuntu | TauSync Android integration tests |
+
+### `build_release.yml` — runs on pushes to `main`, `v*.*.*` tags, and manual dispatch
+
+| Job | Runner | Steps |
+|---|---|---|
+| `windows-build` | windows | build TauSync DLL → build native pipe + VirtualDrive modules → install deps → compile Qt resources → PyInstaller (SyncDose + FileHandler) → download bundle prerequisites (.NET 8, WinFSP, OBS) → `dotnet build` Bundle → upload `SyncDoseSetup.exe` |
+| `android-build` | ubuntu | decode keystore → `./gradlew :app:assembleRelease` → upload signed APK |
+| `deploy` | ubuntu | **only on `v*.*.*` tags** — download both artifacts → create GitHub Release with installer + APK |

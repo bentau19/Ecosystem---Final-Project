@@ -56,6 +56,9 @@ jobs:
           pip install TauSync/windows
           pip install pyinstaller
 
+      - name: Compile Qt resources
+        run: pyside6-rcc desktop/resources/syncdose.qrc -o desktop/resources_qrc.py
+
       - name: Build EXEs
         run: |
           pyinstaller desktop/installer/Package/specs/main_app.spec --distpath desktop/installer/Package/dist
