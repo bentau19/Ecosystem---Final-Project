@@ -47,6 +47,12 @@ public class TauSyncTransportManager implements TransportManager {
     private static final int BT_CONNECT_INNER_TIMEOUT_SECONDS = 10;
     private static final int BT_CONNECT_OUTER_TIMEOUT_SECONDS = 11;
 
+    // Extra wait granted when the PC announces APPROVAL_PENDING mid-handshake: the operator's
+    // accept/reject dialog is open, so aborting at the normal timeout would kill a connection the
+    // PC is about to accept. The PC auto-rejects at 55 s and the library handshake times out at
+    // 60 s, so the in-flight connect always resolves (accept, reject, or timeout) within this.
+    private static final int APPROVAL_WAIT_EXTENSION_SECONDS = 60;
+
     // State management
     private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
     // volatile: written on sendDisconnectToPC / PeerRequestHandler threads, read on the
@@ -175,24 +181,28 @@ public class TauSyncTransportManager implements TransportManager {
                         currentRemoteDevice.getConnectionType() == ConnectionType.BLUETOOTH;
                 final int outerTimeoutSeconds = hybrid ? BT_CONNECT_OUTER_TIMEOUT_SECONDS : 5;
 
-                java.util.concurrent.Future<?> connectFuture = java.util.concurrent.Executors
-                        .newSingleThreadExecutor()
-                        .submit(() -> {
-                            if (hybrid) {
-                                tauSync.connectHybrid(
-                                        applicationContext,
-                                        currentRemoteDevice.getMacAddress(),
-                                        BT_CONNECT_INNER_TIMEOUT_SECONDS);
-                            } else {
-                                tauSync.connectTo(currentRemoteDevice.getPcIp(), 4);
-                            }
+                java.util.concurrent.ExecutorService connectRunner =
+                        java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+                            Thread thread = new Thread(runnable, "TauSync-ConnectAttempt");
+                            thread.setDaemon(true);
+                            return thread;
                         });
-
                 try {
-                    connectFuture.get(outerTimeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
-                } catch (java.util.concurrent.TimeoutException e) {
-                    connectFuture.cancel(true);
-                    throw new Exception("Connection timed out after " + outerTimeoutSeconds + " seconds");
+                    java.util.concurrent.Future<?> connectFuture = connectRunner.submit(() -> {
+                        if (hybrid) {
+                            tauSync.connectHybrid(
+                                    applicationContext,
+                                    currentRemoteDevice.getMacAddress(),
+                                    BT_CONNECT_INNER_TIMEOUT_SECONDS);
+                        } else {
+                            tauSync.connectTo(currentRemoteDevice.getPcIp(), 4);
+                        }
+                    });
+                    awaitConnectResult(connectFuture, hybrid, outerTimeoutSeconds);
+                } finally {
+                    // One-shot executor: without this shutdown its worker thread lives for the
+                    // rest of the process, leaking one thread per connection attempt.
+                    connectRunner.shutdown();
                 }
 
                 // connect success
@@ -214,10 +224,70 @@ public class TauSyncTransportManager implements TransportManager {
     }
 
     /**
+     * Waits for the in-flight connect task. The base wait covers a normal connect + handshake;
+     * when it elapses while the PC operator's approval dialog is open (the server announced
+     * APPROVAL_PENDING over Bluetooth), the wait is extended once so a slow approval cannot abort
+     * a connection the PC is about to accept. Any abort tears the attempt down immediately via
+     * {@link #abortConnectAttempt} — an abandoned handshake must never keep a live Bluetooth
+     * socket behind (the "zombie session" the PC could later complete a connection with).
+     */
+    private void awaitConnectResult(java.util.concurrent.Future<?> connectFuture,
+                                    boolean hybrid,
+                                    int baseTimeoutSeconds) throws Exception {
+        try {
+            connectFuture.get(baseTimeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
+            return;
+        } catch (java.util.concurrent.TimeoutException e) {
+            if (!(hybrid && TauSync.isApprovalPending())) {
+                abortConnectAttempt(connectFuture);
+                throw new Exception("Connection timed out after " + baseTimeoutSeconds + " seconds");
+            }
+        }
+
+        Log.i(TAG, "PC approval in progress — extending connect wait by "
+                + APPROVAL_WAIT_EXTENSION_SECONDS + "s");
+        try {
+            connectFuture.get(APPROVAL_WAIT_EXTENSION_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            abortConnectAttempt(connectFuture);
+            throw new Exception("Connection timed out waiting for approval on the PC");
+        }
+    }
+
+    /**
+     * Cancels an abandoned connect attempt and disconnects its TauSync instance right away, so
+     * the RFCOMM socket, receive loop, and session-control listener are gone before the next
+     * attempt (or the PC operator's late decision) can reach them.
+     */
+    private void abortConnectAttempt(java.util.concurrent.Future<?> connectFuture) {
+        connectFuture.cancel(true);
+        TauSync abandoned = tauSync;
+        tauSync = null;
+        if (abandoned != null) {
+            try {
+                abandoned.disconnect();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /**
      * Handles connection failure and decides whether to retry.
      * Implements exponential backoff with jitter.
      */
     private void handleConnectionFailure(Exception error) {
+        if (com.example.tausync_lib.implementations.management.ConnectionDeclinedException
+                .isDeclined(error)) {
+            // The PC operator explicitly declined — retrying would only re-prompt them with the
+            // same request. Surface the failure and stop.
+            Log.w(TAG, "Connection declined on the PC — not retrying.");
+            updateStatus(TransportStatus.FAILED);
+            if (listener != null) {
+                mainHandler.post(() -> listener.onConnectionError(error));
+            }
+            return;
+        }
+
         currentRetryAttempt++;
 
         if (currentRetryAttempt >= MAX_RETRY_ATTEMPTS) {

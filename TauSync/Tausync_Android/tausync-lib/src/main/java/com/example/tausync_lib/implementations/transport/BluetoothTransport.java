@@ -45,18 +45,22 @@ public class BluetoothTransport implements ITransport {
     private volatile boolean connected;
     private volatile boolean disposed;
     private Thread receiveThread;
-    private Thread reconnectThread;
     private final Semaphore sendLock = new Semaphore(1);
     private OnDataReceivedListener dataReceivedListener;
 
-    /** True only while an explicit {@link #disconnect()} is tearing the transport down — distinguishes a deliberate close (ends the session) from an unexpected drop (triggers reconnect). */
+    /**
+     * Serializes every transition of the connection state machine — {@link #connect},
+     * {@link #disconnect}, and {@link #handleConnectionDropped} — so an unexpected drop's teardown and
+     * an explicit disconnect cannot interleave. Never held across the receive-thread join (which calls
+     * handleConnectionDropped).
+     */
+    private final Object stateLock = new Object();
+
+    /** True only while an explicit {@link #disconnect()} is tearing the transport down — distinguishes a deliberate close from an unexpected drop (which converges to a clean reset). */
     private volatile boolean intentionalClose;
 
     /** True once this transport has been counted in {@link ConnectionContext}, so the matching disconnect decrements exactly once. */
     private volatile boolean counted;
-
-    /** Peer MAC saved on connect so the reconnect loop can re-open the RFCOMM socket. */
-    private volatile String lastDeviceAddress;
 
     /**
      * Completed while a live connection exists; replaced with an incomplete future during a
@@ -114,16 +118,17 @@ public class BluetoothTransport implements ITransport {
             disconnect();
         }
 
-        // Re-arm for a fresh session: a prior disconnect() left intentionalClose set, and the
-        // gate must start incomplete until this connection succeeds.
-        intentionalClose = false;
-        sendGate = new CompletableFuture<>();
+        synchronized (stateLock) {
+            // Re-arm for a fresh session: a prior disconnect()/drop left intentionalClose set, and the
+            // gate must start incomplete until this connection succeeds.
+            intentionalClose = false;
+            sendGate = new CompletableFuture<>();
+        }
 
         long timeoutMs = timeoutSeconds != null
                 ? timeoutSeconds * 1000L
                 : CoreConfig.BT_CONNECT_TIMEOUT_MS;
-        lastDeviceAddress = targetId.trim();
-        return connectAsync(lastDeviceAddress, timeoutMs);
+        return connectAsync(targetId.trim(), timeoutMs);
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -355,27 +360,28 @@ public class BluetoothTransport implements ITransport {
      * and resets state only if this was the last live transport.
      */
     public void disconnect() {
-        if (intentionalClose) return;
-        intentionalClose = true;
-        connected = false;
+        Thread rt;
+        synchronized (stateLock) {
+            if (intentionalClose) return;
+            intentionalClose = true;
+            connected = false;
 
-        // Stop any in-flight reconnect and release a sender parked on the gate.
-        Thread rc = reconnectThread;
-        if (rc != null) rc.interrupt();
-        sendGate.complete(null);
+            // Release a sender parked on the gate. Because handleConnectionDropped also takes
+            // stateLock and re-checks intentionalClose, a receive loop exiting right now cannot race
+            // this teardown.
+            sendGate.complete(null);
 
-        closeQuietly(inputStream);
-        closeQuietly(outputStream);
-        closeQuietly(btSocket);
+            // Close the streams to unblock the receive thread's blocking read so the join below
+            // returns promptly.
+            closeQuietly(inputStream);
+            closeQuietly(outputStream);
+            closeQuietly(btSocket);
 
-        // Decrement the transport count exactly once. Channels are aborted (synthetic FIN so
-        // blocked read() calls return EOF) and state reset only when the count hits zero.
-        if (counted) {
-            counted = false;
-            ConnectionContext.getInstance().notifyTransportDisconnected();
+            rt = receiveThread;
         }
 
-        Thread rt = receiveThread;
+        // Join the receive loop OUTSIDE the lock — it calls handleConnectionDropped on exit, which
+        // needs the lock; holding it here would deadlock.
         if (rt != null && rt != Thread.currentThread()) {
             rt.interrupt();
             try { rt.join(2000); } catch (InterruptedException ignored) {
@@ -383,69 +389,61 @@ public class BluetoothTransport implements ITransport {
             }
         }
 
-        inputStream = null;
-        outputStream = null;
-        btSocket = null;
+        synchronized (stateLock) {
+            // Decrement the transport count exactly once. Channels are aborted (synthetic FIN so
+            // blocked read() calls return EOF) and state reset only when the count hits zero.
+            if (counted) {
+                counted = false;
+                ConnectionContext.getInstance().notifyTransportDisconnected();
+            }
+
+            inputStream = null;
+            outputStream = null;
+            btSocket = null;
+        }
     }
 
     /**
-     * Handles the receive loop exiting on a broken RFCOMM link. An explicit disconnect ends
-     * the session; an unexpected drop instead tears down only the dead socket — keeping the
-     * channels, handlers, and transport count intact — and re-opens the RFCOMM connection so
-     * the session resumes transparently.
+     * Handles the receive loop exiting on a broken RFCOMM link (the peer vanished, moved out of
+     * range, or its own stack reset). Unlike Wi-Fi, the Bluetooth primary does <b>not</b> silently
+     * reconnect: that is incompatible with the per-session ECDH key exchange and the connection
+     * approval, both of which the peer re-runs from scratch on every reconnect. A transport-level
+     * "resume" would adopt the peer's fresh handshake into the old (already-encrypted) session, so the
+     * new KEY_EXCHANGE is ignored and the link can never re-establish. Instead we converge to a clean
+     * disconnected state and notify the context, which (when this was the last live transport) aborts
+     * the channels and resets the session — clearing the derived key and routing. The app then
+     * re-establishes, so the next attempt runs a brand-new handshake.
      */
     private void handleConnectionDropped() {
-        if (intentionalClose || disposed) return;
-        if (!connected) return;
-        connected = false;
+        boolean notifyDisconnected = false;
+        synchronized (stateLock) {
+            // Re-check under the lock: an explicit disconnect may have just set intentionalClose and
+            // is already doing this teardown — don't double it.
+            if (intentionalClose || disposed) return;
+            if (!connected) return;
+            connected = false;
 
-        // Fresh incomplete gate so sends block until the link is back.
-        sendGate = new CompletableFuture<>();
+            // Fresh incomplete gate so a send issued during the drop fails fast instead of writing
+            // into a dead socket.
+            sendGate = new CompletableFuture<>();
 
-        closeQuietly(inputStream);
-        closeQuietly(outputStream);
-        closeQuietly(btSocket);
-        inputStream = null;
-        outputStream = null;
-        btSocket = null;
+            closeQuietly(inputStream);
+            closeQuietly(outputStream);
+            closeQuietly(btSocket);
+            inputStream = null;
+            outputStream = null;
+            btSocket = null;
 
-        startReconnectLoop();
-    }
-
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    private void startReconnectLoop() {
-        reconnectThread = new Thread(this::reconnectLoop, "TauSync-BT-Reconnect");
-        reconnectThread.setDaemon(true);
-        reconnectThread.start();
-    }
-
-    /**
-     * Re-opens the RFCOMM connection with exponential back-off until it succeeds or an
-     * explicit disconnect stops it. On success it restarts the receive loop and opens the send
-     * gate, all on the same channel handlers — the layers above never see the gap.
-     */
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    private void reconnectLoop() {
-        int delayMs = CoreConfig.RECONNECT_INITIAL_DELAY_MS;
-        while (!disposed && !intentionalClose) {
-            try {
-                openRfcommSocket(lastDeviceAddress);
-                inputStream = btSocket.getInputStream();
-                outputStream = btSocket.getOutputStream();
-                connected = true;
-                startReceiveLoop();
-                sendGate.complete(null);
-                return;
-            } catch (Exception e) {
-                closeQuietly(btSocket);
+            if (counted) {
+                counted = false;
+                notifyDisconnected = true;
             }
-            try {
-                Thread.sleep(delayMs);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-            delayMs = Math.min(delayMs * 2, CoreConfig.RECONNECT_MAX_DELAY_MS);
+        }
+
+        // Notify OUTSIDE the lock: notifyTransportDisconnected may abort channels and reset() the
+        // singleton (when the count hits zero), which must not run under this transport's lock.
+        if (notifyDisconnected) {
+            ConnectionContext.getInstance().notifyTransportDisconnected();
         }
     }
 

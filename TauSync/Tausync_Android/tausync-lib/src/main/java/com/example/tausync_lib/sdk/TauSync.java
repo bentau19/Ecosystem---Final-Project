@@ -227,22 +227,41 @@ public final class TauSync {
             globalTarget = "bt:" + trimmedMac;
         }
 
+        ConnectionManager hybridManager = null;
         try {
             // Bluetooth is the primary (always-on) link; the singleton's Wi-Fi SocketTransport is the
             // lazy secondary. The hybrid ConnectionManager connects BT itself and runs the BT_MAGIC
             // handshake — which is also where the peer's Wi-Fi IP is discovered.
             BluetoothTransport bluetooth = new BluetoothTransport(context);
             SocketTransport wifi = ConnectionContext.getInstance().getWifiTransportAsSocket();
-            ConnectionManager hybridManager = new ConnectionManager(bluetooth, wifi);
+            hybridManager = new ConnectionManager(bluetooth, wifi);
             hybridManager.connectTransport(trimmedMac, timeoutSeconds).get();
             manager = hybridManager;
         } catch (Exception e) {
+            // Tear the half-built session down completely. Without this, an abandoned attempt
+            // (e.g. the caller's outer timeout firing during a slow PC approval) leaves the
+            // RFCOMM socket, its receive loop, and the registered session-control listener
+            // alive — a zombie the PC can later "connect" to even though no app owns it.
+            if (hybridManager != null) {
+                try { hybridManager.close(); } catch (Exception ignored) {}
+            }
+            ConnectionContext.getInstance().reset();
             synchronized (roleLock) {
                 globalRole = ROLE_NONE;
                 globalTarget = null;
             }
             throw new RuntimeException("Failed to connect over Bluetooth to " + trimmedMac, e);
         }
+    }
+
+    /**
+     * True while the PC operator's connection approval is in progress for an in-flight
+     * {@link #connectHybrid} — the server announced APPROVAL_PENDING and has not yet accepted or
+     * declined. Callers with their own connect timeout should extend it while this is true so the
+     * operator gets the full approval window.
+     */
+    public static boolean isApprovalPending() {
+        return ConnectionContext.getInstance().isApprovalPending();
     }
 
     /**
@@ -368,8 +387,13 @@ public final class TauSync {
     public void disconnect() {
         if (disposed) return;
 
-        // 1. Close the TCP socket. SocketTransport.disconnect() closes streams/socket
-        //    but does NOT set disposed=true, so the transport can accept a new connection.
+        // 1. Close the transports. In hybrid mode the Bluetooth primary must be closed too —
+        //    it is reachable only through the context slot when the manager was never assigned
+        //    (a failed/abandoned connectHybrid), and leaving it open creates a zombie RFCOMM
+        //    session the PC can still handshake with. Read it before reset() clears the slot.
+        //    SocketTransport.disconnect() closes streams/socket but does NOT set disposed=true,
+        //    so the transport can accept a new connection.
+        disconnectBluetoothTransport();
         ConnectionContext.getInstance().getWifiTransportAsSocket().disconnect();
 
         // 2. Clear all in-flight routing, service registry, and pending discovery
@@ -403,7 +427,8 @@ public final class TauSync {
         if (disposed) return;
         disposed = true;
 
-        // Close socket and clear session state (same as disconnect, but instance is now dead).
+        // Close sockets and clear session state (same as disconnect, but instance is now dead).
+        disconnectBluetoothTransport();
         ConnectionContext.getInstance().getWifiTransportAsSocket().disconnect();
         ConnectionContext.getInstance().reset();
 
@@ -418,6 +443,22 @@ public final class TauSync {
         synchronized (roleLock) {
             globalRole = ROLE_NONE;
             globalTarget = null;
+        }
+    }
+
+    /**
+     * Disconnects the hybrid session's Bluetooth transport if one is registered. Reachable only
+     * through the context slot when the manager was never assigned (failed/abandoned
+     * connectHybrid); harmless double-disconnect otherwise — the transport is idempotent.
+     */
+    private static void disconnectBluetoothTransport() {
+        com.example.tausync_lib.interfaces.ITransport bluetooth =
+                ConnectionContext.getInstance().getBluetoothTransport();
+        if (bluetooth != null) {
+            try {
+                bluetooth.disconnect();
+            } catch (Exception ignored) {
+            }
         }
     }
 

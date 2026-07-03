@@ -54,6 +54,12 @@ namespace TauSync.Implementations.Management
         private TaskCompletionSource _peerMagicReceived =
             new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        /// <summary>Completed when the client echoes SESSION_CONFIRM after receiving our BT_MAGIC, proving
+        /// the Bluetooth link is still live at handshake end and not a half-open socket the phone left
+        /// during a slow approval.</summary>
+        private TaskCompletionSource _confirmReceived =
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
         /// <summary>Completed when Wi-Fi is usable for sending (server: SESSION_JOIN verified; client: ACK received).</summary>
         private TaskCompletionSource _wifiReady =
             new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -78,6 +84,7 @@ namespace TauSync.Implementations.Management
         {
             _isServer = _bluetooth.IsServerMode;
             _peerMagicReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _confirmReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
             // BT_MAGIC carries our own Wi-Fi IP so the peer can reach us over Wi-Fi (or just display
             // the address) without anyone typing it in: the Bluetooth link discovers it for them.
@@ -96,6 +103,11 @@ namespace TauSync.Implementations.Management
                     .WaitAsync(TimeSpan.FromMilliseconds(CoreConfig.BtHandshakeTimeoutMs))
                     .ConfigureAwait(false);
 
+                // Tell the client the operator's approval is in progress so it keeps the handshake
+                // alive for the full approval window instead of applying its short connect timeout.
+                await SendOverBluetoothAsync(NewMessage(SessionControlMessage.TypeApprovalPending))
+                    .ConfigureAwait(false);
+
                 if (!approve(_peerDeviceName))
                 {
                     // Tell the client it was declined, then drop the link. RFCOMM is in-order, so the
@@ -106,7 +118,26 @@ namespace TauSync.Implementations.Management
                     throw new OperationCanceledException("The connection was declined on the PC.");
                 }
 
+                // Approval can take a while — it waits on the operator. If the client gave up and
+                // dropped the link during that wait, do NOT mint a token or send our magic: the socket
+                // is dead (and the Bluetooth transport no longer silently reconnects), so completing the
+                // handshake would only produce a half-open session. Abort so connect_hybrid fails fast
+                // and the app re-listens for the client's fresh reconnect.
+                if (!_bluetooth.IsConnected())
+                    throw new OperationCanceledException("Bluetooth link dropped while awaiting approval.");
+
                 await SendOverBluetoothAsync(magic).ConfigureAwait(false);
+
+                // IsConnected() above cannot see a *half-open* RFCOMM socket — the phone abandoned the
+                // link during the slow approval but the BT stack hasn't surfaced an EOF yet, so the
+                // socket still looks alive. Require the client to echo SESSION_CONFIRM after it receives
+                // our magic: a live phone replies at once; a gone/half-open one never does, so we time
+                // out and abort instead of declaring a dead session "connected" (the exact "PC connected
+                // but phone isn't" symptom). The app then re-listens for the phone's fresh reconnect.
+                await _confirmReceived.Task
+                    .WaitAsync(TimeSpan.FromMilliseconds(CoreConfig.SessionJoinAckTimeoutMs))
+                    .ConfigureAwait(false);
+
                 ConnectionContext.Instance.SetSessionToken(Guid.NewGuid().ToString());
             }
             else
@@ -205,6 +236,11 @@ namespace TauSync.Implementations.Management
                     break;
                 case SessionControlMessage.TypeSessionJoinAck:
                     if (!_isServer) MarkWifiReady();
+                    break;
+                case SessionControlMessage.TypeSessionConfirm:
+                    // The client confirmed it received our BT_MAGIC, so the link is live — release the
+                    // server's post-approval wait.
+                    if (_isServer) _confirmReceived.TrySetResult();
                     break;
             }
         }

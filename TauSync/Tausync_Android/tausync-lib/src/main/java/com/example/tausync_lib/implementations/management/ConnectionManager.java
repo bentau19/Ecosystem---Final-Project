@@ -169,9 +169,17 @@ public class ConnectionManager implements IConnectionManager {
                     // Arm the key exchange before connecting, then derive the session key right after
                     // the link is up and before the BT_MAGIC handshake (which is now encrypted).
                     ctx.beginKeyExchange();
-                    primaryTransport.connect(targetId, timeoutSeconds).get();
-                    ctx.completeKeyExchange(primaryTransport);
-                    hybrid.startBtSession();
+                    try {
+                        primaryTransport.connect(targetId, timeoutSeconds).get();
+                        ctx.completeKeyExchange(primaryTransport);
+                        hybrid.startBtSession();
+                    } catch (Exception e) {
+                        // Never return "failed" while holding a live socket: a leaked RFCOMM link
+                        // would keep handshaking with the peer after the caller has moved on (the
+                        // "zombie session" — the PC completes a connection no app owns).
+                        try { primaryTransport.disconnect(); } catch (Exception ignored) {}
+                        throw e;
+                    }
                 } else {
                     // Wi-Fi-only: initializeTransports calls reset() + beginKeyExchange() + connect;
                     // derive the key right after.
