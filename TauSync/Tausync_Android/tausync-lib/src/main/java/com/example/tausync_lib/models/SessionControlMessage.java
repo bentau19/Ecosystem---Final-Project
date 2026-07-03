@@ -30,6 +30,15 @@ public class SessionControlMessage {
     /** Server → client: the operator declined the connection. The client aborts without reconnecting. */
     public static final String TYPE_SESSION_REJECT = "SESSION_REJECT";
 
+    /** Client → server: echoed after the client receives the server's BT_MAGIC, proving the link is
+     * still live (not a half-open socket the peer abandoned during a slow approval). */
+    public static final String TYPE_SESSION_CONFIRM = "SESSION_CONFIRM";
+
+    /** Server → client: the connection is waiting on the PC operator's approval. The client should
+     * keep the handshake alive for the full approval window instead of applying its normal
+     * (much shorter) connect timeout. */
+    public static final String TYPE_APPROVAL_PENDING = "APPROVAL_PENDING";
+
     @SerializedName("MagicBytes")
     private long magicBytes = 0x54415553L;
 

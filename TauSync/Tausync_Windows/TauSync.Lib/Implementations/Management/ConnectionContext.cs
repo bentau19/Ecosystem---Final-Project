@@ -635,7 +635,10 @@ namespace TauSync.Implementations.Management
                  or SessionControlMessage.TypeWifiConnectReq
                  or SessionControlMessage.TypeWifiConnectReady
                  or SessionControlMessage.TypeSessionJoin
-                 or SessionControlMessage.TypeSessionJoinAck;
+                 or SessionControlMessage.TypeSessionJoinAck
+                 or SessionControlMessage.TypeSessionReject
+                 or SessionControlMessage.TypeSessionConfirm
+                 or SessionControlMessage.TypeApprovalPending;
 
         private bool TryParseDiscoveryRequest(byte[] payload, out TransferRequest request)
         {

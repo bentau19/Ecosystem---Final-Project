@@ -406,19 +406,26 @@ namespace TauSync.Implementations.Transport
         /// </summary>
         private void HandleConnectionDropped()
         {
-            if (_intentionalClose || _disposed) return;
-            if (!_isConnected) return;
-            _isConnected = false;
+            // Same lock discipline as Disconnect(): re-check _intentionalClose UNDER the lock before
+            // starting a reconnect. Without it a concurrent Disconnect could set _intentionalClose and
+            // cancel the (old/null) reconnect token while this method, having passed the unlocked
+            // check, goes on to StartReconnectLoop — leaking a loop that outlives the session.
+            lock (_stateLock)
+            {
+                if (_intentionalClose || _disposed) return;
+                if (!_isConnected) return;
+                _isConnected = false;
 
-            // Fresh incomplete gate so sends block until the link is back.
-            _sendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                // Fresh incomplete gate so sends block until the link is back.
+                _sendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            try { _stream?.Close(); } catch { }
-            try { _tcpClient?.Close(); } catch { }
-            _stream = null;
-            _tcpClient = null;
+                try { _stream?.Close(); } catch { }
+                try { _tcpClient?.Close(); } catch { }
+                _stream = null;
+                _tcpClient = null;
 
-            StartReconnectLoop();
+                StartReconnectLoop();
+            }
         }
 
         private void StartReconnectLoop()

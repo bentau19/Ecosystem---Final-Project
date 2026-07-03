@@ -41,6 +41,15 @@ public class SocketTransport implements ITransport {
     private final IProtocolHandler protocolHandler;
     private OnDataReceivedListener dataReceivedListener;
 
+    /**
+     * Serializes every transition of the connection state machine — {@link #connect},
+     * {@link #disconnect}, and {@link #handleConnectionDropped}. Without it the background reconnect
+     * loop could start after an explicit disconnect interrupted the old reconnect thread, then leak a
+     * loop that outlives the session. Mirrors the C# SocketTransport's _stateLock. Never held across
+     * the receive-thread join (which calls handleConnectionDropped).
+     */
+    private final Object stateLock = new Object();
+
     /** True only while an explicit {@link #disconnect()} is tearing the transport down — distinguishes a deliberate close (ends the session) from an unexpected drop (triggers reconnect). */
     private volatile boolean intentionalClose;
 
@@ -109,10 +118,18 @@ public class SocketTransport implements ITransport {
             disconnect();
         }
 
-        // Re-arm for a fresh session: a prior disconnect() left intentionalClose set, and the
-        // gate must start incomplete until this connection succeeds.
-        intentionalClose = false;
-        sendGate = new CompletableFuture<>();
+        synchronized (stateLock) {
+            // Stop any background reconnect loop left over from a prior unexpected drop so this fresh
+            // connect owns the link exclusively, then re-arm: a prior disconnect() left intentionalClose
+            // set, and the gate must start incomplete until this connection succeeds.
+            Thread leftoverReconnect = reconnectThread;
+            if (leftoverReconnect != null) {
+                leftoverReconnect.interrupt();
+                reconnectThread = null;
+            }
+            intentionalClose = false;
+            sendGate = new CompletableFuture<>();
+        }
 
         boolean wantServer = targetId == null || targetId.trim().isEmpty();
         serverMode = wantServer;
@@ -397,28 +414,31 @@ public class SocketTransport implements ITransport {
      * and resets state only if this was the last live transport.
      */
     public void disconnect() {
-        if (intentionalClose) return;
-        intentionalClose = true;
-        connected = false;
+        Thread rt;
+        synchronized (stateLock) {
+            if (intentionalClose) return;
+            intentionalClose = true;
+            connected = false;
 
-        // Stop any in-flight reconnect and release a sender parked on the gate.
-        Thread rc = reconnectThread;
-        if (rc != null) rc.interrupt();
-        sendGate.complete(null);
+            // Stop any in-flight reconnect and release a sender parked on the gate. Because
+            // handleConnectionDropped also takes stateLock and re-checks intentionalClose, a receive
+            // loop exiting right now can no longer start a reconnect behind our back.
+            Thread rc = reconnectThread;
+            if (rc != null) rc.interrupt();
+            sendGate.complete(null);
 
-        closeQuietly(inputStream);
-        closeQuietly(outputStream);
-        closeQuietly(socket);
-        closeServerSocket(); // unblocks a reconnect accept(), if one is in progress
+            // Close the streams/sockets to unblock the receive thread's blocking read so the join
+            // below returns promptly.
+            closeQuietly(inputStream);
+            closeQuietly(outputStream);
+            closeQuietly(socket);
+            closeServerSocket(); // unblocks a reconnect accept(), if one is in progress
 
-        // Decrement the transport count exactly once. Channels are aborted (synthetic FIN so
-        // blocked read() calls return EOF) and state reset only when the count hits zero.
-        if (counted) {
-            counted = false;
-            ConnectionContext.getInstance().notifyTransportDisconnected();
+            rt = receiveThread;
         }
 
-        Thread rt = receiveThread;
+        // Join the receive loop OUTSIDE the lock — it calls handleConnectionDropped on exit, which
+        // needs the lock; holding it here would deadlock.
         if (rt != null && rt != Thread.currentThread()) {
             rt.interrupt();
             try { rt.join(2000); } catch (InterruptedException ignored) {
@@ -426,9 +446,18 @@ public class SocketTransport implements ITransport {
             }
         }
 
-        inputStream = null;
-        outputStream = null;
-        socket = null;
+        synchronized (stateLock) {
+            // Decrement the transport count exactly once. Channels are aborted (synthetic FIN so
+            // blocked read() calls return EOF) and state reset only when the count hits zero.
+            if (counted) {
+                counted = false;
+                ConnectionContext.getInstance().notifyTransportDisconnected();
+            }
+
+            inputStream = null;
+            outputStream = null;
+            socket = null;
+        }
     }
 
     /**
@@ -438,21 +467,25 @@ public class SocketTransport implements ITransport {
      * resumes transparently.
      */
     private void handleConnectionDropped() {
-        if (intentionalClose || disposed) return;
-        if (!connected) return;
-        connected = false;
+        synchronized (stateLock) {
+            // Re-check under the lock: a concurrent disconnect may have just set intentionalClose,
+            // in which case we must NOT start a reconnect loop that would outlive the session.
+            if (intentionalClose || disposed) return;
+            if (!connected) return;
+            connected = false;
 
-        // Fresh incomplete gate so sends block until the link is back.
-        sendGate = new CompletableFuture<>();
+            // Fresh incomplete gate so sends block until the link is back.
+            sendGate = new CompletableFuture<>();
 
-        closeQuietly(inputStream);
-        closeQuietly(outputStream);
-        closeQuietly(socket);
-        inputStream = null;
-        outputStream = null;
-        socket = null;
+            closeQuietly(inputStream);
+            closeQuietly(outputStream);
+            closeQuietly(socket);
+            inputStream = null;
+            outputStream = null;
+            socket = null;
 
-        startReconnectLoop();
+            startReconnectLoop();
+        }
     }
 
     private void startReconnectLoop() {

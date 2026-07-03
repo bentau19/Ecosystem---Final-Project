@@ -27,8 +27,11 @@ if getattr(sys, "frozen", False):
     from pipe_module import ClientNamedPipe as Client, ServerNamedPipe as Server  # type: ignore[import]
 else:
     # Development environment -----------------------------------------------
-    # Use a relative import; Python resolves the .pyd via this package's
-    # real filesystem __path__.
+    # Python 3.8+ no longer searches the package directory for dependent DLLs.
+    # Register it explicitly so libgcc/libstdc++ next to the .pyd are found.
+    _pipe_dir: str = os.path.dirname(os.path.abspath(__file__))
+    if hasattr(os, "add_dll_directory"):
+        os.add_dll_directory(_pipe_dir)
     from .pipe_module import ClientNamedPipe as Client, ServerNamedPipe as Server
 
 __all__ = ["Client", "Server"]

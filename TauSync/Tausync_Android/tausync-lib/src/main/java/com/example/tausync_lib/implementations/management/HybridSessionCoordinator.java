@@ -146,13 +146,27 @@ final class HybridSessionCoordinator {
             if (host != null && !host.trim().isEmpty()) {
                 ConnectionContext.getInstance().setPeerWifiHost(host);
             }
+            // The server's magic is its accept decision — any pending approval is over.
+            ConnectionContext.getInstance().setApprovalPending(false);
             peerMagicReceived.complete(null);
+            // As the client, echo a confirm so the server can distinguish a live link from a half-open
+            // one: the server may have paused on operator approval, and if we vanished during it our
+            // absent confirm makes it abort instead of declaring a dead session connected.
+            if (!isServer) {
+                sendOverBluetooth(newMessage(SessionControlMessage.TYPE_SESSION_CONFIRM));
+            }
         } else if (SessionControlMessage.TYPE_SESSION_REJECT.equals(type)) {
             // The PC declined. Fail the handshake and tear down intentionally so the Bluetooth
             // transport does not auto-reconnect straight into another rejection.
-            peerMagicReceived.completeExceptionally(
-                    new java.io.IOException("The connection was declined on the PC."));
+            ConnectionContext.getInstance().setApprovalPending(false);
+            peerMagicReceived.completeExceptionally(new ConnectionDeclinedException());
             try { bluetooth.disconnect(); } catch (Exception ignored) {}
+        } else if (SessionControlMessage.TYPE_APPROVAL_PENDING.equals(type)) {
+            // The PC operator is being asked to approve this connection. Publish the state so the
+            // app layer can keep its connect attempt alive for the full approval window.
+            if (!isServer) {
+                ConnectionContext.getInstance().setApprovalPending(true);
+            }
         } else if (SessionControlMessage.TYPE_WIFI_CONNECT_REQ.equals(type)) {
             if (isServer) triggerWifiConnect();
         } else if (SessionControlMessage.TYPE_WIFI_CONNECT_READY.equals(type)) {

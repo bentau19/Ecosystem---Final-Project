@@ -34,22 +34,29 @@ namespace TauSync.Implementations.Transport
         private TaskCompletionSource? _connectionTcs;
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
         private readonly IProtocolHandler _protocolHandler;
-        private bool _isConnected;
+        private volatile bool _isConnected;
         private bool _disposed;
 
-        /// <summary>True only while an explicit <see cref="Disconnect"/> is tearing the transport down. Distinguishes a deliberate close (ends the session) from an unexpected drop (triggers reconnect).</summary>
+        /// <summary>
+        /// Serializes every transition of the connection state machine — <see cref="Connect"/>,
+        /// <see cref="Disconnect"/>, <see cref="OnConnectionReceived"/>, and
+        /// <see cref="HandleConnectionDropped"/>. Without it the background reconnect loop could
+        /// start (and keep re-advertising) after an explicit disconnect cancelled the old token, then
+        /// race a fresh listen for ownership of the single RFCOMM service — the "phantom connect" where
+        /// <see cref="Connect"/> returns with no live peer. Never held across a blocking wait.
+        /// </summary>
+        private readonly object _stateLock = new object();
+
+        /// <summary>True only while an explicit <see cref="Disconnect"/> is tearing the transport down. Distinguishes a deliberate close (ends the session) from an unexpected drop (which converges to a clean reset).</summary>
         private volatile bool _intentionalClose;
 
         /// <summary>True once this transport has been counted in <see cref="ConnectionContext"/>, so the matching disconnect decrements exactly once.</summary>
         private bool _counted;
 
-        /// <summary>Cancels the background reconnect loop when the app explicitly disconnects.</summary>
-        private CancellationTokenSource? _reconnectCts;
-
         /// <summary>
-        /// Completed while a live connection exists; reset to an incomplete state during a
-        /// reconnect so a send issued mid-drop waits for the link to come back instead of
-        /// failing. <see cref="SendRaw"/> awaits this before writing.
+        /// Completed while a live connection exists; reset to an incomplete state on an unexpected
+        /// drop so a send issued during the drop fails fast instead of writing into a dead socket.
+        /// <see cref="SendRaw"/> awaits this before writing.
         /// </summary>
         private volatile TaskCompletionSource _sendGate =
             new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -83,10 +90,15 @@ namespace TauSync.Implementations.Transport
             if (_isConnected)
                 Disconnect();
 
-            // Re-arm for a fresh session: a prior Disconnect() left _intentionalClose set,
-            // and the gate must start incomplete until this connection succeeds.
-            _intentionalClose = false;
-            _sendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_stateLock)
+            {
+                // Stop any stale advertiser so this fresh listen owns the single RFCOMM service
+                // exclusively, then re-arm: a prior Disconnect()/drop left _intentionalClose set, and
+                // the gate must start incomplete until this connection succeeds.
+                StopAdvertising();
+                _intentionalClose = false;
+                _sendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
 
             await StartListeningAsync(timeoutSeconds).ConfigureAwait(false);
             await _connectionTcs!.Task.ConfigureAwait(false);
@@ -121,28 +133,53 @@ namespace TauSync.Implementations.Transport
             _timeoutCts?.Dispose();
             _timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
             _timeoutCts.Token.Register(() =>
-                _connectionTcs?.TrySetException(
-                    new TimeoutException("No Bluetooth client connected within the timeout period.")));
+            {
+                bool timedOut = _connectionTcs?.TrySetException(
+                    new TimeoutException("No Bluetooth client connected within the timeout period.")) == true;
+                if (!timedOut)
+                    return;
+
+                // The listen window is over — stop advertising so a peer cannot be adopted by a
+                // listener nobody is handshaking on. Without this the stale advertiser lives on
+                // until the next Connect(), silently accepting (then orphaning) incoming peers.
+                lock (_stateLock)
+                {
+                    if (!_isConnected && !_disposed)
+                        StopAdvertising();
+                }
+            });
         }
 
         private void OnConnectionReceived(
             StreamSocketListener sender, StreamSocketListenerConnectionReceivedEventArgs args)
         {
-            _socket = args.Socket;
-            _writer = new DataWriter(_socket.OutputStream);
-            _reader = new DataReader(_socket.InputStream) { InputStreamOptions = InputStreamOptions.None };
-            _isConnected = true;
+            lock (_stateLock)
+            {
+                // Ignore a connection that arrives after an explicit Disconnect, after disposal, or
+                // from a listener a newer Connect has already superseded. Adopting it would resurrect a
+                // session the app has torn down, or let two listeners fight over _socket/_connectionTcs.
+                if (_intentionalClose || _disposed || !ReferenceEquals(sender, _listener))
+                {
+                    try { args.Socket.Dispose(); } catch { }
+                    return;
+                }
 
-            // One connection only: stop advertising/listening once a peer attaches.
-            StopAdvertising();
+                _socket = args.Socket;
+                _writer = new DataWriter(_socket.OutputStream);
+                _reader = new DataReader(_socket.InputStream) { InputStreamOptions = InputStreamOptions.None };
+                _isConnected = true;
 
-            _receiveCts = new CancellationTokenSource();
-            _receiveTask = Task.Run(() => ReceiveLoopAsync(_receiveCts.Token));
+                // One connection only: stop advertising/listening once a peer attaches.
+                StopAdvertising();
 
-            // Counts the transport once and opens the send gate. Fires for both the initial
-            // connection and every successful re-advertise after an unexpected drop.
-            MarkInitialConnection();
-            _connectionTcs?.TrySetResult();
+                _receiveCts = new CancellationTokenSource();
+                _receiveTask = Task.Run(() => ReceiveLoopAsync(_receiveCts.Token));
+
+                // Counts the transport once and opens the send gate. Fires for both the initial
+                // connection and every successful re-advertise after an unexpected drop.
+                MarkInitialConnection();
+                _connectionTcs?.TrySetResult();
+            }
         }
 
         /// <inheritdoc />
@@ -199,98 +236,98 @@ namespace TauSync.Implementations.Transport
         /// </summary>
         public void Disconnect()
         {
-            if (_intentionalClose) return;
-            _intentionalClose = true;
-            _isConnected = false;
-
-            _reconnectCts?.Cancel();
-            _receiveCts?.Cancel();
-
-            // Release any sender parked on the gate; it will see _isConnected == false and throw.
-            _sendGate.TrySetResult();
-
-            try { _receiveTask?.Wait(TimeSpan.FromSeconds(2)); } catch { }
-
-            StopAdvertising();
-            DetachStreams();
-            _socket?.Dispose();
-
-            // Decrement the transport count exactly once. Channels are aborted (synthetic FIN
-            // so blocked Read() calls return EOF) and state reset only when the count hits zero.
-            if (_counted)
+            Task? receiveTask;
+            lock (_stateLock)
             {
-                _counted = false;
-                ConnectionContext.Instance.NotifyTransportDisconnected();
+                if (_intentionalClose) return;
+                _intentionalClose = true;
+                _isConnected = false;
+
+                // Cancel the receive loop while holding the lock. Because HandleConnectionDropped also
+                // takes the lock and re-checks _intentionalClose, a receive loop exiting right now can
+                // no longer race this teardown.
+                _receiveCts?.Cancel();
+
+                // Release any sender parked on the gate; it will see _isConnected == false and throw.
+                _sendGate.TrySetResult();
+
+                receiveTask = _receiveTask;
             }
 
-            _socket = null;
-            _receiveCts?.Dispose();
-            _receiveCts = null;
-            _timeoutCts?.Dispose();
-            _timeoutCts = null;
-            _reconnectCts?.Dispose();
-            _reconnectCts = null;
-            _receiveTask = null;
-            _connectionTcs = null;
+            // Wait for the receive loop OUTSIDE the lock — it calls HandleConnectionDropped on exit,
+            // which needs the lock. Holding it here would deadlock.
+            try { receiveTask?.Wait(TimeSpan.FromSeconds(2)); } catch { }
+
+            lock (_stateLock)
+            {
+                StopAdvertising();
+                DetachStreams();
+                _socket?.Dispose();
+
+                // Decrement the transport count exactly once. Channels are aborted (synthetic FIN
+                // so blocked Read() calls return EOF) and state reset only when the count hits zero.
+                if (_counted)
+                {
+                    _counted = false;
+                    ConnectionContext.Instance.NotifyTransportDisconnected();
+                }
+
+                _socket = null;
+                _receiveCts?.Dispose();
+                _receiveCts = null;
+                _timeoutCts?.Dispose();
+                _timeoutCts = null;
+                _receiveTask = null;
+                _connectionTcs = null;
+            }
         }
 
         /// <summary>
-        /// Handles the receive loop exiting on a broken RFCOMM link. An explicit disconnect
-        /// ends the session; an unexpected drop instead tears down only the dead socket —
-        /// keeping the channels, handlers, and transport count intact — and re-advertises so
-        /// the session resumes transparently when the peer reconnects.
+        /// Handles the receive loop exiting on a broken RFCOMM link (the peer vanished, moved out of
+        /// range, or its own stack reset). Unlike Wi-Fi, the Bluetooth primary does <b>not</b> silently
+        /// reconnect: that is incompatible with the per-session ECDH key exchange and the connection
+        /// approval, both of which the peer re-runs from scratch on every reconnect. A transport-level
+        /// "resume" would adopt the peer's fresh handshake into the old (already-encrypted) session, so
+        /// the new KEY_EXCHANGE is ignored and the link can never re-establish — the phone loops on BLE
+        /// discovery. Instead we converge to a clean disconnected state: stop advertising and notify the
+        /// context, which (when this was the last live transport) aborts the channels and resets the
+        /// session — clearing the derived key and routing. The app then re-listens, so the peer's
+        /// reconnect reaches a freshly-advertising PC and runs a brand-new handshake.
         /// </summary>
         private void HandleConnectionDropped()
         {
-            if (_intentionalClose || _disposed) return;
-            if (!_isConnected) return;
-            _isConnected = false;
-
-            // Fresh incomplete gate so sends block until the link is back.
-            _sendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
-            DetachStreams();
-            try { _socket?.Dispose(); } catch { }
-            _socket = null;
-
-            StartReconnectLoop();
-        }
-
-        private void StartReconnectLoop()
-        {
-            _reconnectCts?.Dispose();
-            _reconnectCts = new CancellationTokenSource();
-            CancellationToken ct = _reconnectCts.Token;
-            _ = Task.Run(() => ReconnectLoopAsync(ct));
-        }
-
-        /// <summary>
-        /// Re-advertises the RFCOMM service with exponential back-off until a peer reconnects
-        /// or an explicit disconnect cancels it. <see cref="OnConnectionReceived"/> re-wires
-        /// the streams, restarts the receive loop, and opens the send gate — all on the same
-        /// channel handlers, so the layers above never see the gap.
-        /// </summary>
-        private async Task ReconnectLoopAsync(CancellationToken ct)
-        {
-            int delayMs = CoreConfig.ReconnectInitialDelayMs;
-            while (!ct.IsCancellationRequested && !_disposed && !_intentionalClose)
+            bool notifyDisconnected = false;
+            lock (_stateLock)
             {
-                try
-                {
-                    await StartListeningAsync(null).ConfigureAwait(false);
-                    using (ct.Register(() => _connectionTcs?.TrySetCanceled()))
-                    {
-                        await _connectionTcs!.Task.ConfigureAwait(false);
-                    }
-                    return;
-                }
-                catch (OperationCanceledException) { return; }
-                catch { StopAdvertising(); }
+                // Re-check under the lock: an explicit Disconnect may have just set _intentionalClose
+                // and is already doing this teardown — don't double it.
+                if (_intentionalClose || _disposed) return;
+                if (!_isConnected) return;
+                _isConnected = false;
 
-                try { await Task.Delay(delayMs, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) { return; }
-                delayMs = Math.Min(delayMs * 2, CoreConfig.ReconnectMaxDelayMs);
+                // Fresh incomplete gate so a send issued during the drop fails fast (it will time out
+                // waiting and throw) instead of writing into a dead socket.
+                _sendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                DetachStreams();
+                try { _socket?.Dispose(); } catch { }
+                _socket = null;
+
+                // Stop advertising the now-dead session's RFCOMM service. The app's fresh
+                // connect re-advertises a clean one.
+                StopAdvertising();
+
+                if (_counted)
+                {
+                    _counted = false;
+                    notifyDisconnected = true;
+                }
             }
+
+            // Notify OUTSIDE the lock: NotifyTransportDisconnected may abort channels and Reset() the
+            // singleton (when the count hits zero), which must not run under this transport's lock.
+            if (notifyDisconnected)
+                ConnectionContext.Instance.NotifyTransportDisconnected();
         }
 
         private async Task WaitForConnectionAsync()
