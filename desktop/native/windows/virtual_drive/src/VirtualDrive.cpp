@@ -153,8 +153,22 @@ protocol::Message VirtualDrive::SendReq(const std::string& json_str,
         ReleasePipe(pipe);
         return resp;
     } catch (const PipeException& e) {
-        console::warn("PipeException in SendReq: {}", e.what());
-        if (e.code == PipeErrorCode::ConnectionTimeout) {
+        // 1. Open the file in append mode
+            std::ofstream outFile("example.txt", std::ios_base::app);
+
+            // 2. Check if the file opened successfully
+            if (!outFile.is_open()) {
+                std::cerr << "Error opening file!" << std::endl;
+                return 1;
+            }
+
+            // 3. Append your data
+            outFile << e <<  ".\n";
+            outFile << "Adding another line seamlessly.\n";
+
+            // 4. Close the file (optional, but good practice)
+            outFile.close();  
+          if (e.code == PipeErrorCode::ConnectionTimeout) {
             // SyncDose did not answer within the deadline. A late response may
             // still arrive, leaving the pipe byte-stream frame-desynced, so the
             // connection cannot be reused — swap in a fresh one (ReplacePipe).
@@ -172,8 +186,21 @@ protocol::Message VirtualDrive::SendReq(const std::string& json_str,
         ReplacePipe(pipe);
         return protocol::Message{R"({"ok":false,"error":"io_error"})", ""};
     } catch (...) {
-        console::warn("Unknown failure in SendReq");
-        // Unknown failure on this connection — same recovery path as above.
+  // 1. Open the file in append mode
+            std::ofstream outFile("example.txt", std::ios_base::app);
+
+            // 2. Check if the file opened successfully
+            if (!outFile.is_open()) {
+                std::cerr << "Error opening file!" << std::endl;
+                return 1;
+            }
+
+            // 3. Append your data
+            outFile << e <<  ".\n";
+            outFile << "Adding another line seamlessly.\n";
+
+            // 4. Close the file (optional, but good practice)
+            outFile.close();          // Unknown failure on this connection — same recovery path as above.
         ReplacePipe(pipe);
         return protocol::Message{R"({"ok":false,"error":"io_error"})", ""};
     }
