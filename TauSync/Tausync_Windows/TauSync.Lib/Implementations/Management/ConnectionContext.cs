@@ -186,6 +186,9 @@ namespace TauSync.Implementations.Management
             // re-establishing. Without this, stale handlers and pending REQs from the
             // prior connection get replayed onto the new session's frames.
             Reset();
+            // Wi-Fi-only mode: this is the session's ONLY link, so an unexpected drop must silently
+            // reconnect (a prior hybrid session may have left auto-reconnect disabled on the singleton).
+            GetWifiTransportAsSocket().AutoReconnect = true;
             // Arm the key exchange before connecting so a peer KEY_EXCHANGE arriving the instant the
             // link is up is captured (and derived synchronously) rather than lost.
             BeginKeyExchange();
@@ -638,7 +641,8 @@ namespace TauSync.Implementations.Management
                  or SessionControlMessage.TypeSessionJoinAck
                  or SessionControlMessage.TypeSessionReject
                  or SessionControlMessage.TypeSessionConfirm
-                 or SessionControlMessage.TypeApprovalPending;
+                 or SessionControlMessage.TypeApprovalPending
+                 or SessionControlMessage.TypeWifiIdleClose;
 
         private bool TryParseDiscoveryRequest(byte[] payload, out TransferRequest request)
         {

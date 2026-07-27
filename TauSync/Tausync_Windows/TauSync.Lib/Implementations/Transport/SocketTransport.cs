@@ -45,6 +45,16 @@ namespace TauSync.Implementations.Transport
         private CancellationTokenSource? _reconnectCts;
 
         /// <summary>
+        /// Whether an unexpected drop starts the silent reconnect loop (default) or converges to a
+        /// clean disconnected state. The hybrid <see cref="ConnectionManager"/> sets this false for
+        /// its lazy Wi-Fi secondary: the coordinator owns Wi-Fi revival (WIFI_CONNECT_REQ), so a
+        /// transport-level redial only fights it — dialing a peer that closed for idle (SYN→RST
+        /// bursts) or re-accepting a socket outside the SESSION_JOIN handshake. Wi-Fi-only mode
+        /// re-enables it in <see cref="ConnectionContext.InitializeTransports"/>.
+        /// </summary>
+        public bool AutoReconnect { get; set; } = true;
+
+        /// <summary>
         /// Completed while a live connection exists; reset to an incomplete state during a
         /// reconnect so a send issued mid-drop waits for the link to come back instead of
         /// failing. <see cref="SendRaw"/> awaits this before writing.
@@ -410,22 +420,46 @@ namespace TauSync.Implementations.Transport
             // starting a reconnect. Without it a concurrent Disconnect could set _intentionalClose and
             // cancel the (old/null) reconnect token while this method, having passed the unlocked
             // check, goes on to StartReconnectLoop — leaking a loop that outlives the session.
+            bool notifyDisconnected = false;
             lock (_stateLock)
             {
                 if (_intentionalClose || _disposed) return;
                 if (!_isConnected) return;
                 _isConnected = false;
 
-                // Fresh incomplete gate so sends block until the link is back.
-                _sendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
                 try { _stream?.Close(); } catch { }
                 try { _tcpClient?.Close(); } catch { }
                 _stream = null;
                 _tcpClient = null;
 
-                StartReconnectLoop();
+                if (AutoReconnect)
+                {
+                    // Fresh incomplete gate so sends block until the link is back.
+                    _sendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    StartReconnectLoop();
+                }
+                else
+                {
+                    // Hybrid secondary: converge to a clean disconnected state. Release parked
+                    // senders (they fail fast and the coordinator re-routes or re-runs the
+                    // bring-up), free the listener, and decrement the transport count — Bluetooth
+                    // is still counted, so the channels stay alive.
+                    _sendGate.TrySetResult();
+                    try { _tcpListener?.Stop(); } catch { }
+                    _tcpListener = null;
+                    _connectionTcs = null;
+                    if (_counted)
+                    {
+                        _counted = false;
+                        notifyDisconnected = true;
+                    }
+                }
             }
+
+            // Notify OUTSIDE the lock: NotifyTransportDisconnected may abort channels and Reset()
+            // the singleton (when the count hits zero), which must not run under this lock.
+            if (notifyDisconnected)
+                ConnectionContext.Instance.NotifyTransportDisconnected();
         }
 
         private void StartReconnectLoop()

@@ -179,6 +179,20 @@ namespace TauSync.Implementations.Management
         /// </summary>
         public async Task<ITransport> AcquireWifiOrFallbackAsync()
         {
+            lock (_wifiLock)
+            {
+                // Wi-Fi dropped unexpectedly since it was marked up (a drop bypasses
+                // DisconnectWifiForIdle, so nothing reset the state machine). Reset it here or the
+                // already-completed ready gate below would hand back the DEAD link and the send
+                // would park on the transport's gate until it times out.
+                if (_wifiUp && !_wifi.IsConnected())
+                {
+                    _wifiUp = false;
+                    _wifiActivating = false;
+                    _wifiReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                }
+            }
+
             if (_wifiUp && _wifi.IsConnected())
                 return _wifi;
 
@@ -241,6 +255,12 @@ namespace TauSync.Implementations.Management
                     // The client confirmed it received our BT_MAGIC, so the link is live — release the
                     // server's post-approval wait.
                     if (_isServer) _confirmReceived.TrySetResult();
+                    break;
+                case SessionControlMessage.TypeWifiIdleClose:
+                    // The peer is closing the idle Wi-Fi link. Tear our side down intentionally too
+                    // (without echoing the announce back) so the close is never mistaken for an
+                    // unexpected drop.
+                    TearDownWifi(announcePeer: false);
                     break;
             }
         }
@@ -366,12 +386,20 @@ namespace TauSync.Implementations.Management
         }
 
         /// <summary>
-        /// Tears down the idle Wi-Fi link intentionally. Because it is intentional the transport does
-        /// not auto-reconnect, and because Bluetooth is still up the ref-counted
+        /// Tears down the idle Wi-Fi link intentionally, announcing it to the peer first so BOTH
+        /// sides close on purpose. Because Bluetooth is still up the ref-counted
         /// <see cref="ConnectionContext.NotifyTransportDisconnected"/> does not abort any channels —
         /// they simply continue over Bluetooth until the next large payload re-runs the bring-up.
         /// </summary>
-        private void DisconnectWifiForIdle()
+        private void DisconnectWifiForIdle() => TearDownWifi(announcePeer: true);
+
+        /// <summary>
+        /// Shared Wi-Fi teardown for both the local idle timer (<paramref name="announcePeer"/> true —
+        /// tell the peer over Bluetooth BEFORE closing, so its side is intentional too, not a
+        /// mistaken "unexpected drop") and the peer's WIFI_IDLE_CLOSE announce (false — never echo,
+        /// or the two sides would ping-pong).
+        /// </summary>
+        private void TearDownWifi(bool announcePeer)
         {
             lock (_wifiLock)
             {
@@ -381,6 +409,16 @@ namespace TauSync.Implementations.Management
                 _wifiActivating = false;
                 // Fresh incomplete gate so the next large send waits for a new bring-up.
                 _wifiReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+            if (announcePeer)
+            {
+                // Best-effort: if Bluetooth is down the whole session is ending anyway.
+                try
+                {
+                    SendOverBluetoothAsync(NewMessage(SessionControlMessage.TypeWifiIdleClose))
+                        .GetAwaiter().GetResult();
+                }
+                catch { }
             }
             try { _wifi.Disconnect(); } catch { }
         }

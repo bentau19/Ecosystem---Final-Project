@@ -135,6 +135,10 @@ public class ConnectionManager implements IConnectionManager {
         }
         primaryTransport = primary;
         secondaryTransport = secondary;
+        // The lazy Wi-Fi secondary must not silently redial after a drop — the coordinator owns
+        // Wi-Fi revival (WIFI_CONNECT_REQ handshake). A transport-level reconnect would dial the
+        // peer's closed idle port (SYN→RST bursts) or adopt a socket that never re-ran SESSION_JOIN.
+        ((SocketTransport) secondary).setAutoReconnect(false);
         hybrid = new HybridSessionCoordinator(primary, (SocketTransport) secondary, protocolHandler);
         ConnectionContext.getInstance().registerSessionControlListener(hybrid::onSessionControl);
         ConnectionContext.getInstance().registerChannelControlListener(this::onChannelControl);

@@ -232,6 +232,9 @@ public final class ConnectionContext {
         // re-establishing, so stale handlers and pending REQs are not replayed on the
         // new session's frames. Mirrors the C# ConnectionContext.InitializeTransports.
         reset();
+        // Wi-Fi-only mode: this is the session's ONLY link, so an unexpected drop must silently
+        // reconnect (a prior hybrid session may have left auto-reconnect disabled on the singleton).
+        wifiTransport.setAutoReconnect(true);
         // Arm the key exchange before connecting so a peer KEY_EXCHANGE arriving the instant the link
         // is up is captured (and derived synchronously) rather than lost.
         beginKeyExchange();
@@ -797,7 +800,8 @@ public final class ConnectionContext {
                 || SessionControlMessage.TYPE_SESSION_JOIN_ACK.equals(type)
                 || SessionControlMessage.TYPE_SESSION_REJECT.equals(type)
                 || SessionControlMessage.TYPE_SESSION_CONFIRM.equals(type)
-                || SessionControlMessage.TYPE_APPROVAL_PENDING.equals(type);
+                || SessionControlMessage.TYPE_APPROVAL_PENDING.equals(type)
+                || SessionControlMessage.TYPE_WIFI_IDLE_CLOSE.equals(type);
     }
 
     // ── Functional interface for service callbacks ─────────────────────

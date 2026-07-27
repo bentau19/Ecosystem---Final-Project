@@ -60,6 +60,21 @@ public class SocketTransport implements ITransport {
     private volatile String lastTargetId;
 
     /**
+     * Whether an unexpected drop starts the silent reconnect loop (default) or converges to a clean
+     * disconnected state. The hybrid {@link com.example.tausync_lib.implementations.management.ConnectionManager}
+     * sets this false for its lazy Wi-Fi secondary: the coordinator owns Wi-Fi revival
+     * (WIFI_CONNECT_REQ), so a transport-level redial only fights it — dialing a peer that closed
+     * for idle (SYN→RST bursts) or re-accepting a socket outside the SESSION_JOIN handshake.
+     * Wi-Fi-only mode re-enables it in {@code ConnectionContext.initializeTransports}.
+     */
+    private volatile boolean autoReconnect = true;
+
+    /** See {@link #autoReconnect}. */
+    public void setAutoReconnect(boolean autoReconnect) {
+        this.autoReconnect = autoReconnect;
+    }
+
+    /**
      * Completed while a live connection exists; replaced with an incomplete future during a
      * reconnect so a send issued mid-drop waits for the link to come back instead of failing.
      * {@link #sendRaw(byte[])} waits on this before writing.
@@ -467,15 +482,13 @@ public class SocketTransport implements ITransport {
      * resumes transparently.
      */
     private void handleConnectionDropped() {
+        boolean notifyDisconnected = false;
         synchronized (stateLock) {
             // Re-check under the lock: a concurrent disconnect may have just set intentionalClose,
             // in which case we must NOT start a reconnect loop that would outlive the session.
             if (intentionalClose || disposed) return;
             if (!connected) return;
             connected = false;
-
-            // Fresh incomplete gate so sends block until the link is back.
-            sendGate = new CompletableFuture<>();
 
             closeQuietly(inputStream);
             closeQuietly(outputStream);
@@ -484,7 +497,28 @@ public class SocketTransport implements ITransport {
             outputStream = null;
             socket = null;
 
-            startReconnectLoop();
+            if (autoReconnect) {
+                // Fresh incomplete gate so sends block until the link is back.
+                sendGate = new CompletableFuture<>();
+                startReconnectLoop();
+            } else {
+                // Hybrid secondary: converge to a clean disconnected state. Release parked senders
+                // (they fail fast and the coordinator re-routes or re-runs the bring-up), free the
+                // listener, and decrement the transport count — Bluetooth is still counted, so the
+                // channels stay alive.
+                sendGate.complete(null);
+                closeServerSocket();
+                if (counted) {
+                    counted = false;
+                    notifyDisconnected = true;
+                }
+            }
+        }
+
+        // Notify OUTSIDE the lock: notifyTransportDisconnected may abort channels and reset() the
+        // singleton (when the count hits zero), which must not run under this transport's lock.
+        if (notifyDisconnected) {
+            ConnectionContext.getInstance().notifyTransportDisconnected();
         }
     }
 

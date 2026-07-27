@@ -69,6 +69,11 @@ namespace TauSync.Implementations.Management
                 var wifi = ctx.GetWifiTransportAsSocket();
                 _primaryTransport   = bt;
                 _secondaryTransport = wifi;
+                // The lazy Wi-Fi secondary must not silently redial after a drop — the coordinator
+                // owns Wi-Fi revival (WIFI_CONNECT_REQ handshake). A transport-level reconnect would
+                // dial the peer's closed idle port (SYN→RST bursts) or adopt a socket that never
+                // re-ran SESSION_JOIN.
+                wifi.AutoReconnect = false;
                 _hybrid = new HybridSessionCoordinator(bt, wifi, _protocolHandler);
                 ctx.RegisterSessionControlListener(_hybrid.OnSessionControl);
                 ctx.RegisterChannelControlListener(OnChannelControl);
