@@ -159,7 +159,7 @@ protocol::Message VirtualDrive::SendReq(const std::string& json_str,
             // 2. Check if the file opened successfully
             if (!outFile.is_open()) {
                 std::cerr << "Error opening file!" << std::endl;
-                return 1;
+                return protocol::Message{R"({"ok":false,"error":"io_error"})", ""};
             }
 
             // 3. Append your data
@@ -192,7 +192,7 @@ protocol::Message VirtualDrive::SendReq(const std::string& json_str,
             // 2. Check if the file opened successfully
             if (!outFile.is_open()) {
                 std::cerr << "Error opening file!" << std::endl;
-                return 1;
+                return protocol::Message{R"({"ok":false,"error":"io_error"})", ""};
             }
 
             // 3. Append your data
