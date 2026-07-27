@@ -65,6 +65,32 @@ public interface TransportManager {
     }
 
     /**
+     * Supplies the frames of a live stream, one call per frame.
+     *
+     * @see #streamFramesToChannel(String, FrameSource)
+     */
+    @FunctionalInterface
+    interface FrameSource {
+        /**
+         * Blocks until the next frame is ready.
+         *
+         * @return the frame's bytes, or {@code null} when the stream has ended.
+         */
+        byte[] next() throws Exception;
+    }
+
+    /**
+     * Opens a channel and sends each frame from {@code frames} the moment it is available, until
+     * the source signals the end of the stream.
+     *
+     * <p>Unlike {@link #streamInputStreamToChannel(String, java.io.InputStream)}, which accumulates
+     * bytes into large chunks before writing, this sends every frame on its own. Bulk transfers
+     * want the big chunks (fewer, fuller writes move a file faster); a live stream wants the
+     * opposite, because a frame held back waiting for the next one is a frame the viewer sees late.
+     */
+    void streamFramesToChannel(String channel, FrameSource frames) throws Exception;
+
+    /**
      * Callback for {@link #serveJsonExchange(String, JsonExchangeHandler)}: given the peer's
      * newline-terminated JSON request string, computes and returns the JSON response string.
      */

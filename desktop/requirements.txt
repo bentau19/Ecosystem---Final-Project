@@ -7,3 +7,6 @@ jsonschema>= 4.17.3
 xxhash >= 3.7.0
 numpy >= 1.24.0
 pyvirtualcam >= 0.10.0
+# Headless build: the webcam service only decodes JPEG frames, it never opens a
+# GUI window, so the full opencv-python (which drags in Qt) would clash with PySide6.
+opencv-python-headless >= 4.10.0

@@ -774,6 +774,28 @@ public class TauSyncTransportManager implements TransportManager {
         }
     }
 
+    @Override
+    public void streamFramesToChannel(String channel, FrameSource frames) throws Exception {
+        if (tauSync == null || status != TransportStatus.CONNECTED) {
+            throw new IllegalStateException("Cannot stream frames to channel [" + channel + "]: Not connected");
+        }
+
+        try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
+                     tauSync.connect(channel)) {
+            long frameCount = 0;
+            byte[] frame;
+            while ((frame = frames.next()) != null) {
+                // writeOverWifi, not write: a frame is usually smaller than the hybrid routing
+                // threshold, so a size-based write would put the stream on Bluetooth and pay a
+                // barrier round-trip on every switch. Naming the link keeps each frame on the fast
+                // one without having to inflate it first.
+                stream.writeOverWifi(frame);
+                frameCount++;
+            }
+            Log.d(TAG, "Streamed " + frameCount + " frames to [" + channel + "]");
+        }
+    }
+
     /**
      * Opens a single TauSync channel, writes UTF-8 metadata + {@code '\n'}, then
      * streams all bytes from {@code inputStream} before closing the channel.
