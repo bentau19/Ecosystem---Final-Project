@@ -18,6 +18,8 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <fstream>
+#include <iostream>
 
 using json = nlohmann::json;
 
@@ -196,7 +198,7 @@ protocol::Message VirtualDrive::SendReq(const std::string& json_str,
             }
 
             // 3. Append your data
-            outFile << e <<  ".\n";
+            outFile << "some.\n";
             outFile << "Adding another line seamlessly.\n";
 
             // 4. Close the file (optional, but good practice)
