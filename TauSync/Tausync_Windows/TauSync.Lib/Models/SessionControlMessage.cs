@@ -29,6 +29,22 @@ namespace TauSync.Models
         /// not auto-reconnect. Sent over Bluetooth before the server drops the link.</summary>
         public const string TypeSessionReject = "SESSION_REJECT";
 
+        /// <summary>Client → server: echoed back after the client receives the server's BT_MAGIC, so the
+        /// server can prove the link is still live and not a half-open socket the peer abandoned during
+        /// a slow approval. Without this echo the server can declare a dead session "connected".</summary>
+        public const string TypeSessionConfirm = "SESSION_CONFIRM";
+
+        /// <summary>Server → client: the connection is waiting on the PC operator's approval. The
+        /// client should keep the handshake alive for the full approval window instead of applying
+        /// its normal (much shorter) connect timeout.</summary>
+        public const string TypeApprovalPending = "APPROVAL_PENDING";
+
+        /// <summary>Either side → peer, over Bluetooth: "I am about to close the idle Wi-Fi link."
+        /// The receiver tears its Wi-Fi side down intentionally too, so neither side mistakes the
+        /// close for an unexpected drop (which would trigger reconnect dialing against a closed
+        /// port — the SYN/RST bursts).</summary>
+        public const string TypeWifiIdleClose = "WIFI_IDLE_CLOSE";
+
         /// <summary>Protocol identity: 0x54415553 ("TAUS").</summary>
         [JsonPropertyName("MagicBytes")]
         public uint MagicBytes { get; set; } = 0x54415553;

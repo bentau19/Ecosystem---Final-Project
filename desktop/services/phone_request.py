@@ -123,6 +123,16 @@ class PhoneRequestService(LifecycleFlag):
 
         while self._is_running.is_set():
             tau = self._connectivity.tau
+            # Active liveness check: get_peer_waiting_words() reads a local routing map and does
+            # NOT probe the socket, so a silently dropped Bluetooth link (peer left, phone crashed,
+            # out of range) would never surface as an exception below — leaving the PC "connected"
+            # to a peer that is gone while the phone re-discovers us.  Poll the transport's own
+            # connected state so we tear down promptly and re-listen, mirroring the phone's reset.
+            if not self._connectivity.connected:
+                if self._is_running.is_set() and tau is self._connectivity.tau:
+                    logger.info("Channel poll: transport dropped — peer left, tearing down to re-listen")
+                    self._connectivity.stop()
+                break
             try:
                 channels = tau.get_peer_waiting_words()
                 for channel in channels:

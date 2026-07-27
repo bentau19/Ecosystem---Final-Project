@@ -69,6 +69,11 @@ namespace TauSync.Implementations.Management
                 var wifi = ctx.GetWifiTransportAsSocket();
                 _primaryTransport   = bt;
                 _secondaryTransport = wifi;
+                // The lazy Wi-Fi secondary must not silently redial after a drop — the coordinator
+                // owns Wi-Fi revival (WIFI_CONNECT_REQ handshake). A transport-level reconnect would
+                // dial the peer's closed idle port (SYN→RST bursts) or adopt a socket that never
+                // re-ran SESSION_JOIN.
+                wifi.AutoReconnect = false;
                 _hybrid = new HybridSessionCoordinator(bt, wifi, _protocolHandler);
                 ctx.RegisterSessionControlListener(_hybrid.OnSessionControl);
                 ctx.RegisterChannelControlListener(OnChannelControl);
@@ -121,9 +126,20 @@ namespace TauSync.Implementations.Management
                 // run the BT_MAGIC handshake (now encrypted). Wi-Fi is connected lazily later.
                 ConnectionContext.Instance.Reset();
                 ConnectionContext.Instance.BeginKeyExchange();
-                await _primaryTransport!.Connect(targetId, timeoutSeconds).ConfigureAwait(false);
-                await ConnectionContext.Instance.CompleteKeyExchangeAsync(_primaryTransport).ConfigureAwait(false);
-                await _hybrid.StartBtSessionAsync().ConfigureAwait(false);
+                try
+                {
+                    await _primaryTransport!.Connect(targetId, timeoutSeconds).ConfigureAwait(false);
+                    await ConnectionContext.Instance.CompleteKeyExchangeAsync(_primaryTransport).ConfigureAwait(false);
+                    await _hybrid.StartBtSessionAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Never return "failed" while holding a live socket: a leaked RFCOMM link would
+                    // keep handshaking with the peer after the caller has moved on (the "zombie
+                    // session"). Disconnect stops advertising and drops any half-open peer.
+                    try { _primaryTransport?.Disconnect(); } catch { }
+                    throw;
+                }
                 return;
             }
             // Wi-Fi-only: BeginKeyExchange before connecting so a peer KEY_EXCHANGE arriving immediately
