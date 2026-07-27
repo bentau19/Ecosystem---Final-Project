@@ -158,7 +158,7 @@ class DashboardScreen(QWidget):
         if not app_state.device_viewmodel.is_device_info_loaded:
             self._loading_overlay.start("Fetching device info…")
         app_state.device_viewmodel.load_current_device_info()
-        app_state.tool_viewmodel.load_enabled_tools()
+        app_state.tool_viewmodel.load_tools()
 
     def hideEvent(self, event: QHideEvent) -> None:
         """Reset overlay and disconnect guard when navigation hides this screen.

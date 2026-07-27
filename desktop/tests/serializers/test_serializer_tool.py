@@ -1,4 +1,4 @@
-"""Unit tests for ToolSerializer (SQLite tuple-based)."""
+"""Unit tests for ToolSerializer (JSON dict ↔ ToolEntity)."""
 
 import pytest
 
@@ -13,7 +13,6 @@ from serializers.tool import ToolSerializer
 
 @pytest.fixture()
 def serializer() -> ToolSerializer:
-    """Return a fresh ToolSerializer instance."""
     return ToolSerializer()
 
 
@@ -46,60 +45,29 @@ def test_serialize_returns_none_for_none_entity(serializer: ToolSerializer) -> N
     assert serializer.serialize(None) is None
 
 
-def test_serialize_returns_tuple(
-    serializer: ToolSerializer,
-    tool_enabled: ToolEntity,
-) -> None:
-    result = serializer.serialize(tool_enabled)
-    assert isinstance(result, tuple)
+def test_serialize_returns_dict(serializer: ToolSerializer, tool_enabled: ToolEntity) -> None:
+    assert isinstance(serializer.serialize(tool_enabled), dict)
 
 
-def test_serialize_tuple_has_four_elements(
-    serializer: ToolSerializer,
-    tool_enabled: ToolEntity,
-) -> None:
-    result = serializer.serialize(tool_enabled)
-    assert len(result) == 4
+def test_serialize_has_expected_keys(serializer: ToolSerializer, tool_enabled: ToolEntity) -> None:
+    assert set(serializer.serialize(tool_enabled)) == {
+        "title",
+        "description",
+        "icon_path",
+        "is_enabled",
+    }
 
 
-def test_serialize_maps_title_to_first_position(
-    serializer: ToolSerializer,
-    tool_enabled: ToolEntity,
-) -> None:
-    result = serializer.serialize(tool_enabled)
-    assert result[0] == tool_enabled.title
+def test_serialize_maps_fields(serializer: ToolSerializer, tool_enabled: ToolEntity) -> None:
+    data = serializer.serialize(tool_enabled)
+    assert data["title"] == tool_enabled.title
+    assert data["description"] == tool_enabled.description
+    assert data["icon_path"] == tool_enabled.icon_path
+    assert data["is_enabled"] is True
 
 
-def test_serialize_maps_description_to_second_position(
-    serializer: ToolSerializer,
-    tool_enabled: ToolEntity,
-) -> None:
-    result = serializer.serialize(tool_enabled)
-    assert result[1] == tool_enabled.description
-
-
-def test_serialize_maps_icon_path_to_third_position(
-    serializer: ToolSerializer,
-    tool_enabled: ToolEntity,
-) -> None:
-    result = serializer.serialize(tool_enabled)
-    assert result[2] == tool_enabled.icon_path
-
-
-def test_serialize_maps_is_enabled_true_to_fourth_position(
-    serializer: ToolSerializer,
-    tool_enabled: ToolEntity,
-) -> None:
-    result = serializer.serialize(tool_enabled)
-    assert result[3] is True
-
-
-def test_serialize_maps_is_enabled_false_to_fourth_position(
-    serializer: ToolSerializer,
-    tool_disabled: ToolEntity,
-) -> None:
-    result = serializer.serialize(tool_disabled)
-    assert result[3] is False
+def test_serialize_maps_is_enabled_false(serializer: ToolSerializer, tool_disabled: ToolEntity) -> None:
+    assert serializer.serialize(tool_disabled)["is_enabled"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -107,46 +75,41 @@ def test_serialize_maps_is_enabled_false_to_fourth_position(
 # ---------------------------------------------------------------------------
 
 
-def test_deserialize_returns_none_for_none_row(serializer: ToolSerializer) -> None:
+def test_deserialize_returns_none_for_none(serializer: ToolSerializer) -> None:
     assert serializer.deserialize(None) is None
 
 
-def test_deserialize_returns_none_for_empty_tuple(serializer: ToolSerializer) -> None:
-    assert serializer.deserialize(()) is None
+def test_deserialize_returns_none_for_empty_dict(serializer: ToolSerializer) -> None:
+    assert serializer.deserialize({}) is None
 
 
-def test_deserialize_returns_tool_entity(
-    serializer: ToolSerializer,
-    tool_enabled: ToolEntity,
-) -> None:
-    row = ("hammer", "A tool for driving nails into wood.", "hammer.png", 1)
-    result = serializer.deserialize(row)
-    assert isinstance(result, ToolEntity)
+def test_deserialize_returns_tool_entity(serializer: ToolSerializer) -> None:
+    data = {
+        "title": "hammer",
+        "description": "A tool.",
+        "icon_path": "hammer.png",
+        "is_enabled": True,
+    }
+    assert isinstance(serializer.deserialize(data), ToolEntity)
 
 
-def test_deserialize_maps_title_correctly(serializer: ToolSerializer) -> None:
-    row = ("hammer", "A tool.", "hammer.png", 1)
-    assert serializer.deserialize(row).title == "hammer"
+def test_deserialize_maps_fields(serializer: ToolSerializer) -> None:
+    data = {
+        "title": "hammer",
+        "description": "A tool.",
+        "icon_path": "hammer.png",
+        "is_enabled": True,
+    }
+    entity = serializer.deserialize(data)
+    assert entity.title == "hammer"
+    assert entity.description == "A tool."
+    assert entity.icon_path == "hammer.png"
+    assert entity.is_enabled is True
 
 
-def test_deserialize_maps_description_correctly(serializer: ToolSerializer) -> None:
-    row = ("hammer", "A tool.", "hammer.png", 1)
-    assert serializer.deserialize(row).description == "A tool."
-
-
-def test_deserialize_maps_icon_path_correctly(serializer: ToolSerializer) -> None:
-    row = ("hammer", "A tool.", "hammer.png", 1)
-    assert serializer.deserialize(row).icon_path == "hammer.png"
-
-
-def test_deserialize_maps_is_enabled_1_to_true(serializer: ToolSerializer) -> None:
-    row = ("hammer", "A tool.", "hammer.png", 1)
-    assert serializer.deserialize(row).is_enabled is True
-
-
-def test_deserialize_maps_is_enabled_0_to_false(serializer: ToolSerializer) -> None:
-    row = ("screwdriver", "A tool.", "screwdriver.png", 0)
-    assert serializer.deserialize(row).is_enabled is False
+def test_deserialize_coerces_is_enabled_to_bool(serializer: ToolSerializer) -> None:
+    data = {"title": "x", "description": "d", "icon_path": "p", "is_enabled": 0}
+    assert serializer.deserialize(data).is_enabled is False
 
 
 # ---------------------------------------------------------------------------
@@ -154,19 +117,11 @@ def test_deserialize_maps_is_enabled_0_to_false(serializer: ToolSerializer) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_serialize_then_deserialize_returns_original_entity(
-    serializer: ToolSerializer,
-    tool_enabled: ToolEntity,
-) -> None:
-    row = serializer.serialize(tool_enabled)
-    result = serializer.deserialize(row)
-    assert result == tool_enabled
+def test_round_trip_preserves_entity(serializer: ToolSerializer, tool_enabled: ToolEntity) -> None:
+    assert serializer.deserialize(serializer.serialize(tool_enabled)) == tool_enabled
 
 
 def test_round_trip_preserves_is_enabled_false(
-    serializer: ToolSerializer,
-    tool_disabled: ToolEntity,
+    serializer: ToolSerializer, tool_disabled: ToolEntity
 ) -> None:
-    row = serializer.serialize(tool_disabled)
-    result = serializer.deserialize(row)
-    assert result.is_enabled is False
+    assert serializer.deserialize(serializer.serialize(tool_disabled)).is_enabled is False

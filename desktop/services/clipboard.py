@@ -75,9 +75,24 @@ class ClipboardService(QObject):
         self._threads_lock = threading.Lock()
         self._threads: list[threading.Thread] = []
 
+        # Feature toggle (Settings → Clipboard Sync).  When False both sync
+        # directions are dropped.  Defaults to enabled; SettingsViewModel applies
+        # the persisted value on construction.
+        self._enabled: bool = True
+
         # SHA-256 digest of the last clipboard content synced in either direction.
         # Updated here — not in the View — so all sync logic stays in one place.
         self._last_synced_hash: str = ""
+
+    # ── Feature toggle ────────────────────────────────────────────────────────
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Enable or disable clipboard sync in both directions.
+
+        Args:
+            enabled: ``True`` to allow syncing, ``False`` to drop all sync work.
+        """
+        self._enabled = enabled
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -86,8 +101,11 @@ class ClipboardService(QObject):
 
         Called by PhoneRequestService when it detects Android is waiting
         on CLIPBOARD_ANDROID_TO_PC.  Spawns a daemon thread so the
-        PhoneRequestService poll loop is never blocked.
+        PhoneRequestService poll loop is never blocked.  No-op when the
+        feature is disabled.
         """
+        if not self._enabled:
+            return
         t = threading.Thread(target=self._receive, daemon=True)
         with self._threads_lock:
             self._threads.append(t)
@@ -107,6 +125,16 @@ class ClipboardService(QObject):
         Args:
             text: Current plain-text content of the PC clipboard.
         """
+        # Feature gate (Settings → Clipboard Sync) — skip everything when off.
+        if not self._enabled:
+            return
+        # Drop PC→Android sends while no device is connected — QClipboard.dataChanged
+        # fires on every local clipboard change, including before a phone connects.
+        # Guarded here (not the View) so all sync logic stays in the service; mirrors
+        # SettingsService.push_tools_state. Placed first so the hash is left untouched
+        # while disconnected.
+        if not self._connectivity.connected:
+            return
         if not text:
             return
         current_hash = hashlib.sha256(text.encode()).hexdigest()
@@ -118,6 +146,35 @@ class ClipboardService(QObject):
         with self._threads_lock:
             self._threads.append(t)
         t.start()
+
+    # ── Lifecycle (satisfies services.lifecycle.Lifecycle structurally) ─────────
+
+    def start(self) -> None:
+        """No-op — clipboard sync has no app-start work.
+
+        Present only to satisfy the :class:`~services.lifecycle.Lifecycle`
+        protocol so :class:`~app.app_state.AppState` can include this service in
+        its shutdown poll.  Sync threads are spawned on demand by :meth:`receive`
+        and :meth:`on_clipboard_changed`.
+        """
+
+    def stop(self) -> None:
+        """No-op active-cancel — transient sync threads drain on their own.
+
+        Any in-flight :meth:`_receive` / :meth:`_send_to_android` thread is doing
+        a single ``tau.connect`` round-trip; it finishes once
+        :meth:`ConnectivityService.stop` tears down the transport during
+        shutdown.  :attr:`is_active` reports when they have all finished.
+        """
+
+    @property
+    def is_active(self) -> bool:
+        """``True`` while any background sync thread is still running.
+
+        Polled by :meth:`app.app_state.AppState.any_active` during app shutdown.
+        """
+        with self._threads_lock:
+            return any(t.is_alive() for t in self._threads)
 
     # ── Private ───────────────────────────────────────────────────────────────
 

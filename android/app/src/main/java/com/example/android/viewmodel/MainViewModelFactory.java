@@ -12,7 +12,6 @@ import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
 import com.example.android.domain.usecases.DisconnectDeviceUseCase;
 import com.example.android.domain.usecases.PairWithPcUseCase;
-import com.example.android.domain.usecases.ParseQrDataUseCase;
 import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
 
 /**
@@ -55,9 +54,6 @@ public class MainViewModelFactory implements ViewModelProvider.Factory {
             ConnectToDeviceUseCase connectToDevice =
                     new ConnectToDeviceUseCase(repository);
 
-            ParseQrDataUseCase parseQr =
-                    new ParseQrDataUseCase();
-
             DisconnectDeviceUseCase disconnectDevice =
                     new DisconnectDeviceUseCase(repository);
 
@@ -69,7 +65,6 @@ public class MainViewModelFactory implements ViewModelProvider.Factory {
                     repository,
                     refreshStats,
                     connectToDevice,
-                    parseQr,
                     disconnectDevice,
                     pairWithPc
             );

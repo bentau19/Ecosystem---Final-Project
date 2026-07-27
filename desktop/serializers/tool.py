@@ -1,58 +1,58 @@
 from domain.entities.tool import ToolEntity
 from serializers.serializer import ISerializer
 
-_ToolRow = tuple[str, str, str, bool]
+_ToolDict = dict[str, object]
 
 
-class ToolSerializer(ISerializer[ToolEntity | None, _ToolRow | None]):
-    """Serializes and deserializes ToolEntity objects to and from SQLite row tuples.
+class ToolSerializer(ISerializer[ToolEntity | None, _ToolDict | None]):
+    """Serializes and deserializes ToolEntity objects to and from JSON dicts.
 
-    Maps between a ``ToolEntity`` (or ``None`` when absent) and its SQLite
-    row representation ``(title, description, icon_path, is_enabled)``.
+    Maps between a ``ToolEntity`` (or ``None`` when absent) and a plain,
+    JSON-ready dict with keys ``title``, ``description``, ``icon_path`` and
+    ``is_enabled``.
 
-    A falsy row (``None`` or empty tuple) round-trips to ``None`` so that
+    A falsy value (``None`` or empty dict) round-trips to ``None`` so that
     absent tools can be handled without special-case logic in the repository.
     """
 
     @staticmethod
-    def serialize(entity: ToolEntity | None) -> _ToolRow | None:
-        """Convert a ToolEntity to a SQLite row tuple.
+    def serialize(entity: ToolEntity | None) -> _ToolDict | None:
+        """Convert a ToolEntity to a JSON-ready dict.
 
         Args:
             entity: The entity to serialize, or ``None`` if no tool is present.
 
         Returns:
-            A tuple ``(title, description, icon_path, is_enabled)`` suitable
-            for use with ``cursor.execute``.  Returns ``None`` when ``entity``
-            is ``None``.
+            A dict ``{title, description, icon_path, is_enabled}`` ready for
+            ``json.dump``.  Returns ``None`` when ``entity`` is ``None``.
         """
         if entity is None:
             return None
-        return (
-            entity.title,
-            entity.description,
-            entity.icon_path,
-            entity.is_enabled,
-        )
+        return {
+            "title": entity.title,
+            "description": entity.description,
+            "icon_path": entity.icon_path,
+            "is_enabled": entity.is_enabled,
+        }
 
     @staticmethod
-    def deserialize(db_row: _ToolRow | tuple | None) -> ToolEntity | None:
-        """Reconstruct a ToolEntity from a SQLite row tuple.
+    def deserialize(data: _ToolDict | None) -> ToolEntity | None:
+        """Reconstruct a ToolEntity from a JSON dict.
 
         Args:
-            db_row: A tuple with columns ``(title, description, icon_path,
-                is_enabled)`` as returned by ``cursor.fetchone()``.  A falsy
-                value (``None`` or empty tuple) is treated as "not found" and
-                returns ``None``.
+            data: A dict with keys ``title``, ``description``, ``icon_path`` and
+                ``is_enabled`` as parsed from ``tools.json``.  A falsy value
+                (``None`` or empty dict) is treated as "not found" and returns
+                ``None``.
 
         Returns:
-            A ``ToolEntity`` if ``db_row`` is non-empty, otherwise ``None``.
+            A ``ToolEntity`` if ``data`` is non-empty, otherwise ``None``.
         """
-        if not db_row:
+        if not data:
             return None
         return ToolEntity(
-            title=db_row[0],
-            description=db_row[1],
-            icon_path=db_row[2],
-            is_enabled=bool(db_row[3]),
+            title=str(data.get("title", "")),
+            description=str(data.get("description", "")),
+            icon_path=str(data.get("icon_path", "")),
+            is_enabled=bool(data.get("is_enabled", False)),
         )

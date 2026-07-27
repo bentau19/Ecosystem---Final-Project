@@ -7,6 +7,7 @@ import android.util.Log;
 
 import com.example.android.enums.ClipboardChannels;
 import com.example.android.network.transport.TransportManager;
+import com.example.android.repositories.SettingsRepository;
 
 import org.json.JSONObject;
 
@@ -28,12 +29,16 @@ public class ClipboardFromPCHandler implements ChannelHandler {
 
     private static final String TAG = "ClipboardFromPCHandler";
 
-    private final TransportManager transportManager;
-    private final Context context;
+    private final TransportManager  transportManager;
+    private final Context           context;
+    private final SettingsRepository settingsRepository;
 
-    public ClipboardFromPCHandler(TransportManager transportManager, Context context) {
-        this.transportManager = transportManager;
-        this.context = context.getApplicationContext();
+    public ClipboardFromPCHandler(TransportManager transportManager,
+                                  Context context,
+                                  SettingsRepository settingsRepository) {
+        this.transportManager   = transportManager;
+        this.context            = context.getApplicationContext();
+        this.settingsRepository = settingsRepository;
     }
 
     @Override
@@ -44,9 +49,21 @@ public class ClipboardFromPCHandler implements ChannelHandler {
     /**
      * Called by the polling loop when the PC has opened clipboard_pc_to_android.
      * Runs on PeerRequestHandlerThread — safe to block for I/O.
+     *
+     * <p>Early-returns if clipboard sync has been disabled in Settings so that
+     * the channel is drained but the clipboard is left unchanged.
      */
     @Override
     public void onPeerRequest() {
+        if (!settingsRepository.isClipboardEnabled()) {
+            // Feature is off — drain the channel to unblock the PC's send, but discard content.
+            try {
+                transportManager.readFromChannel(
+                        ClipboardChannels.CLIPBOARD_PC_TO_ANDROID.getValue());
+            } catch (Exception ignored) {}
+            Log.d(TAG, "Clipboard sync disabled — dropping incoming content from PC");
+            return;
+        }
         try {
             String raw = transportManager.readFromChannel(
                     ClipboardChannels.CLIPBOARD_PC_TO_ANDROID.getValue()

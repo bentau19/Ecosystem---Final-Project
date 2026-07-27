@@ -10,6 +10,8 @@
         <file alias="smartphone.svg">icons/smartphone.svg</file>
         <file alias="disconnect.svg">icons/disconnect.svg</file>
         <file alias="refresh.svg">icons/refresh.svg</file>
+        <file alias="clipboard.svg">icons/clipboard.svg</file>
+        <file alias="webcam.svg">icons/webcam.svg</file>
     </qresource>
 
 
@@ -57,6 +59,10 @@
         <file alias="backup-review.qss">styles/backup/backup-review.qss</file>
         <file alias="backup-progress.qss">styles/backup/backup-progress.qss</file>
         <file alias="backup-classification-review.qss">styles/backup/backup-classification-review.qss</file>
+    </qresource>
+
+    <qresource prefix="/styles/settings">
+        <file alias="settings.qss">styles/settings/settings.qss</file>
     </qresource>
 
 </RCC>

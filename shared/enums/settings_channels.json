@@ -1,0 +1,17 @@
+{
+  "name": "SettingsChannels",
+  "description": "TauSync meeting-word identifiers for the tool-enabled settings sync protocol. Both PC and Android must call tau.connect() with the exact same string — define it here once and generate both sides.",
+  "type": "string",
+  "members": [
+    {
+      "name": "TOOLS_ANDROID_TO_PC",
+      "value": "settings_tools_android_to_pc",
+      "description": "Android pushes its tool-enabled state to PC."
+    },
+    {
+      "name": "TOOLS_PC_TO_ANDROID",
+      "value": "settings_tools_pc_to_android",
+      "description": "PC pushes its tool-enabled state to Android."
+    }
+  ]
+}

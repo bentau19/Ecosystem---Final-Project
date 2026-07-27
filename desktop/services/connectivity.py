@@ -39,25 +39,6 @@ def _save_approved_devices(devices: set[str]) -> None:
     path.write_text(json.dumps(sorted(devices)), encoding="utf-8")
 
 
-def _approved_devices_path() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(os.environ["APPDATA"]) / "SyncDose" / "approved_devices.json"
-    return Path(__file__).parent.parent / "data" / "approved_devices.json"
-
-
-def _load_approved_devices() -> set[str]:
-    try:
-        return set(json.loads(_approved_devices_path().read_text(encoding="utf-8")))
-    except (FileNotFoundError, json.JSONDecodeError, ValueError):
-        return set()
-
-
-def _save_approved_devices(devices: set[str]) -> None:
-    path = _approved_devices_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(sorted(devices)), encoding="utf-8")
-
-
 class ConnectivityService(LifecycleFlag, QObject):
     """Manages the TauSync device connection lifecycle.
 
@@ -102,8 +83,6 @@ class ConnectivityService(LifecycleFlag, QObject):
     #: :meth:`resolve_phone_approval`. Emitted from a TauSync background thread, so the connection
     #: is a queued (cross-thread) signal — the dialog is never opened off the UI thread.
     phone_approval_requested: Signal = Signal(str)
-    #: Emitted when the connection mode changes. True = Bluetooth, False = WiFi.
-    mode_changed: Signal = Signal(bool)
 
     def __init__(self, parent: QObject | None = None) -> None:
         """Initialize the service and inject the device repository.
@@ -130,7 +109,10 @@ class ConnectivityService(LifecycleFlag, QObject):
         self._approval_event: threading.Event = threading.Event()
         self._approval_result: bool = False
         self._approved_devices: set[str] = _load_approved_devices()
-        self._use_bluetooth: bool = True
+        # Set once on app exit (see prepare_shutdown). Makes _teardown_transport use a
+        # short, bounded phone-notify timeout so shutdown closes promptly while the phone
+        # still receives the DISCONNECT_FROM_PC message it needs to return to its connect screen.
+        self._shutting_down: bool = False
 
     # ── Public read-only access to the transport ──────────────────────────────
 
@@ -173,32 +155,19 @@ class ConnectivityService(LifecycleFlag, QObject):
         """
         threading.Thread(target=self._stop, daemon=True).start()
 
-    @property
-    def is_bluetooth_mode(self) -> bool:
-        """``True`` when the service is listening for Bluetooth connections."""
-        return self._use_bluetooth
+    def prepare_shutdown(self) -> None:
+        """Arm app-shutdown mode so teardown uses a short, bounded phone-notify timeout.
 
-    def set_mode(self, use_bluetooth: bool) -> None:
-        """Switch between Bluetooth and WiFi connection modes.
-
-        If the service is currently running (listening), it is stopped, the mode
-        is changed, and then restarted — so the new listen() or connect_hybrid()
-        takes effect immediately on the next connection attempt.
-
-        Args:
-            use_bluetooth: ``True`` for Bluetooth+WiFi hybrid mode,
-                ``False`` for WiFi-only (QR code) mode.
+        The phone only returns to its connect screen when it receives the explicit
+        ``DISCONNECT_FROM_PC`` message (a bare socket close is deliberately ignored on
+        Android), so teardown must still send it on exit — but with a short timeout
+        (:attr:`_SHUTDOWN_NOTIFY_TIMEOUT_S`) instead of the normal 10s so a slow/gone
+        phone can't stall the "Shutting down…" overlay.  Called (via
+        :meth:`~viewmodels.device.DeviceViewModel.prepare_shutdown`) on the GUI thread
+        before :meth:`~app.app_state.AppState.stop_all` spawns the ``_stop`` worker, so
+        no lock is needed.  Never reset — the process is exiting.
         """
-        if self._use_bluetooth == use_bluetooth:
-            return
-        self._use_bluetooth = use_bluetooth
-        self.mode_changed.emit(use_bluetooth)
-        if self._is_running.is_set():
-            threading.Thread(target=self._restart_after_mode_change, daemon=True).start()
-
-    def _restart_after_mode_change(self) -> None:
-        self._stop()
-        self._start()
+        self._shutting_down = True
 
     def connect_to_device(self, hostname: str) -> None:
         """Initiate an outbound connection to *hostname* on a background thread.
@@ -274,8 +243,15 @@ class ConnectivityService(LifecycleFlag, QObject):
         #
         # Only attempt network I/O when the transport still reports a live
         # peer.  If Android already crashed, is_connected is False and we skip
-        # straight to the finally block — no 10-second
-        # _notify_phone_of_disconnect wait.
+        # straight to the finally block — no _notify_phone_of_disconnect wait.
+        #
+        # The phone only returns to its connect screen on the explicit
+        # DISCONNECT_FROM_PC message (a bare socket close is deliberately ignored on
+        # Android), so we always send it.  On app shutdown (_shutting_down) we cap the
+        # notify at _SHUTDOWN_NOTIFY_TIMEOUT_S instead of 10s so a slow/gone phone can't
+        # stall the "Shutting down…" overlay (and block every other service's parked
+        # read, which can only drain once this transport closes).
+        notify_timeout = self._SHUTDOWN_NOTIFY_TIMEOUT_S if self._shutting_down else 10
         try:
             if tau.is_connected:
                 waiting_words = tau.get_peer_waiting_words()
@@ -287,7 +263,7 @@ class ConnectivityService(LifecycleFlag, QObject):
                     except Exception as e:
                         logger.warning("Failed to read phone disconnect signal: %s", e)
                 else:
-                    self._notify_phone_of_disconnect(tau)
+                    self._notify_phone_of_disconnect(tau, notify_timeout)
         except Exception as e:
             # get_peer_waiting_words() raises RuntimeError on a dead connection.
             # Swallow it so teardown always completes.
@@ -302,22 +278,21 @@ class ConnectivityService(LifecycleFlag, QObject):
                 logger.warning("Error during tau.disconnect(): %s", e)
 
     @staticmethod
-    def _notify_phone_of_disconnect(tau: TauSync) -> None:
+    def _notify_phone_of_disconnect(tau: TauSync, timeout_seconds: int) -> None:
         # Failures are swallowed so a missing/gone phone never blocks our own teardown.
         # timeout_seconds is mandatory: without it tau.connect() blocks forever waiting
         # for the phone to open the meeting-word channel, which prevents device_disconnected
-        # from ever being emitted and leaves the UI stuck on the dashboard.
+        # from ever being emitted and leaves the UI stuck on the dashboard.  Callers pass a
+        # short timeout on app shutdown (see _teardown_transport) and the normal 10s otherwise.
         try:
             logger.debug("Sending disconnect notification to phone")
-            with tau.connect(SessionChannels.DISCONNECT_FROM_PC.value, timeout_seconds=10) as stream:
+            with tau.connect(
+                    SessionChannels.DISCONNECT_FROM_PC.value, timeout_seconds=timeout_seconds
+            ) as stream:
                 stream.write_string("disconnect")
             logger.debug("Disconnect notification sent to phone")
         except Exception as e:
             logger.warning("Failed to notify phone of disconnect: %s", e)
-
-    def _connect_to_device(self, hostname: str) -> None:
-        # TODO: connect via Bluetooth using the previously stored device ID.
-        pass
 
     def _reset_transport(self) -> None:
         # Clear a stale/stuck transport role so the next listen() re-arms a real accept.
@@ -331,43 +306,39 @@ class ConnectivityService(LifecycleFlag, QObject):
     def _listen(self) -> None:
         # Retries on timeout; surfaces unexpected exceptions via connection_error.
         while self._is_running.is_set() and not self.connected:
-            mode = "bluetooth" if self._use_bluetooth else "wifi"
-            logger.debug("_listen: [%s] waiting for connection", mode)
+            logger.debug("_listen: [bluetooth] waiting for connection")
             try:
-                if self._use_bluetooth:
-                    # Hybrid server: Bluetooth primary + lazy Wi-Fi. Advertises a BLE beacon
-                    # so the phone can discover this PC without typing a MAC address.
-                    self._tau.connect_hybrid(
-                        timeout_seconds=10,
-                        device_name=utils.network.get_pc_name(),
-                        on_approve=self._on_phone_approval,
-                    )
-                else:
-                    # WiFi-only server: plain TCP listen. Phone connects by scanning the QR
-                    # code shown on the login screen (encodes this PC's local IP).
-                    logger.info("_listen: [wifi] listening on %s", utils.network.get_ip())
-                    self._tau.listen(timeout_seconds=10)
+                # Hybrid server: Bluetooth primary + lazy Wi-Fi. Advertises a BLE beacon
+                # so the phone can discover this PC without typing a MAC address.
+                self._tau.connect_hybrid(
+                    timeout_seconds=10,
+                    device_name=utils.network.get_pc_name(),
+                    on_approve=self._on_phone_approval,
+                )
                 # A returning call does NOT guarantee a live peer: a stale transport can
                 # return instantly with is_connected still False (the "phantom connect").
                 # Never emit a phantom device_connected — reset the role so the next
                 # attempt re-arms a real accept, then back off and retry.
                 if not self.connected:
-                    logger.warning("_listen: [%s] returned with no live peer — resetting", mode)
+                    logger.warning("_listen: [bluetooth] returned with no live peer — resetting")
                     self._reset_transport()
                     time.sleep(1)
                     continue
-                logger.info("_listen: device connected (mode=%s)", mode)
+                logger.info("_listen: device connected")
                 self.device_connected.emit()
             except TimeoutError:
-                logger.debug("_listen: [%s] timed out — retrying", mode)
+                logger.debug("_listen: [bluetooth] timed out — retrying")
+                # Defense-in-depth: fully tear the transport down before the next attempt so a
+                # still-advertising Bluetooth RFCOMM listener can never accumulate across retries.
+                self._reset_transport()
                 time.sleep(1)
             except Exception as exc:
                 # A deliberate stop() aborts the blocking listen() via
                 # tau.disconnect() — that is normal teardown, not an error.
                 if not self._is_running.is_set():
-                    logger.debug("_listen: [%s] aborted by stop() — exiting", mode)
+                    logger.debug("_listen: [bluetooth] aborted by stop() — exiting")
                     return
-                logger.error("_listen: [%s] error: %s", mode, exc)
+                logger.error("_listen: [bluetooth] error: %s", exc)
                 self.connection_error.emit(str(exc))
                 # Clear any stuck role (e.g. a surfaced "already connected" RuntimeError)
                 # so the next attempt can re-arm a real listen.
@@ -378,6 +349,11 @@ class ConnectivityService(LifecycleFlag, QObject):
 
     #: Max time to wait for the user's accept/reject decision before defaulting to reject.
     _APPROVAL_TIMEOUT_S = 30.0
+
+    #: Bounded phone-notify timeout on app shutdown. The phone polls every 20 ms and the
+    #: DISCONNECT_FROM_PC handshake normally completes <1 s, so 3 s is ample while staying
+    #: well under the ~8.1 s hard-exit watchdog in views/main_window.py.
+    _SHUTDOWN_NOTIFY_TIMEOUT_S: int = 3
 
     def _on_phone_approval(self, phone_name: str | None) -> bool:
         """Decide whether to accept a phone requesting a hybrid connection.

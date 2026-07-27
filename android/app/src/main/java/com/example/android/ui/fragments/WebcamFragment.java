@@ -1,6 +1,8 @@
 package com.example.android.ui.fragments;
 
 import android.Manifest;
+import android.animation.ObjectAnimator;
+import android.view.WindowManager;
 import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -10,6 +12,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -33,7 +36,9 @@ import androidx.lifecycle.ViewModelProvider;
 import com.example.android.R;
 import com.example.android.domain.enums.WebcamStatus;
 import com.example.android.repositories.WebcamRepository;
+import com.example.android.ui.MainActivity;
 import com.example.android.viewmodel.WebcamViewModel;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.io.ByteArrayOutputStream;
@@ -56,17 +61,19 @@ public class WebcamFragment extends Fragment {
     private WebcamViewModel webcamViewModel;
     private FrameLayout rootContainer;   // host whose child layout is swapped on rotation
     private PreviewView previewView;
+    private View streamingOverlay;
+    private TextView tvRecordDot;
     private AppCompatButton btnStream;
     private TextView tvStatus;
 
     private ExecutorService cameraExecutor;
     private ActivityResultLauncher<String> requestPermissionLauncher;
     private boolean useFrontCamera = false;
+    private boolean previewActive = true; // tracks whether Preview use case is bound
     private ImageAnalysis imageAnalysis;
+    private ObjectAnimator pulseAnimator;
 
-    // Throttle outbound frames to 24 fps so the Desktop pyvirtualcam (also 24 fps)
-    // never accumulates a TCP backlog that would cause latency to grow over time.
-    private static final long FRAME_INTERVAL_MS = 1000L / 24; // ~42 ms
+    private static final long FRAME_INTERVAL_MS = 1000L / 24;
     private long lastQueuedFrameMs = 0;
 
     @Override
@@ -104,6 +111,24 @@ public class WebcamFragment extends Fragment {
 
         webcamViewModel.getStatus().observe(getViewLifecycleOwner(), this::updateUi);
 
+        // Safety-net: if the user presses "Start Streaming" while Camera Mirror is
+        // disabled in Settings (e.g. it was toggled off remotely after they navigated
+        // here), WebcamViewModel fires this one-shot event instead of starting the stream.
+        webcamViewModel.getWebcamDisabledEvent().observe(getViewLifecycleOwner(), fired -> {
+            if (fired == null || !fired) return;
+            new MaterialAlertDialogBuilder(requireContext())
+                    .setTitle(R.string.tool_disabled_title)
+                    .setMessage(R.string.tool_disabled_webcam_msg)
+                    .setPositiveButton(R.string.tool_disabled_open_settings, (dialog, which) -> {
+                        if (getActivity() instanceof MainActivity) {
+                            ((MainActivity) getActivity()).navigateToSettings();
+                        }
+                    })
+                    .setNegativeButton(R.string.tool_disabled_dismiss, null)
+                    .setOnDismissListener(d -> webcamViewModel.clearWebcamDisabledEvent())
+                    .show();
+        });
+
         if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED) {
             startCamera();
@@ -129,9 +154,11 @@ public class WebcamFragment extends Fragment {
         View content = inflater.inflate(R.layout.fragment_webcam, rootContainer, false);
         rootContainer.addView(content);
 
-        previewView = content.findViewById(R.id.previewView);
-        btnStream   = content.findViewById(R.id.btnStream);
-        tvStatus    = content.findViewById(R.id.tvStatus);
+        previewView      = content.findViewById(R.id.previewView);
+        streamingOverlay = content.findViewById(R.id.streamingOverlay);
+        tvRecordDot      = content.findViewById(R.id.tvRecordDot);
+        btnStream        = content.findViewById(R.id.btnStream);
+        tvStatus         = content.findViewById(R.id.tvStatus);
 
         content.findViewById(R.id.btnBack).setOnClickListener(v ->
             requireActivity().onBackPressed());
@@ -159,7 +186,10 @@ public class WebcamFragment extends Fragment {
 
     private void updateUi(WebcamStatus status) {
         if (btnStream == null || tvStatus == null) return; // views not bound yet
-        if (status == WebcamStatus.STREAMING) {
+
+        boolean streaming = (status == WebcamStatus.STREAMING);
+
+        if (streaming) {
             btnStream.setText("Stop Streaming");
             btnStream.setBackgroundTintList(
                 ContextCompat.getColorStateList(requireContext(), R.color.accent_pink));
@@ -174,11 +204,55 @@ public class WebcamFragment extends Fragment {
             tvStatus.setTextColor(
                 ContextCompat.getColor(requireContext(), R.color.text_muted));
         }
+
+        // Overlay visibility: always sync to current state so rotation re-inflate is handled.
+        if (streaming) {
+            streamingOverlay.setVisibility(View.VISIBLE);
+            startPulse();
+        } else {
+            streamingOverlay.setVisibility(View.GONE);
+            stopPulse();
+        }
+
+        // Camera rebind + window flags: only when streaming state actually changes.
+        if (streaming != !previewActive) {
+            if (streaming) {
+                requireActivity().getWindow()
+                    .clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            } else {
+                requireActivity().getWindow()
+                    .addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            }
+            startCamera(!streaming);
+        }
+    }
+
+    private void startPulse() {
+        if (tvRecordDot == null) return;
+        stopPulse();
+        pulseAnimator = ObjectAnimator.ofFloat(tvRecordDot, "alpha", 1f, 0.15f);
+        pulseAnimator.setDuration(700);
+        pulseAnimator.setRepeatMode(ObjectAnimator.REVERSE);
+        pulseAnimator.setRepeatCount(ObjectAnimator.INFINITE);
+        pulseAnimator.start();
+    }
+
+    private void stopPulse() {
+        if (pulseAnimator != null) {
+            pulseAnimator.cancel();
+            pulseAnimator = null;
+        }
+        if (tvRecordDot != null) tvRecordDot.setAlpha(1f);
     }
 
     // ── CameraX ────────────────────────────────────────────────────────────────
 
     private void startCamera() {
+        startCamera(previewActive);
+    }
+
+    private void startCamera(boolean includePreview) {
+        previewActive = includePreview;
         ListenableFuture<ProcessCameraProvider> future =
             ProcessCameraProvider.getInstance(requireContext());
 
@@ -187,13 +261,6 @@ public class WebcamFragment extends Fragment {
             try {
                 ProcessCameraProvider cameraProvider = future.get();
 
-                // Use case 1: live preview on screen
-                Preview preview = new Preview.Builder().build();
-                preview.setSurfaceProvider(previewView.getSurfaceProvider());
-
-                // Use case 2: frame analysis — RGBA_8888 avoids manual YUV conversion.
-                // Cap at 1280×720 (HD) to balance sharpness against bandwidth/OOM —
-                // full-sensor 4K bitmaps are ~50 MB each and would stall the stream.
                 ResolutionStrategy resStrategy = new ResolutionStrategy(
                     new Size(1280, 720),
                     ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
@@ -213,12 +280,18 @@ public class WebcamFragment extends Fragment {
                     : CameraSelector.DEFAULT_BACK_CAMERA;
 
                 cameraProvider.unbindAll();
-                cameraProvider.bindToLifecycle(
-                    getViewLifecycleOwner(),
-                    cameraSelector,
-                    preview,
-                    imageAnalysis
-                );
+
+                if (includePreview) {
+                    // Normal state: show live preview + capture frames
+                    Preview preview = new Preview.Builder().build();
+                    preview.setSurfaceProvider(previewView.getSurfaceProvider());
+                    cameraProvider.bindToLifecycle(
+                        getViewLifecycleOwner(), cameraSelector, preview, imageAnalysis);
+                } else {
+                    // Streaming state: capture-only, no GPU preview → saves battery
+                    cameraProvider.bindToLifecycle(
+                        getViewLifecycleOwner(), cameraSelector, imageAnalysis);
+                }
 
             } catch (Exception e) {
                 Toast.makeText(requireContext(),
@@ -285,6 +358,15 @@ public class WebcamFragment extends Fragment {
         // ImageAnalysis target rotation so the PC keeps receiving upright frames.
         bindLayout();
         startCamera();
+    }
+
+    @Override
+    public void onDestroyView() {
+        super.onDestroyView();
+        // Always clear the flag when leaving — don't let it leak to other screens.
+        requireActivity().getWindow()
+            .clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        stopPulse();
     }
 
     @Override

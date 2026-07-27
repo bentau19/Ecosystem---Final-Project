@@ -17,19 +17,16 @@ import com.example.android.repositories.DeviceRepository;
 import com.example.android.domain.usecases.ConnectToDeviceUseCase;
 import com.example.android.domain.usecases.DisconnectDeviceUseCase;
 import com.example.android.domain.usecases.PairWithPcUseCase;
-import com.example.android.domain.usecases.ParseQrDataUseCase;
 import com.example.android.domain.usecases.RefreshLocalStatsUseCase;
 
 /**
  * ViewModel responsible for preparing and managing data for the UI.
- * It acts as a bridge between the DeviceRepository and the Fragments,
- * handling business logic such as QR data processing and status refreshing.
+ * It acts as a bridge between the DeviceRepository and the Fragments.
  */
 public class MainViewModel extends ViewModel {
     private final RefreshLocalStatsUseCase refreshStats;
     private final ConnectToDeviceUseCase connectToDevice;
     private final DisconnectDeviceUseCase disconnectDevice;
-    private final ParseQrDataUseCase parseQr;
     private final PairWithPcUseCase pairWithPc;
 
     private final DeviceRepository repository;
@@ -46,13 +43,11 @@ public class MainViewModel extends ViewModel {
     public MainViewModel(DeviceRepository repository,
                          RefreshLocalStatsUseCase refreshStats,
                          ConnectToDeviceUseCase connectToDevice,
-                         ParseQrDataUseCase parseQr,
                          DisconnectDeviceUseCase disconnectDevice,
                          PairWithPcUseCase pairWithPc) {
         this.repository = repository;
         this.refreshStats = refreshStats;
         this.connectToDevice = connectToDevice;
-        this.parseQr = parseQr;
         this.disconnectDevice = disconnectDevice;
         this.pairWithPc = pairWithPc;
     }
@@ -76,19 +71,6 @@ public class MainViewModel extends ViewModel {
         refreshStats.execute();
     }
 
-
-    /**
-     * Processes raw QR data and initiates the connection sequence.
-     *
-     * @param qrData The raw string retrieved from the QR scanner.
-     * @return true if the connection data was valid and initiated; false otherwise.
-     */
-    public boolean handleQr(String qrData) {
-        RemoteDeviceInfo info = parseQr.execute(qrData);
-        if (info == null) return false;
-        connectToDevice.execute(info);
-        return true;
-    }
 
     // ── Bluetooth discovery & pairing ────────────────────────────────────────
 
@@ -178,8 +160,8 @@ public class MainViewModel extends ViewModel {
     }
 
     /**
-     * Records a hybrid (Bluetooth) connection to the bonded PC in the repository — the Bluetooth
-     * sibling of {@link #handleQr}. The real {@code connectHybrid} runs in {@code ConnectivityService};
+     * Records a hybrid (Bluetooth) connection to the bonded PC in the repository.
+     * The real {@code connectHybrid} runs in {@code ConnectivityService};
      * this only updates the connection state so the UI reflects the attempt. The PC name is taken
      * from the discovered device when available and is later refined by the {@code pc_name} channel.
      */

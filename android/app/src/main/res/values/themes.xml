@@ -4,6 +4,33 @@
         <item name="colorPrimary">@color/background_main</item>
         <item name="colorSurface">@color/surface_dark</item>
         <item name="android:statusBarColor">@color/background_main</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.SyncDose.MaterialAlertDialog</item>
+    </style>
+
+    <!-- Dark alert-dialog overlay: forces the app's dark surface + light text regardless of the
+         system light/dark setting, so MaterialAlertDialogBuilder dialogs stay readable. -->
+    <style name="ThemeOverlay.SyncDose.MaterialAlertDialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="colorSurface">@color/surface_dark</item>
+        <item name="android:colorBackground">@color/surface_dark</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorPrimary">@color/accent_cyan</item>
+        <item name="materialAlertDialogTitleTextStyle">@style/SyncDose.MaterialAlertDialog.Title</item>
+        <item name="materialAlertDialogBodyTextStyle">@style/SyncDose.MaterialAlertDialog.Body</item>
+        <item name="buttonBarPositiveButtonStyle">@style/SyncDose.MaterialAlertDialog.Button</item>
+        <item name="buttonBarNegativeButtonStyle">@style/SyncDose.MaterialAlertDialog.Button</item>
+    </style>
+
+    <style name="SyncDose.MaterialAlertDialog.Title" parent="MaterialAlertDialog.MaterialComponents.Title.Text">
+        <item name="android:textColor">@color/text_primary</item>
+    </style>
+
+    <style name="SyncDose.MaterialAlertDialog.Body" parent="MaterialAlertDialog.MaterialComponents.Body.Text">
+        <item name="android:textColor">@color/text_primary</item>
+    </style>
+
+    <style name="SyncDose.MaterialAlertDialog.Button" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/accent_cyan</item>
     </style>
 
     <!-- Fully transparent activity — used by ShareReceiverActivity so no UI flashes on screen -->

@@ -22,6 +22,8 @@ class Icons(PathsEnum):
     SMARTPHONE = ":/icons/smartphone.svg"
     DISCONNECT = ":/icons/disconnect.svg"
     REFRESH = ":/icons/refresh.svg"
+    CLIPBOARD = ":/icons/clipboard.svg"
+    WEBCAM = ":/icons/webcam.svg"
 
 
 class Styles(PathsEnum):
@@ -84,3 +86,9 @@ class BackupStyles(PathsEnum):
     REVIEW              = ":/styles/backup/backup-review.qss"
     PROGRESS            = ":/styles/backup/backup-progress.qss"
     CLASSIFICATION_REVIEW = ":/styles/backup/backup-classification-review.qss"
+
+
+class SettingsStyles(PathsEnum):
+    """Qt virtual paths to settings-screen QSS stylesheets."""
+
+    SETTINGS_CONTENT = ":/styles/settings/settings.qss"

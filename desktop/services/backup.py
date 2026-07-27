@@ -223,6 +223,11 @@ class BackupService(LifecycleFlag, QObject):
 
         self._connectivity: ConnectivityService = connectivity
 
+        # ── Feature gate ──────────────────────────────────────────────────────
+        # Controlled by the "Backup" tool via ToolViewModel.set_tool_enabled();
+        # defaults to True (opt-out) to preserve the previous always-on behaviour.
+        self._enabled: bool = True
+
         # ── Threading primitives ──────────────────────────────────────────────
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor()
         self._slot_executor: ThreadPoolExecutor = ThreadPoolExecutor(
@@ -247,6 +252,23 @@ class BackupService(LifecycleFlag, QObject):
         self._review_lock: threading.Lock = threading.Lock()
         self._pending_reviews: dict[str, threading.Event] = {}
         self._review_decisions: dict[str, bool] = {}  # True = keep, False = remove
+
+    # ── Feature gate ──────────────────────────────────────────────────────────
+
+    def set_enabled(self, value: bool) -> None:
+        """Enable or disable backup reception.
+
+        When *False*, incoming manifest requests are silently dropped so the
+        phone cannot initiate a new backup session.  In-flight sessions that
+        were already accepted before this call are unaffected.
+
+        Called by :class:`~viewmodels.settings.SettingsViewModel` whenever the
+        user or the phone changes the ``backup_enabled`` setting.
+
+        Args:
+            value: ``True`` to allow backups, ``False`` to block them.
+        """
+        self._enabled = value
 
     # ── Lifecycle (wired by AppState to device_connected / device_disconnected) ─
 
@@ -463,8 +485,15 @@ class BackupService(LifecycleFlag, QObject):
         ``BACKUP_MANIFEST_FROM_ANDROID`` appears in
         ``get_peer_waiting_words()``.  Submits the actual I/O to the executor
         so the ``PhoneRequestService`` polling loop is never blocked.
+
+        No-op when the backup feature is disabled (``_enabled = False``) —
+        the phone's manifest channel is left un-consumed; Android's connect
+        timeout fires naturally and Android handles the session as cancelled.
         """
         if not self._is_running.is_set():
+            return
+        if not self._enabled:
+            logger.debug("Backup disabled — dropping incoming manifest request")
             return
         self._executor.submit(self._handle_manifest)
 

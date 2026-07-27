@@ -25,8 +25,10 @@ import com.example.android.enums.DeviceInfoChannels;
 import com.example.android.enums.FileTransferChannels;
 import com.example.android.enums.SessionChannels;
 import com.example.android.enums.BackupChannels;
+import com.example.android.enums.SettingsChannels;
 import com.example.android.enums.VirtualDriveChannels;
 import com.example.android.network.handlers.BackupControlChannelHandler;
+import com.example.android.network.handlers.SettingsChannelHandler;
 import com.example.android.network.handlers.VirtualDriveChannelHandler;
 import com.example.android.network.handlers.ChannelHandlerRegistry;
 import com.example.android.network.handlers.DeviceInfoChannelHandler;
@@ -35,8 +37,10 @@ import com.example.android.domain.usecases.ClipboardSyncUseCase;
 import com.example.android.domain.usecases.ReceiveFileUseCase;
 import com.example.android.domain.usecases.RespondToFileTransferUseCase;
 import com.example.android.domain.usecases.SendFileUseCase;
+import com.example.android.domain.usecases.SettingsUseCase;
 import com.example.android.domain.usecases.VirtualDriveUseCase;
 import com.example.android.domain.usecases.WebcamStreamUseCase;
+import com.example.android.repositories.SettingsRepository;
 import com.example.android.repositories.BackupRepository;
 import com.example.android.repositories.SendFileRepository;
 import com.example.android.network.handlers.ClipboardFromPCHandler;
@@ -86,6 +90,10 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
     // Virtual drive UseCase — serves all WinFsp filesystem ops forwarded by the desktop
     private VirtualDriveUseCase virtualDriveUseCase;
+
+    // Settings UseCase — pushes tool-enabled state to the connected PC
+    private SettingsUseCase settingsUseCase;
+    private SettingsRepository settingsRepository;
 
     // PC-name handler. Driven proactively from onStatusChanged(CONNECTED) — Android pulls the
     // PC name (the desktop only answers on request), so this is NOT registered for reactive
@@ -193,6 +201,10 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // directly from the filesystem (no background scan, no persistent index).
         virtualDriveUseCase = new VirtualDriveUseCase(transportManager, VirtualDriveRepository.getInstance());
 
+        // Settings — persists and syncs tool-enabled state with the connected PC.
+        settingsRepository = SettingsRepository.getInstance(getApplicationContext());
+        settingsUseCase    = new SettingsUseCase(transportManager);
+
         registerChannelHandlers();
         registerFileTransferActionListener();
         registerIncomingRequestListener();
@@ -260,9 +272,18 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         // CLIPBOARD_PC_TO_ANDROID receives clipboard text pushed automatically by the Desktop
         // whenever its QClipboard changes.  Writing to ClipboardManager is always allowed on
         // Android — no foreground restriction — so this works even when the app is in the background.
+        // SettingsRepository is injected so the handler can gate on the clipboard-enabled setting.
         handlerRegistry.registerHandler(
                 com.example.android.enums.ClipboardChannels.CLIPBOARD_PC_TO_ANDROID.getValue(),
-                new ClipboardFromPCHandler(transportManager, this)
+                new ClipboardFromPCHandler(transportManager, this, settingsRepository)
+        );
+
+        // SETTINGS_TOOLS_PC_TO_ANDROID — PC pushes tool-enabled state (e.g. Virtual Drive
+        // toggled from the desktop UI). The handler updates SettingsRepository which posts
+        // LiveData so SettingsFragment (if visible) updates its switches immediately.
+        handlerRegistry.registerHandler(
+                SettingsChannels.TOOLS_PC_TO_ANDROID.getValue(),
+                new SettingsChannelHandler(transportManager, settingsRepository)
         );
 
         // All other device telemetry data types are registered inline as Getters using generic Lambda functional interfaces
@@ -342,6 +363,15 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         if (intent != null && "com.example.android.ACTION_SEND_CLIPBOARD".equals(intent.getAction())) {
             Log.d(TAG, "Received clipboard send action");
             new Thread(() -> clipboardSyncUseCase.execute(), "ClipboardSync").start();
+            return START_NOT_STICKY;
+        }
+
+        // Push current tool-enabled state to the connected PC.
+        // No-op if the transport is not currently connected (settingsUseCase will throw
+        // and log; no crash, no state corruption).
+        if (intent != null && "com.example.android.ACTION_PUSH_SETTINGS".equals(intent.getAction())) {
+            Log.d(TAG, "Received settings push action");
+            pushSettingsToPC();
             return START_NOT_STICKY;
         }
 
@@ -503,6 +533,9 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         if (status == TransportStatus.CONNECTED) {
             deviceRepository.updateConnectionStatus(ConnectionStatus.CONNECTED);
             requestPcName();
+            // Immediately inform the PC of the phone's current tool-enabled state so both
+            // sides are consistent from the first moment the session is live.
+            pushSettingsToPC();
         } else if (status == TransportStatus.CONNECTING || status == TransportStatus.RECONNECTING) {
             deviceRepository.updateConnectionStatus(connectionStatus);
         } else if (status == TransportStatus.FAILED) {
@@ -536,6 +569,33 @@ public class ConnectivityService extends Service implements TransportManager.Tra
                 inProgressChannels.remove(channel);
             }
         }, "PcNameRequest").start();
+    }
+
+    /**
+     * Pushes the phone's current tool-enabled state to the PC on a background thread.
+     *
+     * <p>Called once from {@link #onStatusChanged} when the transport reaches CONNECTED,
+     * and also from {@link #onStartCommand} when {@code ACTION_PUSH_SETTINGS} is received.
+     * Uses {@link #inProgressChannels} to prevent duplicate concurrent pushes.
+     */
+    private void pushSettingsToPC() {
+        String channel = SettingsChannels.TOOLS_ANDROID_TO_PC.getValue();
+        if (!inProgressChannels.add(channel)) {
+            Log.d(TAG, "Settings push already in progress, skipping");
+            return;
+        }
+        // Snapshot all four settings synchronously before the background thread runs.
+        boolean vd = settingsRepository.isVirtualDriveEnabled();
+        boolean cb = settingsRepository.isClipboardEnabled();
+        boolean wc = settingsRepository.isWebcamEnabled();
+        boolean bk = settingsRepository.isBackupEnabled();
+        new Thread(() -> {
+            try {
+                settingsUseCase.pushToolsState(vd, cb, wc, bk);
+            } finally {
+                inProgressChannels.remove(channel);
+            }
+        }, "SettingsPush").start();
     }
 
     @Override
@@ -615,6 +675,29 @@ public class ConnectivityService extends Service implements TransportManager.Tra
     public void onReconnectAttempt(int attemptNumber, int maxRetries) {
         Log.i(TAG, "Reconnect attempt " + attemptNumber + "/" + maxRetries);
         deviceRepository.updateConnectionStatus(ConnectionStatus.RECONNECTING);
+    }
+
+    /**
+     * Transport detected the peer connection is truly lost (e.g. PC crash / network drop — no
+     * {@code DISCONNECT_FROM_PC} message ever arrives) and sustained past the blip grace window.
+     *
+     * <p>Runs the same {@link #cleanup()} the clean PC-initiated disconnect uses (via
+     * {@code DisconnectChannelHandler}'s {@code this::cleanup}), so the UI returns to the connect
+     * screen (DISCONNECTED) and the foreground service stops. Posted on the main thread by the
+     * transport manager, where {@code cleanup()} is safe to run.
+     */
+    @Override
+    public void onConnectionLost() {
+        Log.w(TAG, "Transport reported connection lost — running clean teardown");
+        if (isCleaningUp) {
+            return; // a clean disconnect is already in flight
+        }
+        if (deviceRepository != null) {
+            // Mark it PC-initiated so ConnectFragment.onResume does not auto-redial a PC
+            // that just vanished — consistent with the clean-disconnect UX (manual reconnect).
+            deviceRepository.setJustDisconnectedByPc();
+        }
+        cleanup();
     }
 
     /**

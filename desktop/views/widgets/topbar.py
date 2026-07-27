@@ -27,17 +27,19 @@ class Topbar(QWidget):
     def __init__(
             self,
             topbar_height: int = 72,
+            title: str = "Dashboard",
             parent: QWidget | None = None
     ) -> None:
         """Initialize the Topbar.
 
         Args:
             topbar_height: Height of the topbar in pixels. Defaults to 72.
+            title: The page title displayed on the left. Defaults to ``"Dashboard"``.
             parent: Optional parent widget, defaults to ``None``.
         """
         super().__init__(parent)
 
-        self._title: str = "Dashboard"
+        self._title: str = title
         self._topbar_height: int = topbar_height
         self._device_viewmodel: DeviceViewModel = app_state.device_viewmodel
 

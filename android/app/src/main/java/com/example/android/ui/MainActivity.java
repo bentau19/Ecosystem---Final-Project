@@ -24,18 +24,16 @@ import com.example.android.domain.enums.ConnectionStatus;
 import com.example.android.services.AppNotificationManager;
 import com.example.android.ui.fragments.ActionsFragment;
 import com.example.android.ui.fragments.BackupFragment;
+import com.example.android.ui.fragments.SettingsFragment;
 import com.example.android.ui.fragments.WebcamFragment;
 import com.example.android.ui.fragments.ConnectFragment;
 import com.example.android.viewmodel.FileTransferViewModel;
 import com.example.android.viewmodel.MainViewModel;
 import com.example.android.viewmodel.MainViewModelFactory;
-import com.google.zxing.integration.android.IntentIntegrator;
-import com.google.zxing.integration.android.IntentResult;
-
 import com.example.android.services.ConnectivityService;
 
 /**
- * Main Activity serves as the primary host for fragments and manages the QR scanning process.
+ * Main Activity serves as the primary host for fragments.
  * It handles the navigation logic between connection setup and the actions dashboard.
  */
 public class MainActivity extends AppCompatActivity {
@@ -79,14 +77,11 @@ public class MainActivity extends AppCompatActivity {
             if (status == null) return;
             switch (status) {
                 case CONNECTING:
-                    Toast.makeText(this, "Connecting...", Toast.LENGTH_SHORT).show();
                     break;
                 case CONNECTED:
                     navigateToActions();
-                    Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
                     break;
                 case DISCONNECTING:
-                    Toast.makeText(this, "Disconnecting...", Toast.LENGTH_SHORT).show();
                     break;
                 case DISCONNECTED:
                     // Clear the entire back stack synchronously so any intermediate
@@ -110,46 +105,6 @@ public class MainActivity extends AppCompatActivity {
                     break;
             }
         });
-    }
-
-    /**
-     * Processes raw QR data scanned from the PC client.
-     *
-     * @param qrData The string content extracted from the QR code.
-     */
-    public void processScannedData(String qrData) {
-        // ViewModel handles the data parsing and updates the Repository.
-        boolean success = viewModel.handleQr(qrData);
-
-        if (success) {
-            // Check notification permission (Android 13+) before starting service.
-            checkNotificationPermission();
-
-            // Start the service.
-            startConnectivityService();
-        } else {
-            Toast.makeText(this, "Invalid QR Code. Please try again.", Toast.LENGTH_LONG).show();
-        }
-    }
-
-    /**
-     * Starts the Foreground Service to maintain the PC connection.
-     */
-    private void startConnectivityService() {
-        String ip = "";
-        if (viewModel.getConnectionState().getValue() != null &&
-                viewModel.getConnectionState().getValue().getRemotePC() != null) {
-            ip = viewModel.getConnectionState().getValue().getRemotePC().getPcIp();
-        }
-
-        Intent serviceIntent = new Intent(this, ConnectivityService.class);
-        serviceIntent.putExtra("TARGET_IP", ip);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ContextCompat.startForegroundService(this, serviceIntent);
-        } else {
-            startService(serviceIntent);
-        }
     }
 
     /**
@@ -258,6 +213,19 @@ public class MainActivity extends AppCompatActivity {
         getSupportFragmentManager().beginTransaction()
                 .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out)
                 .replace(R.id.fragment_container, new WebcamFragment())
+                .addToBackStack(null)
+                .commitAllowingStateLoss();
+    }
+
+    /**
+     * Navigates to the Settings screen.
+     *
+     * <p>Uses addToBackStack so the back button returns to ActionsFragment.
+     */
+    public void navigateToSettings() {
+        getSupportFragmentManager().beginTransaction()
+                .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out)
+                .replace(R.id.fragment_container, new SettingsFragment())
                 .addToBackStack(null)
                 .commitAllowingStateLoss();
     }
@@ -382,27 +350,4 @@ public class MainActivity extends AppCompatActivity {
         window.setStatusBarColor(ContextCompat.getColor(this, R.color.background_main));
     }
 
-    // --- QR Scanner (Zxing Integration) ---
-
-    /**
-     * Launches the QR code scanner.
-     */
-    public void handleConnection() {
-        new IntentIntegrator(this)
-                .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-                .setPrompt("Scan SyncApp QR Code")
-                .setBeepEnabled(true)
-                .setOrientationLocked(true)
-                .initiateScan();
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        IntentResult result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
-        if (result != null && result.getContents() != null) {
-            processScannedData(result.getContents());
-        } else {
-            super.onActivityResult(requestCode, resultCode, data);
-        }
-    }
 }
