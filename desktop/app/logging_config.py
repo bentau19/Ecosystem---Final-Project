@@ -24,7 +24,7 @@ def configure_logging() -> None:
     if root.handlers:
         return
 
-    root.setLevel(logging.DEBUG)
+    root.setLevel(logging.INFO)
 
     fmt = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",

@@ -66,6 +66,20 @@ public final class TauSyncStream implements Closeable {
         return outputStream;
     }
 
+    /** @return an OutputStream that always routes over Wi-Fi in hybrid mode (use for bulk/media data) */
+    public OutputStream getWifiOutputStream() {
+        return new WifiOutputStream();
+    }
+
+    private final class WifiOutputStream extends OutputStream {
+        @Override public void write(int b) throws IOException { write(new byte[]{(byte) b}, 0, 1); }
+        @Override public void write(byte[] buffer, int offset, int count) throws IOException {
+            sendData(buffer, offset, count, true);
+        }
+        @Override public void flush() {}
+        @Override public void close() throws IOException { TauSyncStream.this.close(); }
+    }
+
     /** @return the local ID assigned to this stream */
     public int getLocalId() {
         return localId;

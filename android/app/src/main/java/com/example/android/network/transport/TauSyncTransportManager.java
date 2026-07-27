@@ -758,8 +758,9 @@ public class TauSyncTransportManager implements TransportManager {
 
         try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
                      tauSync.connect(channel, connectTimeoutSec)) {
-            java.io.OutputStream out = stream.getOutputStream();
-            byte[] buf = new byte[OUTGOING_STREAM_BUFFER_BYTES];
+            // Use Wi-Fi output — bulk streaming (webcam, backup) must not go over Bluetooth.
+            java.io.OutputStream out = stream.getWifiOutputStream();
+            byte[] buf = new byte[FILE_CHUNK_SIZE];
             int n;
             long totalBytes = 0;
             int chunkCount = 0;

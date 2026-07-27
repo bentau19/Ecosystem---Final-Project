@@ -234,6 +234,21 @@ def make_service(tmp_path):
         svc.stop()
 
 
+def _deliver_manifest(qtbot: QtBot, svc: BackupService) -> None:
+    """Submit the manifest and block until it has been fully consumed.
+
+    ``receive_manifest()`` hands ``_handle_manifest`` to a background executor
+    and returns immediately.  ``_handle_manifest`` resets per-session state
+    (``_dest_event.clear()``, ``_dest_dir = None``) *before* emitting
+    ``manifest_received``, so waiting on that signal guarantees the reset is
+    done and a subsequent ``proceed()`` / ``cancel_session()`` cannot be
+    clobbered.  Replaces the racy fixed ``qtbot.wait(200)`` that intermittently
+    timed out on CI.
+    """
+    with qtbot.waitSignal(svc.manifest_received, timeout=2000):
+        svc.receive_manifest()
+
+
 # ---------------------------------------------------------------------------
 # manifest_received signal
 # ---------------------------------------------------------------------------
@@ -358,8 +373,7 @@ def test_proceed_sends_ready_ack(qtbot: QtBot, make_service, tmp_path) -> None:
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
@@ -439,8 +453,7 @@ def test_file_registered_emitted_before_progress(
     svc.file_registered.connect(lambda p, s, orig_s: registered.append((p, s)))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
@@ -476,8 +489,7 @@ def test_clean_file_emits_file_complete_and_is_saved(
     svc.file_complete.connect(lambda name, path: complete_files.append(name))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
@@ -528,8 +540,7 @@ def test_backup_complete_fires_after_all_files_terminal(
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
@@ -574,8 +585,7 @@ def test_corrupt_file_emits_file_skipped(
     svc.file_failed.connect(lambda p, r: failed.append((p, r)))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.REJECTED, 0.0)):
@@ -611,8 +621,7 @@ def test_duplicate_file_emits_file_skipped(
     svc.file_failed.connect(lambda p, r: failed.append((p, r)))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.REJECTED, 0.0)):
@@ -648,8 +657,7 @@ def test_unwanted_file_emits_file_skipped(
     svc.file_failed.connect(lambda p, r: failed.append((p, r)))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.REJECTED, 0.0)):
@@ -689,8 +697,7 @@ def test_transport_error_on_metadata_slot_emits_file_failed(
     svc.file_failed.connect(lambda p, r: failed.append((p, r)))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     svc.proceed(tmp_path / "dest")
     qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
@@ -727,8 +734,7 @@ def test_file_progress_emitted_at_slot_start_and_end(
     svc.file_progress.connect(lambda p, b, s: progress.append((p, b, s)))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
@@ -770,8 +776,7 @@ def test_clean_file_sends_succ_on_file_result_channel(
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
@@ -805,8 +810,7 @@ def test_screened_out_file_still_sends_succ(
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.REJECTED, 0.0)):
@@ -839,8 +843,7 @@ def test_transport_error_sends_fail_on_file_result_channel(
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     svc.proceed(tmp_path / "dest")
     qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
@@ -871,8 +874,7 @@ def test_file_result_sent_regardless_of_classify_flag(
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
@@ -920,8 +922,7 @@ def test_cache_dir_deleted_after_successful_backup(
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
@@ -968,8 +969,7 @@ def test_duplicate_dest_filename_gets_counter_suffix(
     svc.file_complete.connect(lambda name, path: complete.append(name))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
@@ -1015,8 +1015,7 @@ def test_all_media_photo_organized_into_photos_subdir(
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
@@ -1050,8 +1049,7 @@ def test_all_media_video_organized_into_videos_subdir(
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
@@ -1284,8 +1282,7 @@ def test_file_registered_carries_orig_size_for_storage_saver(
     svc.file_registered.connect(lambda p, s, orig_s: registered.append((p, s, orig_s)))
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
@@ -1326,8 +1323,7 @@ def test_transport_error_on_data_slot_emits_file_failed(
     svc.file_skipped.connect(skipped.append)
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     svc.proceed(tmp_path / "dest")
     qtbot.waitUntil(lambda: len(done) > 0, timeout=3000)
@@ -1370,8 +1366,7 @@ def test_folder_mode_rel_path_preserves_directory_structure(
     done: list = []
     svc.backup_complete.connect(lambda: done.append(True))
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)):
@@ -1416,8 +1411,7 @@ def test_needs_review_user_keeps_does_not_emit_file_skipped(
     svc.backup_complete.connect(lambda: done.append(True))
 
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.NEEDS_REVIEW, 0.65)):
@@ -1470,8 +1464,7 @@ def test_needs_review_user_discards_emits_file_skipped_and_deletes_file(
     svc.backup_complete.connect(lambda: done.append(True))
 
     svc.start()
-    svc.receive_manifest()
-    qtbot.wait(200)
+    _deliver_manifest(qtbot, svc)
 
     with patch.object(Classifier, "classify",
                       return_value=ClassificationResult(ClassificationVerdict.NEEDS_REVIEW, 0.72)):
