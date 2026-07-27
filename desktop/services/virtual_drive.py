@@ -23,6 +23,7 @@ from services.connectivity import ConnectivityService
 from services.device_info import DeviceInfoService
 from services.lifecycle import LifecycleFlag
 from services.sessions import ReadSessionRegistry, WriteSessionRegistry
+from services.vdrive_cache import CachedListing, ListingCache
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +45,12 @@ class VirtualDriveService(LifecycleFlag, QObject):
 
     Each op is a single round-trip on its own channel:
 
-    - Metadata ops (list/stat/create/delete/rename/truncate): write a JSON
+    - Metadata ops (stat/create/delete/rename/truncate): write a JSON
       request line, read a JSON response.
+    - ``list_page``: served from :class:`~services.vdrive_cache.ListingCache`.
+      WinFsp enumerates a directory one page at a time but Android answers with
+      the whole listing, so only the first page of an enumeration costs a
+      round-trip; mutating ops evict the affected directories.
     - ``volume``: answered locally from the device-info service's latest
       ``DeviceEntity`` snapshot (no TauSync round-trip) so Explorer shows the
       phone's real total/free storage.
@@ -81,6 +86,16 @@ class VirtualDriveService(LifecycleFlag, QObject):
     # side transparently reopens a session on its next miss.
     _READ_SESSION_IDLE_TIMEOUT_S: float = 300.0  # 5 minutes idle
 
+    # ─ Directory-listing cache ───────────────────────────────────────────────
+    # WinFsp enumerates a directory one page at a time, and every page is backed
+    # by a ``list_full`` round-trip that ships the WHOLE directory. Caching the
+    # listing collapses that burst into a single fetch. The TTL only has to
+    # outlive one enumeration (Explorer requests every page back-to-back over the
+    # local pipe, microseconds apart); a few seconds also absorbs a user
+    # reopening the same folder.
+    _LISTING_CACHE_TTL_S: float = 5.0
+    _LISTING_CACHE_MAX_DIRS: int = 8
+
     # ─ Connect timeouts ──────────────────────────────────────────────────────
     _LIST_FULL_TIMEOUT_S: int = 120
     # Short so a slow phone causes Explorer lag, not a frozen pipe pool.
@@ -106,7 +121,7 @@ class VirtualDriveService(LifecycleFlag, QObject):
     # read_open is gated (it opens a fresh channel). A gated `read` that fails
     # during a blip just poisons the session; the C++ side reopens on retry.
     _CONNECTION_REQUIRED_OPS: frozenset[str] = frozenset({
-        "list", "list_page", "stat", "read", "read_open",
+        "list_page", "stat", "read", "read_open",
         "create", "delete", "rename", "truncate", "write_open",
     })
 
@@ -151,13 +166,16 @@ class VirtualDriveService(LifecycleFlag, QObject):
         # handle. Each session carries its own lock serialising request/response
         # framing (foreground reads and background prefetch share one stream).
         self._read_sessions: ReadSessionRegistry = ReadSessionRegistry()
+        # Full directory listings, so the page burst WinFsp issues for one
+        # directory costs a single round-trip to the phone instead of one per page.
+        self._listings: ListingCache = ListingCache(
+            self._LISTING_CACHE_TTL_S, self._LISTING_CACHE_MAX_DIRS)
         self._open_pipes_lock: threading.Lock = threading.Lock()
         self._open_pipes: set[Any] = set()  # tracked so _stop() can force-close in-flight connections
         # Pre-built once to avoid per-request dict allocation in _dispatch.
         # Ordered by CRUD: Read → Create → Update → Delete.
         self._dispatch_table: dict[str, Any] = {
             # Read
-            "list":        self._op_list,
             "list_page":   self._op_list_page,
             "stat":        self._op_stat,
             "volume":      self._op_volume,
@@ -241,6 +259,7 @@ class VirtualDriveService(LifecycleFlag, QObject):
 
         self._write_sessions.close_all()
         self._read_sessions.close_all()
+        self._listings.clear()
 
         with self._lifecycle_lock:
             if not self._is_running.is_set():
@@ -429,37 +448,50 @@ class VirtualDriveService(LifecycleFlag, QObject):
 
     # ── Read ops ──────────────────────────────────────────────────────────────
 
-    def _op_list(self, req: dict, _: bytes) -> tuple[dict, bytes]:
-        # List directory entries at req["path"].
-        resp = self._json_exchange(
-            VirtualDriveChannels.VIRTUAL_DRIVE_LIST.value,
-            {"path": req["path"]},
-            self._META_CONNECT_TIMEOUT_S,
-            stall_s=self._META_STALL_TIMEOUT_S,
-        )
-        return resp, b''
-
     def _op_list_page(self, req: dict, _: bytes) -> tuple[dict, bytes]:
-        # Return a page of sorted entries starting after req["after"].
+        # Serve a page out of the cached full listing, fetching from the phone
+        # only on a miss. WinFsp walks every page of a directory back-to-back,
+        # so one fetch answers the whole enumeration instead of one per page.
         path = req["path"]
-        after = req.get("after")
-        limit = int(req.get("limit", 200))
+        now = time.monotonic()
 
-        entries = self._fetch_listing_full(path)
-        return self._page_entries(entries, after, limit), b''
+        listing = self._listings.get(path, now)
+        if listing is None:
+            listing = self._fetch_listing_full(path)
+            if listing is None:
+                # Never cache a failure, and never report it as an empty folder:
+                # the C++ side maps this to a retryable I/O error so Explorer
+                # retries instead of showing the directory as empty.
+                return {"ok": False, "error": "io_error"}, b''
+            self._listings.put(path, listing.entries, listing.dir_mtime_ms, now)
 
-    def _fetch_listing_full(self, path: str) -> list[dict]:
-        # Fetch the full sorted directory listing from Android in one round-trip.
+        return self._page_entries(
+            listing.entries, req.get("after"), int(req.get("limit", 200))), b''
+
+    def _fetch_listing_full(self, path: str) -> CachedListing | None:
+        # Fetch the full directory listing from Android in one round-trip.
+        # Returns None when the fetch failed — distinct from an empty directory,
+        # which is a legitimate (and cacheable) empty entry list.
         resp = self._json_exchange(
             VirtualDriveChannels.VIRTUAL_DRIVE_LIST_FULL.value,
             {"path": path},
             self._LIST_FULL_TIMEOUT_S,
         )
         if not resp.get("ok"):
-            return []
+            logger.warning(
+                "vdrive list_full failed: path=%s: %s",
+                path, resp.get("error", "unknown"),
+            )
+            return None
+        # Android lists via File.listFiles(), which is unordered; the page cursor
+        # binary-searches on name, so sorting here is what makes paging correct.
         entries = resp.get("entries", [])
         entries.sort(key=lambda e: e["name"])
-        return entries
+        return CachedListing(
+            entries=entries,
+            dir_mtime_ms=int(resp.get("dir_mtime_ms", 0)),
+            fetched_at=time.monotonic(),
+        )
 
     @staticmethod
     def _page_entries(entries: list[dict], after: str | None, limit: int) -> dict:
@@ -505,6 +537,10 @@ class VirtualDriveService(LifecycleFlag, QObject):
 
     def _op_create(self, req: dict, _: bytes) -> tuple[dict, bytes]:
         # Create a file or directory at req["path"].
+        # Every mutating op evicts unconditionally, not only on success: a
+        # partially-applied change must not leave a stale listing behind, and
+        # over-invalidating only costs one refetch.
+        self._listings.invalidate_parent(req["path"])
         resp = self._json_exchange(
             VirtualDriveChannels.VIRTUAL_DRIVE_CREATE.value,
             {"path": req["path"], "is_dir": req.get("is_dir", False)},
@@ -541,10 +577,17 @@ class VirtualDriveService(LifecycleFlag, QObject):
         # Close the write session so Android finalizes the file.  drop() closes the
         # stream; the resulting EOF signals Android to rename temp → final path.
         self._write_sessions.drop(req["path"])
+        # The file's size and mtime just changed — the parent listing is stale.
+        self._listings.invalidate_parent(req["path"])
         return {"ok": True}, b''
 
     def _op_rename(self, req: dict, _: bytes) -> tuple[dict, bytes]:
         # Rename or move req["from"] to req["to"].
+        # Both parents lose/gain an entry; and when the source is a directory,
+        # every listing beneath it is orphaned.
+        self._listings.invalidate_parent(req["from"])
+        self._listings.invalidate_parent(req["to"])
+        self._listings.drop_subtree(req["from"])
         resp = self._json_exchange(
             VirtualDriveChannels.VIRTUAL_DRIVE_RENAME.value,
             {"from": req["from"], "to": req["to"]},
@@ -555,6 +598,7 @@ class VirtualDriveService(LifecycleFlag, QObject):
 
     def _op_truncate(self, req: dict, _: bytes) -> tuple[dict, bytes]:
         # Resize req["path"] to req["new_size"] bytes.
+        self._listings.invalidate_parent(req["path"])
         resp = self._json_exchange(
             VirtualDriveChannels.VIRTUAL_DRIVE_TRUNCATE.value,
             {"path": req["path"], "new_size": req["new_size"]},
@@ -567,6 +611,9 @@ class VirtualDriveService(LifecycleFlag, QObject):
 
     def _op_delete(self, req: dict, _: bytes) -> tuple[dict, bytes]:
         # Delete the file or directory at req["path"].
+        # Deleting a directory orphans every cached listing beneath it.
+        self._listings.invalidate_parent(req["path"])
+        self._listings.drop_subtree(req["path"])
         resp = self._json_exchange(
             VirtualDriveChannels.VIRTUAL_DRIVE_DELETE.value,
             {"path": req["path"]},
@@ -656,21 +703,32 @@ class VirtualDriveService(LifecycleFlag, QObject):
     def _read_payload(self, s: Any, path: str, req: dict[str, Any]) -> tuple[dict[str, Any], bytes]:
         # Read one {ok,length}\n header line then exactly `length` payload bytes.
         # Raises TimeoutError on stall (callers map it to a retryable timeout).
-        header_line = self._read_line_bounded(s)
-        if not header_line:
-            self._log_read_error(path, req, "empty header (peer closed)")
-            return {"ok": False, "error": "io_error"}, b''
-        try:
-            header = json.loads(header_line.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            self._log_read_error(path, req, f"bad header: {header_line!r}")
-            return {"ok": False, "error": "io_error"}, b''
-        if not header.get("ok", False):
-            error = header.get("error", "io_error")
-            self._log_read_error(path, req, f"android error: {error}")
-            return {"ok": False, "error": error}, b''
-        expected = int(header.get("length", 0))
-        file_bytes = self._read_exact_bounded(s, expected)
+        #
+        # One watchdog spans the whole exchange. Header and payload arrive on the
+        # same stream, so a single stall/total budget for both is cheaper (one
+        # thread per read op instead of one per leaf read) and stricter — the
+        # total budget previously restarted between the header and the payload.
+        with self._read_deadline(s) as (mark_progress, stalled):
+            header_line = self._read_line_bounded(s, mark_progress)
+            if not header_line:
+                if stalled.is_set():
+                    raise TimeoutError("virtual-drive read header stalled")
+                self._log_read_error(path, req, "empty header (peer closed)")
+                return {"ok": False, "error": "io_error"}, b''
+            try:
+                header = json.loads(header_line.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                self._log_read_error(path, req, f"bad header: {header_line!r}")
+                return {"ok": False, "error": "io_error"}, b''
+            if not header.get("ok", False):
+                error = header.get("error", "io_error")
+                self._log_read_error(path, req, f"android error: {error}")
+                return {"ok": False, "error": error}, b''
+            expected = int(header.get("length", 0))
+            file_bytes = self._read_exact_bounded(s, expected, mark_progress)
+
+        if stalled.is_set():
+            raise TimeoutError("virtual-drive read stalled")
         if len(file_bytes) != expected:
             self._log_read_error(
                 path, req, f"truncated: got {len(file_bytes)}/{expected} bytes")
@@ -742,44 +800,43 @@ class VirtualDriveService(LifecycleFlag, QObject):
             stop_watchdog.set()
             watchdog.join(timeout=1.0)
 
-    def _read_line_bounded(self, s: Any) -> bytes:
-        # Read one \n-terminated line, aborting on stall.
-        buf = bytearray()
-        with self._read_deadline(s) as (mark_progress, stalled):
-            while True:
-                try:
-                    chunk = s.read(1)
-                except Exception:
-                    break
-                if not chunk:
-                    break
-                mark_progress()
-                if chunk == b"\n":
-                    break
-                buf += chunk
-        if stalled.is_set():
-            raise TimeoutError("virtual-drive read header stalled")
-        return bytes(buf)
+    @staticmethod
+    def _read_line_bounded(s: Any, mark_progress: Callable[[], None]) -> bytes:
+        # Read one \n-terminated line using the stream's own buffered scanner:
+        # one CLR call per 4 KB instead of one per byte.
+        #
+        # read_until keeps any bytes that arrived after the newline in the
+        # stream's internal pushback buffer, which read() drains first — so the
+        # payload that follows the header on this same stream is never lost. For
+        # a session that buffer lives on the stream object, which outlives the
+        # individual read, so nothing extra has to be carried across calls.
+        #
+        # The caller's watchdog bounds this: read_until is one blocking call, so
+        # a peer that never sends a newline is caught by the stall timer.
+        try:
+            line = s.read_until(b"\n")
+        except Exception:
+            return b''  # watchdog closed the stream, or the peer hung up
+        mark_progress()
+        return line[:-1] if line.endswith(b"\n") else line
 
-    def _read_exact_bounded(self, s: Any, expected: int) -> bytes:
+    @staticmethod
+    def _read_exact_bounded(s: Any, expected: int, mark_progress: Callable[[], None]) -> bytes:
         # Read up to expected bytes, aborting if the transfer stalls.
         if expected <= 0:
             return b''
         parts: list[bytes] = []
         got = 0
-        with self._read_deadline(s) as (mark_progress, stalled):
-            while got < expected:
-                try:
-                    chunk = s.read(min(65536, expected - got))
-                except Exception:
-                    break
-                if not chunk:
-                    break
-                parts.append(chunk)
-                got += len(chunk)
-                mark_progress()
-        if stalled.is_set():
-            raise TimeoutError("virtual-drive read stalled")
+        while got < expected:
+            try:
+                chunk = s.read(min(65536, expected - got))
+            except Exception:
+                break
+            if not chunk:
+                break
+            parts.append(chunk)
+            got += len(chunk)
+            mark_progress()
         return b"".join(parts)
 
     def _read_all_bounded(

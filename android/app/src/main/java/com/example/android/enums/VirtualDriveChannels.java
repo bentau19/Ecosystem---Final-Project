@@ -4,32 +4,28 @@
 package com.example.android.enums;
 
 /**
- * TauSync meeting-word base prefixes for the virtual drive protocol. PC initiates all channels;
- * Android responds. The PC appends a unique 8-char hex UUID to each base to form the actual
- * meeting word (e.g. {@code "virtual_drive_list_a1b2c3d4"}). Android registers handlers under
- * the prefix key ({@code getValue() + "_"}) and the {@link com.example.android.network.handlers.ChannelHandlerRegistry}
- * prefix-fallback routes each UUID-suffixed incoming channel to the correct handler.
+ * TauSync meeting-word identifiers for the virtual drive protocol. PC initiates all channels; Android responds. Both sides call tau.connect() with the exact same string.
  */
 public enum VirtualDriveChannels {
-    /** Base prefix for directory listing ops. Meeting word: {@code virtual_drive_list_{uuid8}}. PC sends {@code {path}}; Android responds with entries array. */
+    /** Base prefix for directory listing ops. Meeting word: virtual_drive_list_{uuid8}. PC sends {path}; Android responds with entries array. */
     VIRTUAL_DRIVE_LIST("virtual_drive_list"),
-    /** Base prefix for metadata (stat) ops. Meeting word: {@code virtual_drive_stat_{uuid8}}. PC sends {@code {path}}; Android responds with entry fields. */
+    /** Base prefix for metadata (stat) ops. Meeting word: virtual_drive_stat_{uuid8}. PC sends {path}; Android responds with entry fields. */
     VIRTUAL_DRIVE_STAT("virtual_drive_stat"),
-    /** Base prefix for read ops. Meeting word: {@code virtual_drive_read_{uuid8}}. PC sends {@code {path, offset, length}\n}; Android streams file bytes back then closes. */
+    /** Base prefix for read ops. Meeting word: virtual_drive_read_{uuid8}. PC sends {path, offset, length}\n; Android streams file bytes back then closes. */
     VIRTUAL_DRIVE_READ("virtual_drive_read"),
-    /** Base prefix for write sessions. Meeting word: {@code virtual_drive_write_{uuid8}}. PC sends {@code {path}\n} header then streams bytes until channel close; Android stores to temp file then finalizes. */
+    /** Base prefix for write sessions. Meeting word: virtual_drive_write_{uuid8}. PC sends {path}\n header then streams bytes until channel close; Android stores to temp file then finalizes. */
     VIRTUAL_DRIVE_WRITE("virtual_drive_write"),
-    /** Base prefix for create ops. Meeting word: {@code virtual_drive_create_{uuid8}}. PC sends {@code {path, is_dir}}; Android creates file or directory. */
+    /** Base prefix for create ops. Meeting word: virtual_drive_create_{uuid8}. PC sends {path, is_dir}; Android creates file or directory. */
     VIRTUAL_DRIVE_CREATE("virtual_drive_create"),
-    /** Base prefix for delete ops. Meeting word: {@code virtual_drive_delete_{uuid8}}. PC sends {@code {path}}; Android deletes file or directory. */
+    /** Base prefix for delete ops. Meeting word: virtual_drive_delete_{uuid8}. PC sends {path}; Android deletes file or directory. */
     VIRTUAL_DRIVE_DELETE("virtual_drive_delete"),
-    /** Base prefix for rename ops. Meeting word: {@code virtual_drive_rename_{uuid8}}. PC sends {@code {from, to}}; Android renames or moves the entry. */
+    /** Base prefix for rename ops. Meeting word: virtual_drive_rename_{uuid8}. PC sends {from, to}; Android renames or moves the entry. */
     VIRTUAL_DRIVE_RENAME("virtual_drive_rename"),
-    /** Base prefix for truncate ops. Meeting word: {@code virtual_drive_truncate_{uuid8}}. PC sends {@code {path, new_size}}; Android resizes the file. */
+    /** Base prefix for truncate ops. Meeting word: virtual_drive_truncate_{uuid8}. PC sends {path, new_size}; Android resizes the file. */
     VIRTUAL_DRIVE_TRUNCATE("virtual_drive_truncate"),
-    /** Base prefix for paginated listing ops. Meeting word: {@code virtual_drive_list_page_{uuid8}}. PC sends {@code {path, after, limit}}; Android responds with {@code {ok, entries, has_more, next_after}}. Entries are sorted by name; {@code after} is the last name received, or {@code null} for the first page. */
+    /** Base prefix for paginated listing ops. Meeting word: virtual_drive_list_page_{uuid8}. PC sends {path, after, limit}; Android responds with {ok, entries, has_more, next_after}. Entries are sorted by name; 'after' is the last name received (null for first page). */
     VIRTUAL_DRIVE_LIST_PAGE("virtual_drive_list_page"),
-    /** Base prefix for full-directory enumeration. Meeting word: {@code virtual_drive_list_full_{uuid8}}. PC sends {@code {path}}; Android responds with {@code {ok, dir_mtime_ms, entries}} containing every child entry in one streamed response. The PC caches the listing keyed by {@code dir_mtime_ms} and serves all list_page requests locally, avoiding per-page round-trips for large folders. */
+    /** Base prefix for full-directory enumeration. Meeting word: virtual_drive_list_full_{uuid8}. PC sends {path}; Android responds with {ok, dir_mtime_ms, entries} containing every child entry in one streamed response. The PC caches the listing under a short TTL (ListingCache) and serves all list_page requests of one enumeration locally, so a folder costs one round-trip rather than one per page; mutating ops evict the affected directories. dir_mtime_ms is recorded but not used to decide freshness: it arrives with the listing (so revalidating costs as much as refetching) and a directory's mtime does not change when a child is rewritten in place. */
     VIRTUAL_DRIVE_LIST_FULL("virtual_drive_list_full");
 
     private final String value;

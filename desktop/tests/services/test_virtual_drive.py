@@ -1,4 +1,4 @@
-"""Unit tests for VirtualDriveService._page_entries pagination.
+"""Unit tests for VirtualDriveService: pagination, read sessions, listing cache.
 
 Critical invariant: ``next_after`` is ALWAYS a string, never ``None``.
 
@@ -6,13 +6,14 @@ VirtualDrive.exe's C++ ``ReadDirectory`` reads this field with nlohmann
 ``j.value("next_after", "")``, which falls back to the default ONLY when the key
 is absent. A present-but-``null`` value makes ``get<std::string>()`` throw
 ``type_error.302``; that exception escapes the WinFsp callback and terminates the
-(un-rebuildable) binary, tearing the drive down with "the I/O operation has been
-aborted" on every empty folder. So an empty/last page must serialise
-``next_after`` as ``""`` — never ``None``.
+binary, tearing the drive down with "the I/O operation has been aborted" on every
+empty folder. So an empty/last page must serialise ``next_after`` as ``""`` —
+never ``None``.
 """
 
 import json
-from unittest.mock import MagicMock
+import threading
+from unittest.mock import MagicMock, patch
 
 from services.virtual_drive import VirtualDriveService
 
@@ -88,6 +89,8 @@ class _FakeStream:
         self._buf = bytearray(response)
         self.written = bytearray()
         self.closed = False
+        self.read_calls = 0
+        self.read_until_calls = 0
 
     def feed(self, data: bytes) -> None:
         """Append bytes the peer will 'send back' on subsequent reads."""
@@ -102,10 +105,29 @@ class _FakeStream:
         return len(data)
 
     def read(self, n: int = -1) -> bytes:
+        self.read_calls += 1
         if n is None or n < 0:
             n = len(self._buf)
         chunk = bytes(self._buf[:n])
         del self._buf[:n]
+        return chunk
+
+    def read_until(self, delimiter: bytes) -> bytes:
+        """Read up to and including *delimiter*, leaving the rest buffered.
+
+        Mirrors ``TauSyncStream.read_until``: bytes after the delimiter stay in
+        the stream's own buffer and are returned by later ``read`` calls, which
+        is what lets a header and the payload behind it share one stream.
+        """
+        self.read_until_calls += 1
+        idx = self._buf.find(delimiter)
+        if idx == -1:
+            chunk = bytes(self._buf)
+            self._buf.clear()
+            return chunk
+        end = idx + len(delimiter)
+        chunk = bytes(self._buf[:end])
+        del self._buf[:end]
         return chunk
 
     def close(self) -> None:
@@ -207,3 +229,198 @@ def test_fresh_read_without_session_opens_one_shot_channel() -> None:
     assert json.loads(lines[0]) == {"path": "/photo.raw"}
     assert json.loads(lines[1]) == {"offset": 0, "length": 2}
     assert stream.closed is True
+
+
+# ── Buffered read-path tests (header + payload share one stream) ───────────────
+
+
+def test_header_and_payload_arriving_together_are_split_correctly() -> None:
+    """A header and payload delivered in one chunk must not lose the payload.
+
+    ``read_until`` over-reads past the newline; the surplus stays in the
+    stream's pushback buffer. If that buffer were ignored the payload would be
+    silently dropped.
+    """
+    stream = _FakeStream(_read_header(5) + b"hello")
+    svc = _service_with_streams(stream)
+
+    resp, payload = svc._op_read(
+        {"path": "/f.bin", "offset": 0, "length": 5}, b"")
+
+    assert resp == {"ok": True}
+    assert payload == b"hello"
+
+
+def test_session_leftover_survives_across_two_reads() -> None:
+    """Two full header+payload pairs fed at once must decode as two reads.
+
+    The pushback buffer lives on the stream object, which outlives an individual
+    read, so leftover bytes from the first exchange must still be there for the
+    second.
+    """
+    stream = _FakeStream()
+    svc = _service_with_streams(stream)
+    session = svc._op_read_open({"path": "/v.mp4"}, b"")[0]["session"]
+
+    stream.feed(_read_header(3) + b"abc" + _read_header(4) + b"wxyz")
+
+    first = svc._op_read({"session": session, "offset": 0, "length": 3}, b"")
+    second = svc._op_read({"session": session, "offset": 3, "length": 4}, b"")
+
+    assert first == ({"ok": True}, b"abc")
+    assert second == ({"ok": True}, b"wxyz")
+    assert svc._connectivity.tau.connect.call_count == 1
+
+
+def test_read_header_costs_one_buffered_read() -> None:
+    """The response header is scanned in one buffered call, not one call per byte."""
+    stream = _FakeStream(_read_header(3) + b"abc")
+    svc = _service_with_streams(stream)
+
+    svc._op_read({"path": "/f.bin", "offset": 0, "length": 3}, b"")
+
+    # One read_until for the header; the payload needs at most a couple of reads.
+    # The old per-byte loop issued ~30 read(1) calls for the header alone.
+    assert stream.read_until_calls == 1
+    assert stream.read_calls <= 2
+
+
+def test_one_watchdog_thread_per_read_op() -> None:
+    """A read op starts a single stall watchdog spanning header and payload."""
+    stream = _FakeStream(_read_header(3) + b"abc")
+    svc = _service_with_streams(stream)
+
+    real_thread = threading.Thread
+    started: list[str] = []
+
+    def _counting_thread(*args: object, **kwargs: object) -> threading.Thread:
+        started.append(str(kwargs.get("name", "")))
+        return real_thread(*args, **kwargs)  # type: ignore[arg-type]
+
+    with patch("services.virtual_drive.threading.Thread", _counting_thread):
+        svc._op_read({"path": "/f.bin", "offset": 0, "length": 3}, b"")
+
+    assert started.count("vdrive-read-watchdog") == 1
+
+
+# ── Directory-listing cache tests ─────────────────────────────────────────────
+#
+# WinFsp enumerates a directory one page at a time, but Android answers with the
+# whole listing. Without a cache each page cost a full enumeration over TauSync.
+# ``connect.side_effect`` is a finite list, so an unexpected extra fetch also
+# surfaces as StopIteration — but assert call_count explicitly so a regression
+# names itself.
+
+
+def _listing_stream(names: tuple[str, ...], dir_mtime_ms: int = 111) -> _FakeStream:
+    """A stream canned with Android's ``list_full`` response for *names*."""
+    return _FakeStream(json.dumps({
+        "ok": True,
+        "dir_mtime_ms": dir_mtime_ms,
+        "entries": [
+            {"name": n, "is_dir": False, "size": 0, "mtime_ms": 0} for n in names
+        ],
+    }).encode("utf-8"))
+
+
+def test_list_page_second_page_served_from_cache() -> None:
+    """Paging through one directory costs exactly one fetch from the phone.
+
+    This is the headline regression: ``_op_list_page`` used to call
+    ``_fetch_listing_full`` on every page, so an N-entry folder paid
+    ceil(N / limit) complete enumerations.
+    """
+    svc = _service_with_streams(_listing_stream(("a", "b", "c")))
+
+    first, _ = svc._op_list_page({"path": "/D", "after": None, "limit": 2}, b"")
+    second, _ = svc._op_list_page({"path": "/D", "after": "b", "limit": 2}, b"")
+
+    assert [e["name"] for e in first["entries"]] == ["a", "b"]
+    assert first["has_more"] is True
+    assert [e["name"] for e in second["entries"]] == ["c"]
+    assert second["has_more"] is False
+    assert svc._connectivity.tau.connect.call_count == 1
+
+
+def test_list_page_sorts_unsorted_android_entries() -> None:
+    """Android lists via File.listFiles() (unordered); the cursor needs sorted names."""
+    svc = _service_with_streams(_listing_stream(("c", "a", "b")))
+
+    page, _ = svc._op_list_page({"path": "/D", "after": None, "limit": 10}, b"")
+
+    assert [e["name"] for e in page["entries"]] == ["a", "b", "c"]
+    assert page["next_after"] == "c"
+
+
+def test_list_page_different_paths_do_not_share_cache() -> None:
+    """Each directory is cached under its own key."""
+    svc = _service_with_streams(
+        _listing_stream(("a",)), _listing_stream(("z",)))
+
+    one, _ = svc._op_list_page({"path": "/A", "after": None, "limit": 10}, b"")
+    two, _ = svc._op_list_page({"path": "/B", "after": None, "limit": 10}, b"")
+
+    assert [e["name"] for e in one["entries"]] == ["a"]
+    assert [e["name"] for e in two["entries"]] == ["z"]
+    assert svc._connectivity.tau.connect.call_count == 2
+
+
+def test_list_page_failure_errors_and_is_not_cached() -> None:
+    """A failed listing must error, not render as an empty folder, and not cache.
+
+    Returning ``{"ok": True, "entries": []}`` on a timeout made Explorer show the
+    directory as empty instead of retrying.
+    """
+    failed = _FakeStream(json.dumps({"ok": False, "error": "not_found"}).encode())
+    svc = _service_with_streams(failed, _listing_stream(("a",)))
+
+    bad, _ = svc._op_list_page({"path": "/D", "after": None, "limit": 10}, b"")
+    assert bad["ok"] is False
+
+    good, _ = svc._op_list_page({"path": "/D", "after": None, "limit": 10}, b"")
+    assert [e["name"] for e in good["entries"]] == ["a"]
+    assert svc._connectivity.tau.connect.call_count == 2
+
+
+def test_list_page_refetches_after_ttl_expiry() -> None:
+    """An expired listing is refetched rather than served stale."""
+    svc = _service_with_streams(
+        _listing_stream(("a",)), _listing_stream(("a", "b")))
+    svc._listings._ttl_s = 0.0
+
+    svc._op_list_page({"path": "/D", "after": None, "limit": 10}, b"")
+    again, _ = svc._op_list_page({"path": "/D", "after": None, "limit": 10}, b"")
+
+    assert [e["name"] for e in again["entries"]] == ["a", "b"]
+    assert svc._connectivity.tau.connect.call_count == 2
+
+
+def test_write_close_invalidates_parent_listing() -> None:
+    """Finalizing a write makes the parent listing stale (size/mtime changed)."""
+    svc = _service_with_streams(
+        _listing_stream(("a",)), _listing_stream(("a", "new.txt")))
+
+    svc._op_list_page({"path": "/D", "after": None, "limit": 10}, b"")
+    svc._op_write_close({"path": "/D/new.txt"}, b"")
+    after, _ = svc._op_list_page({"path": "/D", "after": None, "limit": 10}, b"")
+
+    assert [e["name"] for e in after["entries"]] == ["a", "new.txt"]
+    assert svc._connectivity.tau.connect.call_count == 2
+
+
+def test_delete_of_directory_drops_cached_subtree() -> None:
+    """Deleting a directory orphans every listing beneath it."""
+    svc = _service_with_streams(
+        _listing_stream(("x",)),                                  # warm /A/B
+        _FakeStream(json.dumps({"ok": True}).encode()),           # the delete op
+        _listing_stream(("y",)),                                  # forced refetch
+    )
+
+    svc._op_list_page({"path": "/A/B", "after": None, "limit": 10}, b"")
+    assert "/A/B" in svc._listings
+
+    svc._op_delete({"path": "/A"}, b"")
+    assert "/A/B" not in svc._listings
+
+    again, _ = svc._op_list_page({"path": "/A/B", "after": None, "limit": 10}, b"")
+    assert [e["name"] for e in again["entries"]] == ["y"]

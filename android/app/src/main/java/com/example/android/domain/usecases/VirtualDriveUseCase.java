@@ -263,7 +263,10 @@ public class VirtualDriveUseCase {
     // ── list_full ─────────────────────────────────────────────────────────────
 
     // PC sends {"path"}; responds with {"ok","dir_mtime_ms","entries"} — full dir in one shot
-    // Desktop caches the listing keyed by dir_mtime_ms and serves list_page requests locally
+    // Desktop caches the listing under a short TTL and serves every list_page request of one
+    // enumeration locally, so a folder costs one round-trip instead of one per page.
+    // dir_mtime_ms is reported for diagnostics; the desktop does not revalidate against it
+    // (it arrives with the listing, and a dir's mtime is unchanged by an in-place child write).
     public void handleListFull(String channel) throws Exception {
         transportManager.serveJsonExchange(
                 channel,
