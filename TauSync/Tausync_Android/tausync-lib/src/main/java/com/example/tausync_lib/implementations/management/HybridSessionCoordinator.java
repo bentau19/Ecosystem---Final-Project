@@ -112,6 +112,18 @@ final class HybridSessionCoordinator {
      * idle teardown.
      */
     ITransport acquireWifiOrFallback() {
+        synchronized (wifiLock) {
+            // Wi-Fi dropped unexpectedly since it was marked up (a drop bypasses
+            // disconnectWifiForIdle, so nothing reset the state machine). Reset it here or the
+            // already-completed ready gate below would hand back the DEAD link and the send would
+            // park on the transport's gate until it times out.
+            if (wifiUp && !wifi.isConnected()) {
+                wifiUp = false;
+                wifiActivating = false;
+                wifiReady = new CompletableFuture<>();
+            }
+        }
+
         if (wifiUp && wifi.isConnected()) {
             return wifi;
         }
@@ -175,6 +187,11 @@ final class HybridSessionCoordinator {
             if (isServer) handleSessionJoin(message);
         } else if (SessionControlMessage.TYPE_SESSION_JOIN_ACK.equals(type)) {
             if (!isServer) markWifiReady();
+        } else if (SessionControlMessage.TYPE_WIFI_IDLE_CLOSE.equals(type)) {
+            // The peer is closing the idle Wi-Fi link. Tear our side down intentionally too
+            // (without echoing the announce back) so the close is never mistaken for an
+            // unexpected drop.
+            tearDownWifi(false);
         }
     }
 
@@ -291,18 +308,34 @@ final class HybridSessionCoordinator {
     }
 
     /**
-     * Tears down the idle Wi-Fi link intentionally. Because it is intentional the transport does not
-     * auto-reconnect, and because Bluetooth is still up the ref-counted
+     * Tears down the idle Wi-Fi link intentionally, announcing it to the peer first so BOTH sides
+     * close on purpose. Because Bluetooth is still up the ref-counted
      * {@link ConnectionContext#notifyTransportDisconnected()} does not abort any channels — they
      * simply continue over Bluetooth until the next large payload re-runs the bring-up.
      */
     private void disconnectWifiForIdle() {
+        tearDownWifi(true);
+    }
+
+    /**
+     * Shared Wi-Fi teardown for both the local idle timer ({@code announcePeer} true — tell the
+     * peer over Bluetooth BEFORE closing, so its side is intentional too, not a mistaken
+     * "unexpected drop") and the peer's WIFI_IDLE_CLOSE announce (false — never echo, or the two
+     * sides would ping-pong).
+     */
+    private void tearDownWifi(boolean announcePeer) {
         synchronized (wifiLock) {
             if (!wifiUp) return;
             wifiUp = false;
             wifiActivating = false;
             // Fresh incomplete gate so the next large send waits for a new bring-up.
             wifiReady = new CompletableFuture<>();
+        }
+        if (announcePeer) {
+            // Best-effort: if Bluetooth is down the whole session is ending anyway.
+            try {
+                sendOverBluetooth(newMessage(SessionControlMessage.TYPE_WIFI_IDLE_CLOSE)).get();
+            } catch (Exception ignored) {}
         }
         try { wifi.disconnect(); } catch (Exception ignored) {}
     }

@@ -37,9 +37,23 @@ public class TauSyncTransportManager implements TransportManager {
     private static final int INITIAL_RETRY_DELAY_MS = 1000;      // 1 second
     private static final int MAX_RETRY_DELAY_MS = 30000;         // 30 seconds
     private static final int MAX_RETRY_ATTEMPTS = 2;
-    private static final int POLLING_INTERVAL_MS = 20;           // 20 ms — avg discovery latency
-    // 10 ms instead of 50 ms; 5×
-    // faster virtual-drive op pickup
+
+    // Adaptive peer-request polling. A fixed 20 ms tick wakes the CPU 50×/second for the whole
+    // session even when nothing is happening — a large idle battery cost. Instead the poll runs
+    // fast only while requests are actually flowing and backs off once the link goes quiet; the
+    // first request after a quiet period is picked up within POLLING_IDLE_INTERVAL_MS and the
+    // loop immediately speeds back up for the rest of the burst.
+    private static final int POLLING_INTERVAL_MS = 20;            // while requests are flowing
+    private static final int POLLING_IDLE_INTERVAL_MS = 250;      // link quiet — let the CPU sleep
+    private static final long POLLING_ACTIVE_WINDOW_MS = 5_000;   // stay fast this long after the last request
+
+    // Epoch-ms of the last non-empty getPeerWaitingWords() result; drives the fast/idle decision.
+    private volatile long lastPeerRequestMs = 0;
+
+    // Incremented whenever a new polling session starts; a queued tick from a superseded session
+    // sees a stale generation and exits, so two chains can never run concurrently.
+    private final java.util.concurrent.atomic.AtomicInteger pollGeneration =
+            new java.util.concurrent.atomic.AtomicInteger();
 
     // Hybrid (Bluetooth) connect timeouts. Bluetooth is slower than Wi-Fi, and the device is
     // already bonded by the discovery flow, so the link + handshake take a few seconds. The inner
@@ -90,6 +104,12 @@ public class TauSyncTransportManager implements TransportManager {
     // Reconnection tracking
     private int currentRetryAttempt = 0;
     private long nextRetryDelayMs = INITIAL_RETRY_DELAY_MS;
+
+    // True while recovering an unexpectedly lost session. Unlike a user-initiated connect (which
+    // gives up after MAX_RETRY_ATTEMPTS), recovery retries indefinitely with capped back-off —
+    // the session should re-converge with zero taps whenever the PC comes back. Cleared on
+    // success, on explicit disconnect/shutdown, and when the PC explicitly declines.
+    private volatile boolean persistentReconnect = false;
 
     // Connection-health watchdog. The PC only sends DISCONNECT_FROM_PC on a *clean* exit; a
     // crash / network drop just closes the socket. The poll loop checks tauSync.isConnected()
@@ -208,6 +228,7 @@ public class TauSyncTransportManager implements TransportManager {
                 // connect success
                 Log.d(TAG, "🟢 connect returned successfully (hybrid=" + hybrid + ")");
 
+                persistentReconnect = false;
                 currentRetryAttempt = 0;
                 nextRetryDelayMs = INITIAL_RETRY_DELAY_MS;
 
@@ -281,10 +302,23 @@ public class TauSyncTransportManager implements TransportManager {
             // The PC operator explicitly declined — retrying would only re-prompt them with the
             // same request. Surface the failure and stop.
             Log.w(TAG, "Connection declined on the PC — not retrying.");
+            persistentReconnect = false;
             updateStatus(TransportStatus.FAILED);
             if (listener != null) {
                 mainHandler.post(() -> listener.onConnectionError(error));
             }
+            return;
+        }
+
+        if (persistentReconnect) {
+            // Recovering a lost session: never give up, just keep the capped back-off going.
+            // Explicit disconnect/shutdown clears the flag and removes the queued retry.
+            long jitterMs = (long) (Math.random() * 1000);
+            long delayMs = nextRetryDelayMs + jitterMs;
+            Log.i(TAG, "Reconnect attempt failed — retrying in " + delayMs + "ms");
+            updateStatus(TransportStatus.RECONNECTING);
+            mainHandler.postDelayed(retryConnectionRunnable, delayMs);
+            nextRetryDelayMs = Math.min(nextRetryDelayMs * 2, MAX_RETRY_DELAY_MS);
             return;
         }
 
@@ -321,8 +355,11 @@ public class TauSyncTransportManager implements TransportManager {
     }
 
     /**
-     * Starts the polling loop that checks for peer requests periodically.
-     * Creates new ScheduledExecutorService for polling.
+     * Starts the adaptive polling chain that checks for peer requests: fast
+     * ({@link #POLLING_INTERVAL_MS}) while requests are flowing, backing off to
+     * {@link #POLLING_IDLE_INTERVAL_MS} once the link has been quiet for
+     * {@link #POLLING_ACTIVE_WINDOW_MS}. Each tick schedules the next one; the chain ends when the
+     * transport leaves CONNECTED and a fresh chain (new generation) starts on the next connect.
      */
     private void startPollingForPeerRequests() {
         if (isShuttingDown.get()) {
@@ -339,42 +376,73 @@ public class TauSyncTransportManager implements TransportManager {
         }
 
         connectionLostSince[0] = 0L; // fresh health window for this session
-        pollingExecutor.scheduleWithFixedDelay(() -> {
-            // tauSync may be null during the reconnect window (handlePollingFailure
-            // has already cleared it before attemptConnection creates the new instance).
-            if (isShuttingDown.get() || status != TransportStatus.CONNECTED || tauSync == null) {
+        lastPeerRequestMs = System.currentTimeMillis(); // start fast — a request often follows connect
+        int generation = pollGeneration.incrementAndGet();
+        schedulePollTick(generation, POLLING_INTERVAL_MS);
+
+        Log.d(TAG, "Started adaptive polling (fast=" + POLLING_INTERVAL_MS
+                + "ms, idle=" + POLLING_IDLE_INTERVAL_MS + "ms)");
+    }
+
+    private void schedulePollTick(int generation, long delayMs) {
+        ScheduledExecutorService executor = pollingExecutor;
+        if (executor == null || executor.isShutdown()) {
+            return;
+        }
+        try {
+            executor.schedule(() -> pollTick(generation), delayMs, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // Executor shut down between the check and the schedule — the chain simply ends.
+        }
+    }
+
+    private void pollTick(int generation) {
+        if (generation != pollGeneration.get()) {
+            return; // superseded by a newer polling session — never run two chains at once
+        }
+        // tauSync may be null during the reconnect window (handlePollingFailure has already
+        // cleared it before attemptConnection creates the new instance). Ending the chain here is
+        // safe: the next successful connect starts a fresh one.
+        if (isShuttingDown.get() || status != TransportStatus.CONNECTED || tauSync == null) {
+            return;
+        }
+
+        // Connection-health watchdog. getPeerWaitingWords() is a discovery snapshot that does
+        // NOT throw on a dropped socket, so it can't detect a vanished PC by itself; isConnected()
+        // can. evaluateHealth() applies the grace window so a transient blip is tolerated and only
+        // a sustained loss triggers the automatic reconnection.
+        switch (evaluateHealth(connectionLostSince, tauSync.isConnected(),
+                System.currentTimeMillis(), CONNECTION_LOST_GRACE_MS)) {
+            case LOST:
+                handleConnectionLost();
                 return;
-            }
+            case WITHIN_GRACE:
+                // Down but inside the grace window — keep watching at the fast interval so the
+                // loss (or recovery) is noticed promptly.
+                schedulePollTick(generation, POLLING_INTERVAL_MS);
+                return;
+            case HEALTHY:
+            default:
+                break; // fall through to the normal peer-request dispatch
+        }
 
-            // Connection-health watchdog. getPeerWaitingWords() is a discovery snapshot that does
-            // NOT throw on a dropped socket, so it can't detect a vanished PC by itself; isConnected()
-            // can. evaluateHealth() applies the grace window so a transient blip (transport
-            // reconnects) is tolerated and only a sustained loss is surfaced as a disconnect.
-            switch (evaluateHealth(connectionLostSince, tauSync.isConnected(),
-                    System.currentTimeMillis(), CONNECTION_LOST_GRACE_MS)) {
-                case LOST:
-                    handleConnectionLost();
-                    return;
-                case WITHIN_GRACE:
-                    return;          // down but still inside the grace window — wait it out
-                case HEALTHY:
-                default:
-                    break;           // fall through to the normal peer-request dispatch
-            }
-
-            try {
-                List<String> waitingChannels = tauSync.getPeerWaitingWords();
-                if (!waitingChannels.isEmpty() && listener != null) {
+        try {
+            List<String> waitingChannels = tauSync.getPeerWaitingWords();
+            if (!waitingChannels.isEmpty()) {
+                lastPeerRequestMs = System.currentTimeMillis();
+                if (listener != null) {
                     mainHandler.post(() -> listener.onPeerRequestsAvailable(waitingChannels));
                 }
-            } catch (Exception e) {
-                Log.e(TAG, "Error polling for peer requests: " + e.getMessage());
-                // Treat polling error as connection failure - initiate reconnect
-                handlePollingFailure(e);
             }
-        }, POLLING_INTERVAL_MS, POLLING_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            Log.e(TAG, "Error polling for peer requests: " + e.getMessage());
+            // Treat polling error as connection failure - initiate reconnect
+            handlePollingFailure(e);
+            return;
+        }
 
-        Log.d(TAG, "Started polling loop with " + POLLING_INTERVAL_MS + "ms interval");
+        boolean active = System.currentTimeMillis() - lastPeerRequestMs <= POLLING_ACTIVE_WINDOW_MS;
+        schedulePollTick(generation, active ? POLLING_INTERVAL_MS : POLLING_IDLE_INTERVAL_MS);
     }
 
     /** Outcome of a single connection-health evaluation in the poll loop. */
@@ -408,24 +476,37 @@ public class TauSyncTransportManager implements TransportManager {
     }
 
     /**
-     * Surfaces a true (unclean) connection loss exactly once.
-     *
-     * <p>Flips the status to {@link TransportStatus#DISCONNECTING} so the next 20 ms tick
-     * early-returns (no second fire), then hands off on the main thread to the listener, which
-     * runs the same {@code cleanup()} the clean {@code DISCONNECT_FROM_PC} path uses. We do NOT
-     * call {@link #stopPolling()} here — that blocks on {@code awaitTermination} and self-deadlocks
-     * when invoked from inside a polling task; {@code cleanup() → shutdown() → disconnect()} stops
-     * the poller from the main thread instead.
+     * Handles a true (unclean) connection loss exactly once — by recovering it, not by tearing the
+     * session down. The PC re-listens automatically after a drop and silently re-approves known
+     * phones, so redialing here re-converges the two ends with zero user involvement.
      */
     private void handleConnectionLost() {
         if (isShuttingDown.get() || status != TransportStatus.CONNECTED) {
             return;
         }
-        Log.w(TAG, "Connection lost (down >= grace window) — surfacing disconnect");
-        updateStatus(TransportStatus.DISCONNECTING);
-        if (listener != null) {
-            mainHandler.post(listener::onConnectionLost);
+        Log.w(TAG, "Connection lost (down >= grace window) — starting automatic reconnection");
+        beginPersistentReconnect();
+    }
+
+    /**
+     * Recovers an unexpectedly lost session without user involvement: redials the saved device
+     * with exponential back-off (capped at {@link #MAX_RETRY_DELAY_MS}) until it succeeds or an
+     * explicit disconnect/shutdown stops it. The dead TauSync instance is closed by
+     * {@code attemptConnection}'s previous-instance cleanup.
+     *
+     * <p>Runs on the polling thread — the polling executor is stopped with the non-blocking
+     * {@code shutdownNow()} ({@link #stopPolling()}'s awaitTermination would self-deadlock here);
+     * the successful reconnect starts a fresh polling chain.
+     */
+    private void beginPersistentReconnect() {
+        persistentReconnect = true;
+        currentRetryAttempt = 0;
+        nextRetryDelayMs = INITIAL_RETRY_DELAY_MS;
+        updateStatus(TransportStatus.RECONNECTING);
+        if (pollingExecutor != null && !pollingExecutor.isShutdown()) {
+            pollingExecutor.shutdownNow();
         }
+        attemptConnection();
     }
 
     /**
@@ -458,14 +539,15 @@ public class TauSyncTransportManager implements TransportManager {
             pollingExecutor.shutdownNow();
         }
 
-        // Reconnect only if we were actively connected AND a deliberate shutdown is not
-        // already in progress. isShuttingDown is set at the top of shutdown() (called by
-        // cleanup() from DisconnectChannelHandler / sendDisconnectToPC). Without this guard
-        // a polling failure that races with cleanup causes an unwanted reconnect attempt —
-        // the "auto send connect_to_pc" bug.
-//        if (status == TransportStatus.CONNECTED && !isShuttingDown.get()) {
-//            attemptConnection();
-//        }
+        // Recover only if we were actively connected AND a deliberate shutdown is not already in
+        // progress. isShuttingDown is set at the top of shutdown() (called by cleanup() from
+        // DisconnectChannelHandler / sendDisconnectToPC), and prepareForDisconnect() flips the
+        // status to DISCONNECTING before the farewell write — so a polling failure racing a
+        // deliberate teardown can never trigger an unwanted reconnect (the old "auto send
+        // connect_to_pc" bug).
+        if (status == TransportStatus.CONNECTED && !isShuttingDown.get()) {
+            beginPersistentReconnect();
+        }
     }
 
     /**
@@ -514,6 +596,7 @@ public class TauSyncTransportManager implements TransportManager {
             Log.d(TAG, "prepareForDisconnect: already shutting down, skipping");
             return;
         }
+        persistentReconnect = false;
         mainHandler.removeCallbacks(retryConnectionRunnable);
         updateStatus(TransportStatus.DISCONNECTING);
         stopPolling();  // blocks until any in-flight getPeerWaitingWords() completes
@@ -590,6 +673,34 @@ public class TauSyncTransportManager implements TransportManager {
 
     private static final int FILE_CHUNK_SIZE = 65536; // 64 KB — matches TauSync's default chunk size
 
+    // Buffer for OUTGOING streams — matches the library's bulk-transfer chunk size (256 KB) so
+    // each write comfortably clears the hybrid Wi-Fi routing threshold.
+    private static final int OUTGOING_STREAM_BUFFER_BYTES =
+            com.example.tausync_lib.core.CoreConfig.LARGE_TRANSFER_CHUNK_SIZE;
+
+    // Minimum bytes to accumulate before an outgoing mid-stream write. Hybrid routing picks the
+    // transport per write by size: a partial chunk (≤ 64 KB − 1) rides Bluetooth while a full one
+    // rides Wi-Fi. Streaming sources (pipes — e.g. the webcam feed — and slow files) often return
+    // partial reads, so writing them straight through flaps the stream between transports, paying
+    // a barrier round-trip per flap and saturating Bluetooth. Filling to at least this size keeps
+    // every mid-stream write on the fast link; only the final (EOF) chunk may be smaller.
+    private static final int WIFI_ROUTE_MIN_FILL =
+            com.example.tausync_lib.core.CoreConfig.HYBRID_SMALL_THRESHOLD_BYTES + 1;
+
+    /**
+     * Reads from {@code in} until the buffer holds at least {@link #WIFI_ROUTE_MIN_FILL} bytes,
+     * the buffer is full, or EOF. Returns the number of bytes read (0 only at immediate EOF).
+     */
+    private static int readAtLeast(java.io.InputStream in, byte[] buf) throws java.io.IOException {
+        int total = 0;
+        while (total < WIFI_ROUTE_MIN_FILL && total < buf.length) {
+            int n = in.read(buf, total, buf.length - total);
+            if (n < 0) break;
+            total += n;
+        }
+        return total;
+    }
+
     /**
      * Streams bytes from a TauSync channel directly into the provided OutputStream.
      * Reads in 64 KB chunks until the peer sends FIN (EOF), so the entire file is
@@ -648,11 +759,11 @@ public class TauSyncTransportManager implements TransportManager {
         try (com.example.tausync_lib.implementations.management.TauSyncStream stream =
                      tauSync.connect(channel, connectTimeoutSec)) {
             java.io.OutputStream out = stream.getOutputStream();
-            byte[] buf = new byte[FILE_CHUNK_SIZE];
+            byte[] buf = new byte[OUTGOING_STREAM_BUFFER_BYTES];
             int n;
             long totalBytes = 0;
             int chunkCount = 0;
-            while ((n = inputStream.read(buf, 0, buf.length)) > 0) {
+            while ((n = readAtLeast(inputStream, buf)) > 0) {
                 out.write(buf, 0, n);
                 totalBytes += n;
                 chunkCount++;
@@ -693,11 +804,11 @@ public class TauSyncTransportManager implements TransportManager {
             out.write(metaBytes);
 
             // ── 2. Raw file bytes ─────────────────────────────────────────────
-            byte[] buf = new byte[FILE_CHUNK_SIZE];
+            byte[] buf = new byte[OUTGOING_STREAM_BUFFER_BYTES];
             int n;
             long totalBytes = 0;
             int chunkCount = 0;
-            while ((n = inputStream.read(buf, 0, buf.length)) > 0) {
+            while ((n = readAtLeast(inputStream, buf)) > 0) {
                 out.write(buf, 0, n);
                 totalBytes += n;
                 chunkCount++;
@@ -768,11 +879,11 @@ public class TauSyncTransportManager implements TransportManager {
             Log.d(TAG, "serveJsonThenStreamOut [" + channel + "]: req=" + request);
             try (java.io.InputStream in = handler.openInputStream(request)) {
                 java.io.OutputStream out = stream.getOutputStream();
-                byte[] buf = new byte[FILE_CHUNK_SIZE];
+                byte[] buf = new byte[OUTGOING_STREAM_BUFFER_BYTES];
                 int n;
                 long totalBytes = 0;
                 int chunkCount = 0;
-                while ((n = in.read(buf, 0, buf.length)) > 0) {
+                while ((n = readAtLeast(in, buf)) > 0) {
                     out.write(buf, 0, n);
                     totalBytes += n;
                     chunkCount++;
@@ -952,6 +1063,7 @@ public class TauSyncTransportManager implements TransportManager {
     @Override
     public void disconnect() {
         Log.d(TAG, "Disconnect requested");
+        persistentReconnect = false;
         mainHandler.removeCallbacks(retryConnectionRunnable);
 
         updateStatus(TransportStatus.DISCONNECTING);

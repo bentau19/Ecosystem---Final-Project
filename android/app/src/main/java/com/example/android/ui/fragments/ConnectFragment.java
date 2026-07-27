@@ -49,6 +49,14 @@ public class ConnectFragment extends Fragment {
      */
     private static final long CONNECT_TIMEOUT_MS = 12_000L;
 
+    /**
+     * One-time extension of the safety valve when the base window elapses while the PC operator's
+     * approval dialog is open (the transport announced APPROVAL_PENDING and is waiting out the
+     * approval). Slightly longer than the transport's own 60 s approval extension so the transport
+     * always reaches a terminal state (connected / rejected / timed out) before this valve fires.
+     */
+    private static final long APPROVAL_TIMEOUT_EXTENSION_MS = 65_000L;
+
     private MainViewModel viewModel;
 
     // Connection-progress UI
@@ -347,10 +355,14 @@ public class ConnectFragment extends Fragment {
         if (v != null) v.setVisibility(visible ? View.VISIBLE : View.GONE);
     }
 
+    /** True once this attempt has already used its one approval-window extension. */
+    private boolean approvalExtensionUsed = false;
+
     /** Arms the safety-valve timeout once per connection attempt. */
     private void armTimeout() {
         if (timeoutArmed) return;
         timeoutArmed = true;
+        approvalExtensionUsed = false;
         timeoutHandler.postDelayed(timeoutRunnable, CONNECT_TIMEOUT_MS);
     }
 
@@ -362,6 +374,20 @@ public class ConnectFragment extends Fragment {
     /** Fired if the connection never reaches a terminal state in time. */
     private void onConnectTimeout() {
         timeoutArmed = false;
+
+        // A first-time connect can legitimately take up to a minute: the PC operator is looking
+        // at an accept/reject dialog and the transport is waiting the approval out. Killing the
+        // attempt here would abort a connection the PC is about to accept — extend the valve once
+        // and tell the user what the wait is for.
+        if (!approvalExtensionUsed
+                && com.example.tausync_lib.sdk.TauSync.isApprovalPending()) {
+            approvalExtensionUsed = true;
+            timeoutArmed = true;
+            showConnectingUI(getString(R.string.waiting_for_pc_approval));
+            timeoutHandler.postDelayed(timeoutRunnable, APPROVAL_TIMEOUT_EXTENSION_MS);
+            return;
+        }
+
         showErrorUI(getString(R.string.connection_timeout_error));
         // Tear down the half-open attempt so the service stops retrying in the background.
         if (getActivity() instanceof MainActivity) {

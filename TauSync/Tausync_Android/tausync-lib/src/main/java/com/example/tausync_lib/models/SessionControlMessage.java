@@ -39,6 +39,11 @@ public class SessionControlMessage {
      * (much shorter) connect timeout. */
     public static final String TYPE_APPROVAL_PENDING = "APPROVAL_PENDING";
 
+    /** Either side → peer, over Bluetooth: "I am about to close the idle Wi-Fi link." The receiver
+     * tears its Wi-Fi side down intentionally too, so neither side mistakes the close for an
+     * unexpected drop (which would trigger reconnect dialing against a closed port). */
+    public static final String TYPE_WIFI_IDLE_CLOSE = "WIFI_IDLE_CLOSE";
+
     @SerializedName("MagicBytes")
     private long magicBytes = 0x54415553L;
 
