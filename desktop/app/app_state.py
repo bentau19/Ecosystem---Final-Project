@@ -1,3 +1,4 @@
+import logging
 from typing import Final
 
 from domain.enums.clipboard_channels import ClipboardChannels
@@ -23,6 +24,8 @@ from viewmodels.file_transfer import FileTransferViewModel
 from viewmodels.settings import SettingsViewModel
 from viewmodels.tool import ToolViewModel
 from viewmodels.webcam import WebcamViewModel
+
+logger = logging.getLogger(__name__)
 
 
 class AppState:
@@ -84,6 +87,13 @@ class AppState:
         self.virtual_drive_service: Final[VirtualDriveService] = VirtualDriveService(
             connectivity=self.connectivity_service,
             device_info=self.device_info_service,
+        )
+        # drive_error reports mount failures, pipe-server faults, reaped sessions
+        # and per-op failures. Nothing else consumes it, so without this every one
+        # of those messages is built and discarded — leaving Explorer's generic
+        # 0x8007045D as the only symptom of a failed operation.
+        self.virtual_drive_service.drive_error.connect(
+            lambda message: logger.error("virtual drive: %s", message)
         )
 
         # ToolViewModel is the tools coordinator: it owns the enable/disable side

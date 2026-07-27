@@ -12,6 +12,8 @@ never ``None``.
 """
 
 import json
+import logging
+import struct
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -146,6 +148,47 @@ def _service_with_streams(*streams: _FakeStream) -> VirtualDriveService:
     connectivity.connected = True
     connectivity.tau.connect.side_effect = list(streams)
     return VirtualDriveService(connectivity=connectivity, device_info=MagicMock())
+
+
+class _FakeFrameStream:
+    """A named pipe carrying exactly one request frame, then EOF.
+
+    ``_handle_connection`` talks frames (``[4B jsonLen][4B payLen][json][payload]``)
+    rather than the JSON streams ``_FakeStream`` models, and loops until a read
+    raises — so this serves one request and then hangs up to end the loop.
+    """
+
+    def __init__(self, req: dict, payload: bytes = b"") -> None:
+        body = json.dumps(req).encode("utf-8")
+        self._buf = bytearray(
+            struct.pack("<II", len(body), len(payload)) + body + payload)
+        self.written = bytearray()
+
+    def read_exact(self, n: int, timeout: object = None) -> bytes:
+        if len(self._buf) < n:
+            raise EOFError("peer closed")  # ends _handle_connection's loop
+        chunk = bytes(self._buf[:n])
+        del self._buf[:n]
+        return chunk
+
+    def write(self, data: bytes) -> int:
+        self.written += bytes(data)
+        return len(data)
+
+
+def _serve_one(svc: VirtualDriveService, req: dict) -> _FakeFrameStream:
+    """Run one request through ``_handle_connection`` and return the pipe.
+
+    The serve loop is gated on ``_is_running``, which only ``start()`` sets — so
+    flip it for the duration rather than spinning up the real pipe server.
+    """
+    pipe = _FakeFrameStream(req)
+    svc._is_running.set()
+    try:
+        svc._handle_connection(pipe)
+    finally:
+        svc._is_running.clear()
+    return pipe
 
 
 def _read_header(length: int) -> bytes:
@@ -301,6 +344,51 @@ def test_one_watchdog_thread_per_read_op() -> None:
         svc._op_read({"path": "/f.bin", "offset": 0, "length": 3}, b"")
 
     assert started.count("vdrive-read-watchdog") == 1
+
+
+# ── Failure-logging tests ─────────────────────────────────────────────────────
+#
+# VirtualDrive.exe maps every error string it does not recognise to
+# STATUS_IO_DEVICE_ERROR, which Explorer shows as a bare 0x8007045D. The log is
+# the ONLY place the real reason survives, so these pin it down.
+
+
+def test_failed_op_is_logged_with_op_and_path(caplog) -> None:
+    """A handled failure logs a WARNING naming the op and the path."""
+    svc = _service_with_streams()
+
+    with caplog.at_level(logging.WARNING, logger="services.virtual_drive"):
+        _serve_one(svc, {"op": "write", "path": "/Download/big.zip"})
+
+    assert "write" in caplog.text
+    assert "/Download/big.zip" in caplog.text
+    assert "no_write_session" in caplog.text
+
+
+def test_op_raising_is_logged_with_traceback(caplog) -> None:
+    """An op that raises logs the exception rather than swallowing it.
+
+    The reason is otherwise formatted into the drive_error signal and flattened
+    into the response, both of which lose it.
+    """
+    svc = _service_with_streams()
+    svc._dispatch = MagicMock(side_effect=RuntimeError("stream is closed"))
+
+    with caplog.at_level(logging.WARNING, logger="services.virtual_drive"):
+        _serve_one(svc, {"op": "write", "path": "/Download/big.zip"})
+
+    assert "stream is closed" in caplog.text
+    assert "RuntimeError" in caplog.text  # exc_info=True attached the traceback
+
+
+def test_successful_op_logs_no_warning(caplog) -> None:
+    """A healthy op must not add WARNING noise to the log."""
+    svc = _service_with_streams()
+
+    with caplog.at_level(logging.WARNING, logger="services.virtual_drive"):
+        _serve_one(svc, {"op": "write_close", "path": "/Download/big.zip"})
+
+    assert caplog.text == ""
 
 
 # ── Directory-listing cache tests ─────────────────────────────────────────────

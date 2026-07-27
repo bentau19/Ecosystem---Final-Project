@@ -24,6 +24,7 @@ from services.device_info import DeviceInfoService
 from services.lifecycle import LifecycleFlag
 from services.sessions import ReadSessionRegistry, WriteSessionRegistry
 from services.vdrive_cache import CachedListing, ListingCache
+from utils.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,8 @@ class VirtualDriveService(LifecycleFlag, QObject):
         device_info.device_info_ready.connect(self._on_device_info)
         self._executor: ThreadPoolExecutor | None = None
         self._process: subprocess.Popen | None = None
+        # Open file receiving VirtualDrive.exe's stdout/stderr; None when not running.
+        self._exe_log: Any = None
         self._lifecycle_lock: threading.Lock = threading.Lock()
         # In-progress write streams keyed by destination path; closing one signals
         # Android to rename temp → final.
@@ -241,6 +244,7 @@ class VirtualDriveService(LifecycleFlag, QObject):
             if self._process is not None and self._process.poll() is None:
                 self._process.terminate()
             self._process = None
+            self._close_exe_log()
             executor = self._executor  # capture inside lock; _start() may swap self._executor after release
 
         # disconnect (not close) to break any in-flight client so a serving acceptor
@@ -281,18 +285,45 @@ class VirtualDriveService(LifecycleFlag, QObject):
         )
 
     def _launch_exe(self) -> None:
-        # Spawn VirtualDrive.exe without a console window.
+        # Spawn VirtualDrive.exe without a console window, capturing its output.
+        #
+        # CREATE_NO_WINDOW gives the child no console to inherit, so without an
+        # explicit redirect everything it prints — mount failures, pipe-pool
+        # exhaustion, the fatal handler in main.cpp — is discarded. Send both
+        # streams to virtualdrive.log next to syncdose.log so a failed mount is
+        # diagnosable after the fact.
         exe = self._find_exe()
         if not os.path.isfile(exe):
             self.drive_error.emit(f"VirtualDrive.exe not found: {exe}")
             return
         try:
+            self._exe_log = open(  # noqa: SIM115 - closed in _stop
+                data_dir() / 'virtualdrive.log', 'a', encoding='utf-8', errors='replace',
+            )
+        except OSError as exc:
+            # Losing the log must never stop the drive from mounting.
+            logger.warning("could not open virtualdrive.log: %s", exc)
+            self._exe_log = None
+        try:
             self._process = subprocess.Popen(
                 [exe],
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                stdout=self._exe_log or subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
             )
         except OSError as exc:
+            self._close_exe_log()
             self.drive_error.emit(f"Failed to launch VirtualDrive.exe: {exc}")
+
+    def _close_exe_log(self) -> None:
+        # Release the VirtualDrive.exe output file handle, ignoring teardown errors.
+        log = self._exe_log
+        self._exe_log = None
+        if log is not None:
+            try:
+                log.close()
+            except OSError:
+                pass
 
     # ── Device-info cache ──────────────────────────────────────────────────────
 
@@ -401,14 +432,55 @@ class VirtualDriveService(LifecycleFlag, QObject):
             try:
                 resp, resp_payload, = self._dispatch(req, payload)
                 logger.debug("resp: %s, payload_len: %d", resp, len(resp_payload))
+                # Log handled failures at WARNING. VirtualDrive.exe collapses every
+                # error string it does not recognise into STATUS_IO_DEVICE_ERROR
+                # (0x8007045D in Explorer), so without this the reason is lost the
+                # moment the response crosses the pipe.
+                if not resp.get("ok", False):
+                    self._log_op_failure(req, resp.get("error", "unknown"))
             except Exception as exc:
+                # Same story, but the reason is an exception rather than an error
+                # string — record it with a traceback before it is flattened into
+                # the response. drive_error alone is not enough: it is a Qt signal
+                # and a headless/unconnected run would drop it.
                 if not self._is_connectivity_exc(exc):
                     self.drive_error.emit(f"op {req.get('op')!r} failed: {exc}")
+                    self._log_op_failure(req, str(exc), exc_info=True)
+                else:
+                    logger.debug(
+                        "vdrive op %r on %s ended during teardown: %s",
+                        req.get("op"), self._req_target(req), exc,
+                    )
                 resp, resp_payload, = {"ok": False, "error": str(exc)}, b''
             try:
                 self._write_frame(pipe, resp, resp_payload)
             except Exception:
                 break
+
+    # ── Failure logging ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _req_target(req: dict) -> str:
+        # The most useful identifier for the request: its path, or the rename
+        # pair, or the session id. Used only for log messages.
+        if "path" in req:
+            return str(req["path"])
+        if "from" in req:
+            return f"{req.get('from')} -> {req.get('to')}"
+        if "session" in req:
+            return f"session {req['session']}"
+        return "?"
+
+    def _log_op_failure(self, req: dict, reason: str, exc_info: bool = False) -> None:
+        # One searchable line per failed op. This is the only record of WHY a
+        # virtual-drive operation failed: the C++ side maps most error strings to
+        # a generic STATUS_IO_DEVICE_ERROR, so Explorer only ever shows
+        # 0x8007045D no matter what actually went wrong.
+        logger.warning(
+            "vdrive op %r failed on %s: %s",
+            req.get("op", "?"), self._req_target(req), reason,
+            exc_info=exc_info,
+        )
 
     # ── Frame helpers (mirror of Protocol.cpp) ─────────────────────────────────
 
