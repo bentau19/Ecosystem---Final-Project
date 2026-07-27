@@ -1,17 +1,22 @@
 package com.example.android.ui.fragments;
 
+import android.app.AlertDialog;
+import android.content.Intent;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageButton;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.widget.SwitchCompat;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.R;
+import com.example.android.utils.StoragePermissions;
 import com.example.android.viewmodel.SettingsViewModel;
 
 /**
@@ -33,6 +38,11 @@ import com.example.android.viewmodel.SettingsViewModel;
  * Uses {@code view.findViewById()} — ViewBinding is not enabled in this project.
  */
 public class SettingsFragment extends Fragment {
+
+    private static final String TAG = "SettingsFragment";
+
+    /** Return code from the system All-files-access screen (Virtual Drive gate). */
+    private static final int REQ_ALL_FILES_ACCESS = 3001;
 
     /**
      * Guards switch listeners while the LiveData observer applies a value programmatically.
@@ -133,9 +143,12 @@ public class SettingsFragment extends Fragment {
         });
 
         switchVirtualDrive.setOnCheckedChangeListener((btn, checked) -> {
-            if (!programmaticUpdate) {
-                settingsViewModel.setVirtualDriveEnabled(checked);
+            if (programmaticUpdate) return;
+            if (checked && !StoragePermissions.hasAllFilesAccess()) {
+                promptForAllFilesAccess();
+                return;
             }
+            settingsViewModel.setVirtualDriveEnabled(checked);
         });
 
         switchClipboardSync.setOnCheckedChangeListener((btn, checked) -> {
@@ -152,5 +165,51 @@ public class SettingsFragment extends Fragment {
 
         // 6. Back navigation — same pattern as BackupFragment / FolderPickerFragment
         btnBack.setOnClickListener(v -> requireActivity().onBackPressed());
+    }
+
+    // ── Virtual Drive storage permission ──────────────────────────────────────
+
+    /**
+     * Asks for All files access before the Virtual Drive may be enabled.
+     *
+     * <p>The drive maps the phone's storage to a Windows drive letter through the
+     * raw File API. Without this permission the mount still succeeds and browsing
+     * works — only writes fail, with the PC reporting a permission error for every
+     * copy. Enabling the tool in that state produces a drive that looks healthy and
+     * silently refuses work, so unlike Backup (which degrades gracefully and offers
+     * "Skip") there is no proceed-anyway option here: declining leaves the switch
+     * off.
+     */
+    private void promptForAllFilesAccess() {
+        new AlertDialog.Builder(requireContext())
+                .setTitle(R.string.vdrive_storage_permission_title)
+                .setMessage(R.string.vdrive_storage_permission_message)
+                .setPositiveButton(R.string.vdrive_storage_permission_grant,
+                        (d, w) -> StoragePermissions.openSettings(this, REQ_ALL_FILES_ACCESS))
+                .setNegativeButton(android.R.string.cancel, (d, w) -> revertVirtualDriveSwitch())
+                .setOnCancelListener(d -> revertVirtualDriveSwitch())
+                .show();
+    }
+
+    /** Puts the switch back to off without echoing the change to the ViewModel or PC. */
+    private void revertVirtualDriveSwitch() {
+        programmaticUpdate = true;
+        switchVirtualDrive.setChecked(false);
+        programmaticUpdate = false;
+    }
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_ALL_FILES_ACCESS) return;
+
+        // The settings screen returns no meaningful resultCode — read the actual state.
+        if (StoragePermissions.hasAllFilesAccess()) {
+            Log.d(TAG, "All Files Access granted — enabling Virtual Drive");
+            settingsViewModel.setVirtualDriveEnabled(true);
+        } else {
+            Log.d(TAG, "All Files Access not granted — Virtual Drive stays off");
+            revertVirtualDriveSwitch();
+        }
     }
 }

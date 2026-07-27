@@ -483,6 +483,73 @@ def test_list_page_refetches_after_ttl_expiry() -> None:
     assert svc._connectivity.tau.connect.call_count == 2
 
 
+# ── Write-session offset tests ────────────────────────────────────────────────
+#
+# The write path is append-only end to end: one TauSync stream here, a sequential
+# FileOutputStream on the phone. Neither can seek, so a chunk that doesn't
+# continue where the previous one stopped has nowhere correct to go.
+
+
+def test_sequential_writes_stream_through_in_order() -> None:
+    """Explorer's sequential copy passes straight through, offsets advancing."""
+    stream = _FakeStream()
+    svc = _service_with_streams(stream)
+    svc._op_write_open({"path": "/D/big.zip"}, b"")
+
+    first, _ = svc._op_write({"path": "/D/big.zip", "offset": 0}, b"abc")
+    second, _ = svc._op_write({"path": "/D/big.zip", "offset": 3}, b"de")
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    # written[0] is the {"path": ...} header line write_open sends
+    assert stream.written.endswith(b"abcde")
+    assert svc._write_sessions.get("/D/big.zip").next_offset == 5
+
+
+def test_out_of_order_write_is_refused_not_appended(caplog) -> None:
+    """A seeking write must fail loudly instead of landing at the wrong offset.
+
+    Appending it anyway is the silent-corruption case: the bytes go to the end of
+    the temp file, the op reports success, and the finished file is wrong.
+    """
+    stream = _FakeStream()
+    svc = _service_with_streams(stream)
+    svc._op_write_open({"path": "/D/big.zip"}, b"")
+    svc._op_write({"path": "/D/big.zip", "offset": 0}, b"abc")
+
+    with caplog.at_level(logging.WARNING, logger="services.virtual_drive"):
+        resp, _ = svc._op_write({"path": "/D/big.zip", "offset": 99}, b"XX")
+
+    assert resp == {"ok": False, "error": "io_error"}
+    assert not stream.written.endswith(b"XX")
+    assert svc._write_sessions.get("/D/big.zip").next_offset == 3
+    assert "out of order" in caplog.text
+
+
+def test_write_without_offset_is_accepted() -> None:
+    """An offset-less write (older VirtualDrive.exe) still streams through."""
+    stream = _FakeStream()
+    svc = _service_with_streams(stream)
+    svc._op_write_open({"path": "/D/big.zip"}, b"")
+
+    resp, _ = svc._op_write({"path": "/D/big.zip"}, b"abc")
+
+    assert resp["ok"] is True
+    assert stream.written.endswith(b"abc")
+
+
+def test_write_open_restarts_the_offset_counter() -> None:
+    """A second write session for the same path starts counting from zero again."""
+    svc = _service_with_streams(_FakeStream(), _FakeStream())
+    svc._op_write_open({"path": "/D/big.zip"}, b"")
+    svc._op_write({"path": "/D/big.zip", "offset": 0}, b"abc")
+
+    svc._op_write_open({"path": "/D/big.zip"}, b"")
+    resp, _ = svc._op_write({"path": "/D/big.zip", "offset": 0}, b"z")
+
+    assert resp["ok"] is True
+
+
 def test_write_close_invalidates_parent_listing() -> None:
     """Finalizing a write makes the parent listing stale (size/mtime changed)."""
     svc = _service_with_streams(

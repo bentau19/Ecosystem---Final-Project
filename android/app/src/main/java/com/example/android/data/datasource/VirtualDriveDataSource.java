@@ -13,6 +13,8 @@ import androidx.annotation.Nullable;
 import com.example.android.domain.entities.VDriveEntry;
 import com.example.android.domain.entities.VDrivePageResult;
 import com.example.android.domain.entities.VDriveReadRange;
+import com.example.android.domain.exceptions.VDriveException;
+import com.example.android.utils.StoragePermissions;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
@@ -84,6 +86,28 @@ public class VirtualDriveDataSource {
             storageRoot = root.getCanonicalPath();
         } catch (IOException e) {
             throw new IllegalStateException("Cannot determine external storage root", e);
+        }
+    }
+
+    // ── Write gate ────────────────────────────────────────────────────────────
+
+    /**
+     * Fails fast when shared storage is not writable through the File API.
+     *
+     * <p>Every write here goes through raw {@code java.io.File}. Under scoped
+     * storage that only works while All files access is granted; without it
+     * MediaProvider's FUSE daemon rejects the underlying {@code open(O_CREAT)}
+     * with {@code EPERM}, whose message ("Operation not permitted") means nothing
+     * to Windows and surfaces in Explorer as a generic I/O device error. Reads
+     * and directory listings are unaffected, so the drive mounts and browses
+     * normally and only copies fail — checking up front turns that into a
+     * deliberate {@code access_denied} the PC can explain.
+     */
+    private void requireWritable(String virtualPath) throws VDriveException {
+        if (!StoragePermissions.hasAllFilesAccess()) {
+            Log.w(TAG, "write refused (no All files access): " + virtualPath);
+            throw new VDriveException("access_denied",
+                    "All files access not granted — cannot write " + virtualPath);
         }
     }
 
@@ -356,6 +380,7 @@ public class VirtualDriveDataSource {
 
     /** Opens a buffered OutputStream to the temp file for virtualPath. */
     public OutputStream openWriteTemp(String virtualPath) throws IOException {
+        requireWritable(virtualPath);
         File target = resolve(virtualPath);
         File parent = target.getParentFile();
         if (parent != null && !parent.exists()) {
@@ -389,6 +414,7 @@ public class VirtualDriveDataSource {
 
     /** Creates a file or directory at virtualPath. */
     public void create(String virtualPath, boolean isDir) throws IOException {
+        requireWritable(virtualPath);
         if (isRestrictedDir(virtualPath) || isRestrictedDescendant(virtualPath)) {
             throw new IOException("Path is not writable: " + virtualPath);
         }
@@ -412,6 +438,7 @@ public class VirtualDriveDataSource {
 
     /** Deletes the file or directory (recursively) at virtualPath. */
     public void delete(String virtualPath) throws IOException {
+        requireWritable(virtualPath);
         if (isRestrictedDir(virtualPath) || isRestrictedDescendant(virtualPath)) {
             throw new IOException("Path is not writable: " + virtualPath);
         }
@@ -440,6 +467,7 @@ public class VirtualDriveDataSource {
 
     /** Renames or moves fromVirtual to toVirtual. */
     public void rename(String fromVirtual, String toVirtual) throws IOException {
+        requireWritable(toVirtual);
         if (isRestrictedDir(fromVirtual) || isRestrictedDescendant(fromVirtual)
                 || isRestrictedDir(toVirtual) || isRestrictedDescendant(toVirtual)) {
             throw new IOException("Path is not writable: " + fromVirtual + " → " + toVirtual);
@@ -462,6 +490,7 @@ public class VirtualDriveDataSource {
 
     /** Sets the length of the file at virtualPath to newSize bytes. */
     public void truncate(String virtualPath, long newSize) throws IOException {
+        requireWritable(virtualPath);
         if (isRestrictedDir(virtualPath) || isRestrictedDescendant(virtualPath)) {
             throw new IOException("Path is not writable: " + virtualPath);
         }

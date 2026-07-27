@@ -642,7 +642,23 @@ class VirtualDriveService(LifecycleFlag, QObject):
         session = self._write_sessions.get(req["path"])
         if session is None:
             return {"ok": False, "error": "no_write_session"}, b''
-        session.stream.write(payload)
+
+        # The session stream is append-only end to end (TauSync stream here,
+        # sequential FileOutputStream on the phone), so a chunk that does not
+        # continue where the last one stopped cannot be honoured. Refusing is the
+        # only safe answer — appending it anyway would silently place the bytes at
+        # the wrong offset and hand back a corrupt file. Explorer's copy is
+        # strictly sequential, so this only trips on genuinely seeking writers.
+        offset = req.get("offset")
+        with session.lock:
+            if offset is not None and offset != session.next_offset:
+                logger.warning(
+                    "vdrive write out of order on %s: got offset %d, expected %d",
+                    req["path"], offset, session.next_offset,
+                )
+                return {"ok": False, "error": "io_error"}, b''
+            session.stream.write(payload)
+            session.next_offset += len(payload)
         return {"ok": True}, b''
 
     def _op_write_close(self, req: dict, _: bytes) -> tuple[dict, bytes]:

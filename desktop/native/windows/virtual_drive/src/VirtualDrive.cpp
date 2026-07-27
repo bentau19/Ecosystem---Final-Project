@@ -18,8 +18,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <fstream>
-#include <iostream>
 
 using json = nlohmann::json;
 
@@ -155,22 +153,7 @@ protocol::Message VirtualDrive::SendReq(const std::string& json_str,
         ReleasePipe(pipe);
         return resp;
     } catch (const PipeException& e) {
-        // 1. Open the file in append mode
-            std::ofstream outFile("example.txt", std::ios_base::app);
-
-            // 2. Check if the file opened successfully
-            if (!outFile.is_open()) {
-                std::cerr << "Error opening file!" << std::endl;
-                return protocol::Message{R"({"ok":false,"error":"io_error"})", ""};
-            }
-
-            // 3. Append your data
-            outFile << e.what() <<  ".\n";
-            outFile << "Adding another line seamlessly.\n";
-
-            // 4. Close the file (optional, but good practice)
-            outFile.close();  
-          if (e.code == PipeErrorCode::ConnectionTimeout) {
+        if (e.code == PipeErrorCode::ConnectionTimeout) {
             // SyncDose did not answer within the deadline. A late response may
             // still arrive, leaving the pipe byte-stream frame-desynced, so the
             // connection cannot be reused — swap in a fresh one (ReplacePipe).
@@ -188,21 +171,7 @@ protocol::Message VirtualDrive::SendReq(const std::string& json_str,
         ReplacePipe(pipe);
         return protocol::Message{R"({"ok":false,"error":"io_error"})", ""};
     } catch (...) {
-  // 1. Open the file in append mode
-            std::ofstream outFile("example.txt", std::ios_base::app);
-
-            // 2. Check if the file opened successfully
-            if (!outFile.is_open()) {
-                std::cerr << "Error opening file!" << std::endl;
-                return protocol::Message{R"({"ok":false,"error":"io_error"})", ""};
-            }
-
-            // 3. Append your data
-            outFile << "some.\n";
-            outFile << "Adding another line seamlessly.\n";
-
-            // 4. Close the file (optional, but good practice)
-            outFile.close();          // Unknown failure on this connection — same recovery path as above.
+        // Unknown failure on this connection — same recovery path as above.
         ReplacePipe(pipe);
         return protocol::Message{R"({"ok":false,"error":"io_error"})", ""};
     }
@@ -283,6 +252,15 @@ NTSTATUS VirtualDrive::ErrorToStatus(const std::string& error)
     if (error == "exists")        return STATUS_OBJECT_NAME_COLLISION;
     if (error == "not_empty")     return STATUS_DIRECTORY_NOT_EMPTY;
     if (error == "timeout")       return STATUS_IO_TIMEOUT;
+    if (error == "io_error")      return STATUS_IO_DEVICE_ERROR;
+
+    // Older phone builds send the raw strerror text instead of a code. The most
+    // common one by far is EPERM from a File-API write without All-files access;
+    // without these two arms it reads as a device fault and Explorer reports an
+    // I/O error rather than telling the user they need to grant permission.
+    if (error == "Operation not permitted" || error == "Permission denied")
+        return STATUS_ACCESS_DENIED;
+
     return STATUS_IO_DEVICE_ERROR;
 }
 
@@ -565,7 +543,13 @@ NTSTATUS VirtualDrive::Create(FSP_FILE_SYSTEM* fs,
 
     std::string path = WcharToUtf8(FileName);
     NormalizeVPath(path);
-    bool is_dir = (FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    // WinFsp signals "make a directory" through CreateOptions, not the attribute
+    // mask — Explorer's New > Folder arrives with FILE_DIRECTORY_FILE set and
+    // FILE_ATTRIBUTE_DIRECTORY clear, so keying off the attribute alone created a
+    // plain file. Both are honoured; the attribute is what a caller that already
+    // built its own mask would set.
+    bool is_dir = (CreateOptions & FILE_DIRECTORY_FILE) != 0
+               || (FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
     json req = {{"op", "create"}, {"path", path}, {"is_dir", is_dir}};
     protocol::Message resp = self->SendReq(req.dump());
@@ -1284,6 +1268,21 @@ NTSTATUS VirtualDrive::Write(FSP_FILE_SYSTEM* fs,
 {
     auto* node = static_cast<FileNode*>(FileContext);
     auto* self = static_cast<VirtualDrive*>(fs->UserContext);
+
+    // Constrained I/O (cached writes flushed by the memory manager) must never
+    // extend the file: anything at or past EOF is dropped, and a straddling write
+    // is clipped. Without this the tail would be appended, growing the file past
+    // the size Windows believes it has.
+    if (ConstrainedIo && !WriteToEndOfFile) {
+        if (Offset >= node->size) {
+            *PBytesTransferred = 0;
+            FillFileInfo(*node, FileInfo);
+            return STATUS_SUCCESS;
+        }
+        uint64_t room = node->size - Offset;
+        if (Length > room)
+            Length = static_cast<ULONG>(room);
+    }
 
     // Open the write session on the first Write call for this file handle.
     if (!node->write_open) {
