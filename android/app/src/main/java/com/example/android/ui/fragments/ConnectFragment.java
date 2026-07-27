@@ -414,6 +414,11 @@ public class ConnectFragment extends Fragment {
         super.onResume();
         refreshData();
         refreshSavedDeviceCard();
+        // An attempt already in flight owns the screen — returning here (from a permission dialog,
+        // or from anywhere the user left the app) must never start a second one. Without this the
+        // resume restarts discovery and the PC is asked to approve two separate connections, of
+        // which answering one says nothing about the other.
+        if (isConnectionInFlight()) return;
         // After a manual disconnect the user chose to leave — skip auto-connect this one time.
         if (viewModel.consumeJustDisconnected()) return;
         if (viewModel.consumeJustDisconnectedByPc()) return;
@@ -428,6 +433,22 @@ public class ConnectFragment extends Fragment {
                 }
             }
         }
+    }
+
+    /**
+     * True while a connection attempt or the discovery that feeds one is already running, so the
+     * auto-connect on resume can tell "nothing is happening, start something" from "an attempt is
+     * already under way, leave it alone".
+     */
+    private boolean isConnectionInFlight() {
+        ConnectionStatus connectionStatus = viewModel.getConnectionStatus().getValue();
+        if (connectionStatus == ConnectionStatus.CONNECTING
+                || connectionStatus == ConnectionStatus.RECONNECTING) {
+            return true;
+        }
+        DiscoveryStatus discoveryStatus = viewModel.getDiscoveryStatus().getValue();
+        return discoveryStatus != null && discoveryStatus != DiscoveryStatus.IDLE
+                && discoveryStatus != DiscoveryStatus.FAILED;
     }
 
     @Override
