@@ -52,7 +52,8 @@ public class BluetoothDiscoveryDataSource {
 
     /**
      * Bonds the PC identified by {@code macAddress}, resolving the string back to a real
-     * {@link BluetoothDevice} and saving the address on success (handled by {@link BleDiscovery}).
+     * {@link BluetoothDevice}. Bonding does not remember the PC — call
+     * {@link #savePairedAddress(String)} once a session with it is established.
      */
     public void bond(String macAddress, PairingListener listener) {
         BluetoothAdapter adapter = adapter();
@@ -94,7 +95,16 @@ public class BluetoothDiscoveryDataSource {
         return BleDiscovery.getSavedAddress(context);
     }
 
-    /** Forgets the saved PC (used after a lost bond, to force a fresh discovery). */
+    /**
+     * Remembers the PC at {@code macAddress} so future launches skip discovery. Call only once a
+     * session with it has been established: a remembered PC is redialled automatically, so one
+     * saved on a connection that never came up would be redialled forever.
+     */
+    public void savePairedAddress(String macAddress) {
+        BleDiscovery.savePairedAddress(context, macAddress);
+    }
+
+    /** Forgets the saved PC (after a lost bond or a declined connection, to force a fresh discovery). */
     public void clearSavedAddress() {
         BleDiscovery.clearSavedAddress(context);
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

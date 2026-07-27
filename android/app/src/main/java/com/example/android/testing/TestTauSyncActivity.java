@@ -133,8 +133,9 @@ public class TestTauSyncActivity extends AppCompatActivity {
     private final ExecutorService backgroundExecutor = Executors.newCachedThreadPool();
 
     /**
-     * Completes a BLE pairing: once {@link BleDiscovery} has bonded and saved the chosen PC,
-     * connect to it; on failure, surface the reason and reset the UI.
+     * Completes a BLE pairing: once {@link BleDiscovery} has bonded with the chosen PC, connect to
+     * it (the address is saved only if that connection succeeds); on failure, surface the reason
+     * and reset the UI.
      */
     private final BleDiscovery.PairingCallback pairingCallback = new BleDiscovery.PairingCallback() {
         @Override
@@ -455,6 +456,9 @@ public class TestTauSyncActivity extends AppCompatActivity {
             try {
                 TauSync newTauSync = new TauSync();
                 newTauSync.connectHybrid(this, bluetoothMac);
+                // Remember the PC only now: bonding alone does not mean the PC accepted us, and a
+                // device saved on a connection that never completed would be redialled forever.
+                BleDiscovery.savePairedAddress(this, bluetoothMac);
                 String discoveredIp = newTauSync.getPeerWifiIp();
                 runOnUiThread(() -> {
                     tauSync = newTauSync;

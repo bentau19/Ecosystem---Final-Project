@@ -78,11 +78,16 @@ class ConnectivityService(LifecycleFlag, QObject):
     device_disconnecting: Signal = Signal()
     device_disconnected: Signal = Signal()
     connection_error: Signal = Signal(str)
-    #: Emitted (with the phone's name) when a new phone asks to connect over Bluetooth and the
-    #: user must approve it. A view shows a dialog on the main thread and calls
-    #: :meth:`resolve_phone_approval`. Emitted from a TauSync background thread, so the connection
-    #: is a queued (cross-thread) signal — the dialog is never opened off the UI thread.
-    phone_approval_requested: Signal = Signal(str)
+    #: Emitted (with the phone's name and the request id) when a new phone asks to connect over
+    #: Bluetooth and the user must approve it. A view shows a dialog on the main thread and calls
+    #: :meth:`resolve_phone_approval` with the same id. Emitted from a TauSync background thread, so
+    #: the connection is a queued (cross-thread) signal — the dialog is never opened off the UI
+    #: thread.
+    phone_approval_requested: Signal = Signal(str, int)
+    #: Emitted with a request id whose approval no longer matters — the phone gave up waiting, so
+    #: the connection attempt behind the dialog is dead. A view closes the matching dialog; without
+    #: this the operator could answer a prompt for a phone that left minutes ago.
+    phone_approval_cancelled: Signal = Signal(int)
 
     def __init__(self, parent: QObject | None = None) -> None:
         """Initialize the service and inject the device repository.
@@ -103,12 +108,20 @@ class ConnectivityService(LifecycleFlag, QObject):
 
         self._lifecycle_lock: threading.Lock = threading.Lock()
 
-        # Phone-approval handshake state. The TauSync callback blocks on _approval_event until a
-        # view resolves the decision on the main thread. _approved_devices remembers phones
-        # accepted this session so repeat connections are silent (persistence is a future step).
+        # Phone-approval handshake state. Each request gets its own id, event and result, so a
+        # decision can only ever be applied to the attempt it was raised for: a phone that gives up
+        # and reconnects produces a NEW request, and the operator's answer to the stale dialog is
+        # discarded instead of silently accepting (or rejecting) the new attempt.
+        self._approval_lock: threading.Lock = threading.Lock()
+        self._approval_id: int = 0
         self._approval_event: threading.Event = threading.Event()
         self._approval_result: bool = False
+        # Phones accepted by the operator. Written only once a session is fully established (see
+        # _confirm_session_established) so a phone whose connection never completed is not
+        # remembered — it would be auto-accepted next time on the strength of a session that
+        # never worked. Staged here between the accept and the establishment.
         self._approved_devices: set[str] = _load_approved_devices()
+        self._pending_approved_device: str | None = None
         # Set once on app exit (see prepare_shutdown). Makes _teardown_transport use a
         # short, bounded phone-notify timeout so shutdown closes promptly while the phone
         # still receives the DISCONNECT_FROM_PC message it needs to return to its connect screen.
@@ -330,14 +343,18 @@ class ConnectivityService(LifecycleFlag, QObject):
                     device_name=utils.network.get_pc_name(),
                     on_approve=self._on_phone_approval,
                 )
-                # A returning call does NOT guarantee a live peer: a stale transport can
-                # return instantly with is_connected still False (the "phantom connect").
-                # Never emit a phantom device_connected — reset the role so the next
-                # attempt re-arms a real accept, then back off and retry.  The back-off grows
-                # so a wedged stack (peer connecting then dropping mid-handshake over and over)
-                # can't hot-spin the listener or flood the log; a single phone that reconnects
-                # cleanly resets the counter immediately.
-                if not self.connected:
+                # A returning call does NOT guarantee a live peer.  Two ways it can lie:
+                # a stale transport returns instantly with is_connected still False (the
+                # "phantom connect"), or the socket looks alive but the phone has already
+                # walked away (a half-open Bluetooth link the stack has not surfaced yet),
+                # which is what left this PC "connected" to nobody.  Only a session the phone
+                # answers counts, so never emit device_connected before the hello round-trip
+                # below succeeds.  Reset the role so the next attempt re-arms a real accept,
+                # then back off and retry.  The back-off grows so a wedged stack (peer
+                # connecting then dropping mid-handshake over and over) can't hot-spin the
+                # listener or flood the log; a phone that connects cleanly resets it at once.
+                if not self.connected or not self._confirm_session_established():
+                    self._discard_pending_approval()
                     consecutive_phantoms += 1
                     backoff = min(2 ** (consecutive_phantoms - 1), self._MAX_PHANTOM_BACKOFF_S)
                     if consecutive_phantoms == 1:
@@ -353,15 +370,20 @@ class ConnectivityService(LifecycleFlag, QObject):
                     self._interruptible_sleep(backoff)
                     continue
                 consecutive_phantoms = 0
+                self._commit_pending_approval()
                 logger.info("_listen: device connected")
                 self.device_connected.emit()
             except TimeoutError:
                 consecutive_phantoms = 0
                 logger.debug("_listen: [bluetooth] timed out — retrying")
+                self._discard_pending_approval()
                 # Defense-in-depth: fully tear the transport down before the next attempt so a
                 # still-advertising Bluetooth RFCOMM listener can never accumulate across retries.
                 self._reset_transport()
             except Exception as exc:
+                # An approval staged by the attempt that just failed must never survive into the
+                # next one, or the next phone to connect inherits an accept meant for another.
+                self._discard_pending_approval()
                 # A deliberate stop() aborts the blocking listen() via
                 # tau.disconnect() — that is normal teardown, not an error.
                 if not self._is_running.is_set():
@@ -390,13 +412,53 @@ class ConnectivityService(LifecycleFlag, QObject):
     #: well under the ~8.1 s hard-exit watchdog in views/main_window.py.
     _SHUTDOWN_NOTIFY_TIMEOUT_S: int = 3
 
+    #: Max seconds to wait for the phone to answer the post-connect hello. The phone starts
+    #: polling for peer requests the moment its own handshake completes and answers within
+    #: milliseconds, so anything beyond a couple of seconds means it is gone; the window is kept
+    #: generous for a busy phone while still failing far faster than a user would notice.
+    _SESSION_HELLO_TIMEOUT_S: int = 10
+
+    def _confirm_session_established(self) -> bool:
+        """Prove the phone is really there before this PC calls itself connected.
+
+        ``tau.is_connected`` only reports the state of the *local* socket, which stays ``True`` on
+        a half-open Bluetooth link — the phone can abandon a slow approval, walk away, and leave
+        this PC "connected" to nobody while the phone is back on its connect screen waiting.  So
+        the transport handshake is not the end of connecting: the PC opens one short-lived channel
+        that the phone answers from its peer-request loop.  A reply means both sides agree the
+        session is live; anything else means it is not, and the caller re-listens.
+
+        Returns ``True`` when the phone answered.
+        """
+        try:
+            with self._tau.connect(
+                    SessionChannels.SESSION_HELLO.value,
+                    timeout_seconds=self._SESSION_HELLO_TIMEOUT_S,
+            ) as stream:
+                # Newline-terminated: the phone answers with a readLine-then-reply exchange, so
+                # without the terminator both ends would read to EOF and deadlock.
+                stream.write_string("hello\n")
+                stream.read_all()
+            logger.debug("_confirm_session_established: phone answered the hello")
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Phone never answered the session hello (%s) — treating as not connected", exc
+            )
+            return False
+
     def _on_phone_approval(self, phone_name: str | None) -> bool:
         """Decide whether to accept a phone requesting a hybrid connection.
 
         Invoked by ``connect_hybrid`` on a TauSync background thread when a phone connects over
         Bluetooth, before the session completes. A previously approved phone is auto-accepted
         (silent); a new one fires :attr:`phone_approval_requested` so a view shows an accept/reject
-        dialog on the main thread, then blocks here until :meth:`resolve_phone_approval` is called.
+        dialog on the main thread, then blocks here until :meth:`resolve_phone_approval` is called
+        with this request's id.
+
+        An accepted phone is only *staged* here — it is remembered for good once the session is
+        established (see :meth:`_confirm_session_established`), so a connection that never
+        completed cannot leave behind an entry that silently auto-accepts next time.
 
         Returns ``True`` to accept or ``False`` to reject. Runs on a TauSync background thread —
         it never touches the UI directly; the dialog is opened by the slot on the UI thread.
@@ -407,25 +469,77 @@ class ConnectivityService(LifecycleFlag, QObject):
             logger.info("Auto-approving known phone '%s'", device)
             return True
 
-        # Arm the handshake, ask the UI (cross-thread queued signal), and block for the decision.
-        self._approval_result = False
-        self._approval_event.clear()
-        self.phone_approval_requested.emit(device)
+        request_id = self._begin_approval_request()
+        self.phone_approval_requested.emit(device, request_id)
 
         if not self._approval_event.wait(timeout=self._APPROVAL_TIMEOUT_S):
             logger.warning("Phone approval for '%s' timed out — rejecting", device)
+            # The phone has given up by now, so the dialog is answering for a connection that no
+            # longer exists — tell the view to close it rather than leave a stale prompt up.
+            self._end_approval_request(request_id)
+            self.phone_approval_cancelled.emit(request_id)
             return False
 
-        if self._approval_result:
-            self._approved_devices.add(device)
-            _save_approved_devices(self._approved_devices)
+        accepted = self._approval_result
+        self._end_approval_request(request_id)
+        if accepted:
+            self._pending_approved_device = device
             logger.info("Phone '%s' approved", device)
         else:
             logger.info("Phone '%s' rejected", device)
-        return self._approval_result
+        return accepted
 
-    def resolve_phone_approval(self, accepted: bool) -> None:
+    def resolve_phone_approval(self, accepted: bool, request_id: int | None = None) -> None:
         """Resolve a pending :meth:`_on_phone_approval` decision. Called by the view (main thread)
-        after the user accepts/rejects, unblocking the waiting TauSync thread."""
-        self._approval_result = accepted
+        after the user accepts/rejects, unblocking the waiting TauSync thread.
+
+        Args:
+            accepted: The operator's decision.
+            request_id: The id delivered with :attr:`phone_approval_requested`. A decision for any
+                other request is discarded: it belongs to an attempt that has already ended, and
+                applying it would silently answer for whichever phone is connecting now.
+        """
+        with self._approval_lock:
+            if request_id is not None and request_id != self._approval_id:
+                logger.debug("Discarding stale approval for request %s", request_id)
+                return
+            self._approval_result = accepted
         self._approval_event.set()
+
+    # ── Approval-request bookkeeping ─────────────────────────────────────
+
+    def _begin_approval_request(self) -> int:
+        # Arm a fresh request and return its id. Any earlier waiter is already finished (the
+        # library runs one handshake at a time), but the new id invalidates its dialog.
+        with self._approval_lock:
+            self._approval_id += 1
+            self._approval_result = False
+            self._approval_event.clear()
+            return self._approval_id
+
+    def _end_approval_request(self, request_id: int) -> None:
+        # Retire the request so any later answer to its dialog is recognised as stale.
+        with self._approval_lock:
+            if self._approval_id == request_id:
+                self._approval_id += 1
+
+    def _commit_pending_approval(self) -> None:
+        # The session is established — the operator's accept can now be remembered, so this phone
+        # reconnects silently from here on.
+        device = self._pending_approved_device
+        self._pending_approved_device = None
+        if device is None or device in self._approved_devices:
+            return
+        self._approved_devices.add(device)
+        _save_approved_devices(self._approved_devices)
+        logger.info("Phone '%s' remembered — future connections are silent", device)
+
+    def _discard_pending_approval(self) -> None:
+        # The session never came up, so an accept for it must not be remembered: the operator
+        # approved a connection that did not happen.
+        if self._pending_approved_device is not None:
+            logger.info(
+                "Not remembering '%s' — its session was never established",
+                self._pending_approved_device,
+            )
+            self._pending_approved_device = None

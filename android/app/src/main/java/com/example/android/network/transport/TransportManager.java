@@ -41,6 +41,16 @@ public interface TransportManager {
         void onConnectionError(Exception error);
 
         /**
+         * Called when the PC explicitly declined this phone's connection request, as opposed to a
+         * connection that merely failed. Retrying is pointless (it would only re-prompt the same
+         * operator), and a PC that turned us away should not stay remembered as our device.
+         * Defaults to the generic error path so existing listeners need not implement it.
+         */
+        default void onConnectionDeclined(Exception error) {
+            onConnectionError(error);
+        }
+
+        /**
          * Called when the transport is about to attempt reconnection.
          */
         void onReconnectAttempt(int attemptNumber, int maxRetries);

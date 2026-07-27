@@ -305,7 +305,7 @@ public class TauSyncTransportManager implements TransportManager {
             persistentReconnect = false;
             updateStatus(TransportStatus.FAILED);
             if (listener != null) {
-                mainHandler.post(() -> listener.onConnectionError(error));
+                mainHandler.post(() -> listener.onConnectionDeclined(error));
             }
             return;
         }

@@ -312,7 +312,9 @@ def test_prepare_shutdown_uses_short_notify_timeout(qtbot: QtBot) -> None:
     svc.stop()
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
-    mock_tau.connect.assert_called_once_with(
+    # assert_any_call, not assert_called_once_with: connecting also opens the session-hello
+    # channel, so the disconnect notify is not the only connect() on this transport.
+    mock_tau.connect.assert_any_call(
         SessionChannels.DISCONNECT_FROM_PC.value, timeout_seconds=3
     )
     assert mock_tau.disconnect.called          # transport still torn down
@@ -332,7 +334,7 @@ def test_stop_without_shutdown_still_notifies_phone(qtbot: QtBot) -> None:
     svc.stop()  # no prepare_shutdown()
 
     qtbot.waitUntil(lambda: len(received) > 0, timeout=2000)
-    mock_tau.connect.assert_called_once_with(
+    mock_tau.connect.assert_any_call(
         SessionChannels.DISCONNECT_FROM_PC.value, timeout_seconds=10
     )
 
@@ -426,3 +428,83 @@ def test_stop_then_start_listens_again_with_fresh_tausync(qtbot: QtBot) -> None:
     assert created[2] is not created[1]
     assert svc._is_running.is_set()
     assert svc.tau is created[2]
+
+
+# ---------------------------------------------------------------------------
+# Session hello — a connection only counts once the phone answers
+# ---------------------------------------------------------------------------
+
+
+def test_no_device_connected_when_phone_never_answers_hello(qtbot: QtBot) -> None:
+    """A live-looking socket is not a live phone.
+
+    A half-open Bluetooth link keeps ``is_connected`` True after the phone has walked away,
+    which is what used to leave the PC "connected" to nobody while the phone sat on its
+    connect screen. The unanswered hello must keep ``device_connected`` from firing and send
+    the listener back to waiting for a real peer.
+    """
+    gate = threading.Event()
+    mock_tau = _gated_tau(gate)
+    mock_tau.connect.side_effect = TimeoutError("phone never opened session_hello")
+
+    svc = _start_service(mock_tau)
+    connected: list[bool] = []
+    svc.device_connected.connect(lambda: connected.append(True))
+    gate.set()
+
+    qtbot.waitUntil(lambda: mock_tau.connect.called, timeout=2000)
+    qtbot.waitUntil(lambda: mock_tau.disconnect.called, timeout=2000)  # transport reset
+    assert connected == []
+
+
+def test_hello_opens_the_session_channel(qtbot: QtBot) -> None:
+    """The established-session proof is a round trip on SESSION_HELLO, before device_connected."""
+    gate = threading.Event()
+    mock_tau = _gated_tau(gate)
+    svc = _start_service(mock_tau)
+
+    _wait_connected(qtbot, svc, gate)
+
+    channel, _ = mock_tau.connect.call_args_list[0]
+    assert channel[0] == SessionChannels.SESSION_HELLO.value
+
+
+# ---------------------------------------------------------------------------
+# Phone approval — decisions belong to the attempt that raised them
+# ---------------------------------------------------------------------------
+
+
+def test_stale_approval_decision_is_discarded(qtbot: QtBot) -> None:
+    """An answer to a dialog whose phone already left must not resolve the current attempt.
+
+    Otherwise the operator's late click lands on whichever phone happens to be connecting
+    then — accepting (or rejecting) a device they never saw.
+    """
+    svc = _start_service(_make_tau())
+    stale_id = svc._begin_approval_request()
+    svc._end_approval_request(stale_id)
+
+    current_id = svc._begin_approval_request()
+    svc.resolve_phone_approval(True, stale_id)
+
+    assert not svc._approval_event.is_set()
+    assert svc._approval_result is False
+
+    svc.resolve_phone_approval(True, current_id)
+    assert svc._approval_event.is_set()
+    assert svc._approval_result is True
+
+
+def test_approved_phone_is_only_remembered_once_the_session_is_established() -> None:
+    """An accept for a connection that never completed must not silently auto-accept next time."""
+    svc = _start_service(_make_tau())
+    with patch("services.connectivity._save_approved_devices") as save:
+        svc._pending_approved_device = "Pixel"
+        svc._discard_pending_approval()
+        assert "Pixel" not in svc._approved_devices
+        save.assert_not_called()
+
+        svc._pending_approved_device = "Pixel"
+        svc._commit_pending_approval()
+        assert "Pixel" in svc._approved_devices
+        save.assert_called_once()

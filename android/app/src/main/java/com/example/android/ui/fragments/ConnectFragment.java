@@ -159,14 +159,14 @@ public class ConnectFragment extends Fragment {
         }
     }
 
-    /** Reuse a remembered PC if any, otherwise scan for one. Called once permissions are granted. */
+    /**
+     * Scans for a PC. Called once permissions are granted, and always scans even when a PC is
+     * remembered: reconnecting to that one is what the saved-device card is for, so this button
+     * stays the way to reach a different PC. (It used to redial the saved PC instead, which left a
+     * user whose saved PC no longer works with no route back to discovery.)
+     */
     private void proceedWithBluetoothConnect() {
-        String saved = viewModel.getSavedAddress();
-        if (saved != null) {
-            startHybridConnection(saved);
-        } else {
-            viewModel.startDiscovery();
-        }
+        viewModel.startDiscovery();
     }
 
     /**
@@ -309,6 +309,11 @@ public class ConnectFragment extends Fragment {
         }
     }
 
+    /**
+     * Shows the remembered PC (if any) alongside the scan button. The scan button stays visible
+     * either way: hiding it behind a saved device meant a PC that could no longer be reached could
+     * only be escaped by clearing app data.
+     */
     private void refreshSavedDeviceCard() {
         boolean hasSaved = viewModel.getSavedAddress() != null;
         if (hasSaved && tvSavedDeviceName != null) {
@@ -316,7 +321,7 @@ public class ConnectFragment extends Fragment {
             tvSavedDeviceName.setText(name != null ? name : "My PC");
         }
         setVisible(savedDeviceCard, hasSaved);
-        setVisible(btnConnectBluetooth, !hasSaved);
+        setVisible(btnConnectBluetooth, true);
     }
 
     /** Spinner + status label visible; connect buttons and idle hint hidden. */

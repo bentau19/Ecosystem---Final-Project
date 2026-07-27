@@ -12,3 +12,6 @@ class SessionChannels(StrEnum):
 
     # PC opens this channel to notify the phone before a PC-initiated disconnect.
     DISCONNECT_FROM_PC = "disconnect_pc"
+
+    # PC opens this channel right after the transport handshake and waits for the phone's reply. Answering it is what makes the session established on BOTH sides: only then does the PC emit device_connected and remember the phone, and only then does the phone remember the PC. An unanswered hello means the phone is gone (half-open link) and the PC re-listens instead of sitting connected to nobody.
+    SESSION_HELLO = "session_hello"

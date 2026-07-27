@@ -128,7 +128,13 @@ public class MainViewModel extends ViewModel {
         });
     }
 
-    /** Bonds with the discovered PC after the user accepts the confirm dialog. */
+    /**
+     * Bonds with the discovered PC after the user accepts the confirm dialog. Only the PC's display
+     * name is stored here; its address — the part that makes the app redial this PC on every
+     * launch — is saved by {@code ConnectivityService} once the session is actually established, so
+     * a PC that declines us is never left saved as our device. The name is harmless on its own: the
+     * saved-device card appears only when an address exists, and forgetting clears both.
+     */
     public void confirmPairing(String macAddress) {
         discoveryStatus.postValue(DiscoveryStatus.PAIRING);
         pairWithPc.pair(macAddress, new PairWithPcUseCase.PairingListener() {
