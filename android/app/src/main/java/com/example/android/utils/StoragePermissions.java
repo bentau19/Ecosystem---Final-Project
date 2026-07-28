@@ -1,5 +1,6 @@
 package com.example.android.utils;
 import android.Manifest;
+import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -121,15 +122,40 @@ public final class StoragePermissions {
      */
     public static void openSettings(Fragment fragment, int requestCode) {
         try {
-            Intent intent = new Intent(
-                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                    Uri.parse("package:" + fragment.requireContext().getPackageName()));
-            fragment.startActivityForResult(intent, requestCode);
+            fragment.startActivityForResult(
+                    perAppIntent(fragment.requireContext()), requestCode);
         } catch (Exception e) {
             Log.w(TAG, "Per-app all-files screen unavailable, opening generic screen");
-            fragment.startActivityForResult(
-                    new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
-                    requestCode);
+            fragment.startActivityForResult(genericIntent(), requestCode);
         }
+    }
+
+    /**
+     * Activity-hosted variant of {@link #openSettings(Fragment, int)}, for callers
+     * that ask before any Fragment owns the flow — the startup prompt in
+     * {@code MainActivity}.
+     *
+     * @param activity    the caller; its {@code onActivityResult} receives the return trip.
+     * @param requestCode request code passed to {@code startActivityForResult}.
+     */
+    public static void openSettings(Activity activity, int requestCode) {
+        try {
+            activity.startActivityForResult(perAppIntent(activity), requestCode);
+        } catch (Exception e) {
+            Log.w(TAG, "Per-app all-files screen unavailable, opening generic screen");
+            activity.startActivityForResult(genericIntent(), requestCode);
+        }
+    }
+
+    // Deep link straight to this app's row on the All files access screen.
+    private static Intent perAppIntent(Context context) {
+        return new Intent(
+                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:" + context.getPackageName()));
+    }
+
+    // Device-wide list, for OEM builds that do not expose the per-app screen.
+    private static Intent genericIntent() {
+        return new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
     }
 }
