@@ -303,8 +303,23 @@ class ConnectivityService(LifecycleFlag, QObject):
         except Exception as exc:
             logger.debug("_listen: reset/disconnect failed: %s", exc)
 
+    def _interruptible_sleep(self, seconds: float) -> None:
+        # Sleep up to `seconds` but wake immediately if the service is stopped.
+        deadline = time.monotonic() + seconds
+        while self._is_running.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.25, remaining))
+
+    #: Cap on the phantom-connect exponential back-off (seconds). Long enough that a wedged
+    #: Bluetooth/BLE stack is polled gently, short enough that a real phone still connects
+    #: promptly once the stack recovers.
+    _MAX_PHANTOM_BACKOFF_S: int = 10
+
     def _listen(self) -> None:
         # Retries on timeout; surfaces unexpected exceptions via connection_error.
+        consecutive_phantoms = 0
         while self._is_running.is_set() and not self.connected:
             logger.debug("_listen: [bluetooth] waiting for connection")
             try:
@@ -318,20 +333,48 @@ class ConnectivityService(LifecycleFlag, QObject):
                 # A returning call does NOT guarantee a live peer: a stale transport can
                 # return instantly with is_connected still False (the "phantom connect").
                 # Never emit a phantom device_connected — reset the role so the next
-                # attempt re-arms a real accept, then back off and retry.
+                # attempt re-arms a real accept, then back off and retry.  The back-off grows
+                # so a wedged stack (peer connecting then dropping mid-handshake over and over)
+                # can't hot-spin the listener or flood the log; a single phone that reconnects
+                # cleanly resets the counter immediately.
                 if not self.connected:
+<<<<<<< HEAD
                     logger.warning("_listen: [bluetooth] returned with no live peer — resetting")
+=======
+                    consecutive_phantoms += 1
+                    backoff = min(2 ** (consecutive_phantoms - 1), self._MAX_PHANTOM_BACKOFF_S)
+                    if consecutive_phantoms == 1:
+                        logger.warning(
+                            "_listen: [bluetooth] returned with no live peer — resetting"
+                        )
+                    else:
+                        logger.debug(
+                            "_listen: [bluetooth] phantom connect #%d — backing off %ds",
+                            consecutive_phantoms, backoff,
+                        )
+>>>>>>> main
                     self._reset_transport()
-                    time.sleep(1)
+                    self._interruptible_sleep(backoff)
                     continue
+<<<<<<< HEAD
                 logger.info("_listen: device connected")
                 self.device_connected.emit()
             except TimeoutError:
+=======
+                consecutive_phantoms = 0
+                logger.info("_listen: device connected")
+                self.device_connected.emit()
+            except TimeoutError:
+                consecutive_phantoms = 0
+>>>>>>> main
                 logger.debug("_listen: [bluetooth] timed out — retrying")
                 # Defense-in-depth: fully tear the transport down before the next attempt so a
                 # still-advertising Bluetooth RFCOMM listener can never accumulate across retries.
                 self._reset_transport()
+<<<<<<< HEAD
                 time.sleep(1)
+=======
+>>>>>>> main
             except Exception as exc:
                 # A deliberate stop() aborts the blocking listen() via
                 # tau.disconnect() — that is normal teardown, not an error.
@@ -345,10 +388,21 @@ class ConnectivityService(LifecycleFlag, QObject):
                 self._reset_transport()
                 # Brief backoff so a persistent failure (e.g. port in use)
                 # never hot-spins the listener thread.
-                time.sleep(1)
+                self._interruptible_sleep(1)
 
     #: Max time to wait for the user's accept/reject decision before defaulting to reject.
-    _APPROVAL_TIMEOUT_S = 30.0
+    #: Kept just under the phone's BT handshake timeout (CoreConfig.BT_HANDSHAKE_TIMEOUT_MS = 60 s) so
+    #: the operator gets nearly the full window the phone is willing to wait — the PC decides (accept
+    #: or auto-reject) before the phone gives up, instead of the old 30 s that let the phone time out
+    #: and reconnect while the dialog was still open. If the operator does exceed this, the phone's
+    #: reconnect now reaches a freshly-reset, re-advertising PC (BT drop = clean reset, no silent
+    #: resume), so it still connects on the next attempt.
+    _APPROVAL_TIMEOUT_S = 55.0
+
+    #: Bounded phone-notify timeout on app shutdown. The phone polls every 20 ms and the
+    #: DISCONNECT_FROM_PC handshake normally completes <1 s, so 3 s is ample while staying
+    #: well under the ~8.1 s hard-exit watchdog in views/main_window.py.
+    _SHUTDOWN_NOTIFY_TIMEOUT_S: int = 3
 
     #: Bounded phone-notify timeout on app shutdown. The phone polls every 20 ms and the
     #: DISCONNECT_FROM_PC handshake normally completes <1 s, so 3 s is ample while staying

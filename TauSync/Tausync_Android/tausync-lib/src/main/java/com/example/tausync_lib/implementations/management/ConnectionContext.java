@@ -109,6 +109,14 @@ public final class ConnectionContext {
     private volatile ITransport bluetoothTransport = null;
 
     /**
+     * True while the PC operator's connection approval is in progress (the server sent
+     * APPROVAL_PENDING and has not yet answered with its BT_MAGIC or SESSION_REJECT). The app layer
+     * reads this to keep its connect attempt alive for the full approval window instead of applying
+     * its normal short timeout. Cleared by {@link #reset()}.
+     */
+    private volatile boolean approvalPending = false;
+
+    /**
      * Per-session crypto: runs the ECDH key exchange and encrypts/decrypts frame payloads once a
      * shared key is derived. Same lifecycle as {@link #sessionToken} — cleared by {@link #reset()}.
      */
@@ -224,6 +232,9 @@ public final class ConnectionContext {
         // re-establishing, so stale handlers and pending REQs are not replayed on the
         // new session's frames. Mirrors the C# ConnectionContext.InitializeTransports.
         reset();
+        // Wi-Fi-only mode: this is the session's ONLY link, so an unexpected drop must silently
+        // reconnect (a prior hybrid session may have left auto-reconnect disabled on the singleton).
+        wifiTransport.setAutoReconnect(true);
         // Arm the key exchange before connecting so a peer KEY_EXCHANGE arriving the instant the link
         // is up is captured (and derived synchronously) rather than lost.
         beginKeyExchange();
@@ -254,6 +265,16 @@ public final class ConnectionContext {
     /** @return the active hybrid session's Bluetooth transport, or null in Wi-Fi-only mode. */
     public ITransport getBluetoothTransport() {
         return bluetoothTransport;
+    }
+
+    /** Records whether the PC operator's connection approval is in progress (see {@link #approvalPending}). */
+    public void setApprovalPending(boolean pending) {
+        this.approvalPending = pending;
+    }
+
+    /** @return true while the PC operator's connection approval is in progress. */
+    public boolean isApprovalPending() {
+        return approvalPending;
     }
 
     /**
@@ -424,6 +445,7 @@ public final class ConnectionContext {
         sessionToken = null;
         peerWifiHost = null;
         bluetoothTransport = null;
+        approvalPending = false;
         securitySession.clear();
         peerKeyReceived = null;
         localPublicKey = null;
@@ -775,7 +797,11 @@ public final class ConnectionContext {
                 || SessionControlMessage.TYPE_WIFI_CONNECT_REQ.equals(type)
                 || SessionControlMessage.TYPE_WIFI_CONNECT_READY.equals(type)
                 || SessionControlMessage.TYPE_SESSION_JOIN.equals(type)
-                || SessionControlMessage.TYPE_SESSION_JOIN_ACK.equals(type);
+                || SessionControlMessage.TYPE_SESSION_JOIN_ACK.equals(type)
+                || SessionControlMessage.TYPE_SESSION_REJECT.equals(type)
+                || SessionControlMessage.TYPE_SESSION_CONFIRM.equals(type)
+                || SessionControlMessage.TYPE_APPROVAL_PENDING.equals(type)
+                || SessionControlMessage.TYPE_WIFI_IDLE_CLOSE.equals(type);
     }
 
     // ── Functional interface for service callbacks ─────────────────────

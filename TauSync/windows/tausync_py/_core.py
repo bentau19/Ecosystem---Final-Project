@@ -984,15 +984,16 @@ class TauSync:
         """
         self._check_not_disposed()
         self._stop_ble_advertiser()
-        # Always reset the process-wide role/target, even when the socket is
-        # already down.  A peer-initiated drop makes _manager.IsConnected()
-        # False before we get here; leaving _global_role == _ROLE_SERVER would
-        # make the next listen() a no-op that returns instantly (idempotent
-        # "already listening"), hot-looping the caller's accept loop.  Only the
-        # actual Disconnect() is guarded so we never poke a dead transport.
+        # Always run the real teardown, even when the manager reports not-connected.
+        # Disconnect() is idempotent per transport (each guards on its own state), and
+        # skipping it here leaked live pieces: a hybrid session whose primary dropped
+        # but whose lazy Wi-Fi socket was still up, or transports mid-teardown.  Any
+        # error is swallowed — teardown must never block the role reset below, which
+        # is what lets the next listen() re-arm a real accept.
         try:
-            if self._manager.IsConnected():
-                self._manager.Disconnect()
+            self._manager.Disconnect()
+        except Exception:
+            pass
         finally:
             with TauSync._global_role_lock:
                 TauSync._global_role = _ROLE_NONE

@@ -1,6 +1,6 @@
 # Ecosystem
 
-A cross-platform solution connecting Android phones to Windows PCs. The phone acts as a remote extension of the desktop — send files, view device info, and trigger actions from either side over a local Wi-Fi connection.
+A cross-platform solution connecting Android phones to Windows PCs. The phone acts as a remote extension of the desktop — send files, view device info, and trigger actions from either side over Bluetooth.
 
 ## Sub-projects
 
@@ -28,8 +28,8 @@ Ecosystem/
 ├── desktop/                    # SyncDose Windows app (Python + PySide6)
 │   ├── app/                    # DI root (AppState), NavigationManager, ThemeManager
 │   ├── domain/                 # DTOs, Entities, Enums
-│   ├── repositories/           # SQLite persistence (sqlite3)
-│   ├── serializers/            # Entity ↔ row-tuple conversion
+│   ├── repositories/           # JSON-backed data stores (atomic writes)
+│   ├── serializers/            # Entity ↔ dict (JSON) conversion
 │   ├── services/               # Background threads: connectivity, file transfer, etc.
 │   ├── viewmodels/             # Qt Signals + DTOs consumed by Views
 │   ├── views/                  # PySide6 widgets and screens
@@ -151,7 +151,7 @@ Open `android/` in Android Studio. The app uses manual DI via `MainViewModelFact
 Hilt or Dagger. `ConnectivityService` is a Foreground Service that keeps the TauSync socket
 alive while the app is in the background.
 
-Connection is established either by scanning a QR code (Wi-Fi) or via Bluetooth pairing (BLE discovery + hybrid BT/Wi-Fi). The desktop app lets the user switch between modes from the login screen; a first-time Bluetooth pairing is remembered for instant reconnect on subsequent sessions.
+Connection is established via Bluetooth pairing (BLE discovery + hybrid BT/TCP). A first-time Bluetooth pairing is remembered for instant reconnect on subsequent sessions.
 
 ---
 
@@ -172,7 +172,21 @@ role as a deterministic tiebreaker.
 
 ## CI/CD
 
-GitHub Actions (`.github/workflows/desktop.yml`) runs on every push:
+Two GitHub Actions workflows live under `.github/workflows/`:
 
-1. **test** — builds TauSync DLL → builds native pipe module (MSVC) → `pip install` → `pytest desktop/`
-2. **build** — builds both PyInstaller executables (SyncDose + FileHandler) → `dotnet build` Bundle → uploads `SyncDoseSetup.exe` artifact
+### `tests.yml` — runs on **every push**
+
+| Job | Runner | Steps |
+|---|---|---|
+| `android-test` | ubuntu | `./gradlew :app:testDebugUnitTest` |
+| `windows-test` | windows | build TauSync DLL → install deps → build native pipe module (MSVC) → install WinFSP → compile Qt resources → `pytest desktop/` |
+| `filedetection-test` | ubuntu | `pytest FileDetection/tests/` |
+| `tausync-android-test` | ubuntu | TauSync Android integration tests |
+
+### `build_release.yml` — runs on pushes to `main`, `v*.*.*` tags, and manual dispatch
+
+| Job | Runner | Steps |
+|---|---|---|
+| `windows-build` | windows | build TauSync DLL → build native pipe + VirtualDrive modules → install deps → compile Qt resources → PyInstaller (SyncDose + FileHandler) → download bundle prerequisites (.NET 8, WinFSP, OBS) → `dotnet build` Bundle → upload `SyncDoseSetup.exe` |
+| `android-build` | ubuntu | decode keystore → `./gradlew :app:assembleRelease` → upload signed APK |
+| `deploy` | ubuntu | **only on `v*.*.*` tags** — download both artifacts → create GitHub Release with installer + APK |

@@ -1,22 +1,32 @@
 package com.example.android.ui.fragments;
 
+<<<<<<< HEAD
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
+=======
+import android.os.Bundle;
+>>>>>>> main
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageButton;
 
 import androidx.annotation.NonNull;
+<<<<<<< HEAD
 import androidx.annotation.Nullable;
+=======
+>>>>>>> main
 import androidx.appcompat.widget.SwitchCompat;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.example.android.R;
+<<<<<<< HEAD
 import com.example.android.utils.StoragePermissions;
+=======
+>>>>>>> main
 import com.example.android.viewmodel.SettingsViewModel;
 
 /**
@@ -39,11 +49,14 @@ import com.example.android.viewmodel.SettingsViewModel;
  */
 public class SettingsFragment extends Fragment {
 
+<<<<<<< HEAD
     private static final String TAG = "SettingsFragment";
 
     /** Return code from the system All-files-access screen (Virtual Drive gate). */
     private static final int REQ_ALL_FILES_ACCESS = 3001;
 
+=======
+>>>>>>> main
     /**
      * Guards switch listeners while the LiveData observer applies a value programmatically.
      * Without this, a PC-pushed state change would cause:
@@ -143,12 +156,18 @@ public class SettingsFragment extends Fragment {
         });
 
         switchVirtualDrive.setOnCheckedChangeListener((btn, checked) -> {
+<<<<<<< HEAD
             if (programmaticUpdate) return;
             if (checked && !StoragePermissions.hasAllFilesAccess()) {
                 promptForAllFilesAccess();
                 return;
             }
             settingsViewModel.setVirtualDriveEnabled(checked);
+=======
+            if (!programmaticUpdate) {
+                settingsViewModel.setVirtualDriveEnabled(checked);
+            }
+>>>>>>> main
         });
 
         switchClipboardSync.setOnCheckedChangeListener((btn, checked) -> {
@@ -166,6 +185,7 @@ public class SettingsFragment extends Fragment {
         // 6. Back navigation — same pattern as BackupFragment / FolderPickerFragment
         btnBack.setOnClickListener(v -> requireActivity().onBackPressed());
     }
+<<<<<<< HEAD
 
     // ── Virtual Drive storage permission ──────────────────────────────────────
 
@@ -212,4 +232,6 @@ public class SettingsFragment extends Fragment {
             revertVirtualDriveSwitch();
         }
     }
+=======
+>>>>>>> main
 }

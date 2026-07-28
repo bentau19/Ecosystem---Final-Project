@@ -32,8 +32,12 @@ def configure_logging() -> None:
     if root.handlers:
         return
 
+<<<<<<< HEAD
     level_name = os.environ.get("SYNCDOSE_LOG_LEVEL", "DEBUG").upper()
     root.setLevel(getattr(logging, level_name, logging.DEBUG))
+=======
+    root.setLevel(logging.INFO)
+>>>>>>> main
 
     fmt = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",

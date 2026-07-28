@@ -11,6 +11,7 @@
     <string name="connection_failed_error">Connection failed. Check your Wi‑Fi and try again.</string>
     <string name="connection_failed_bt_error">Connection failed. Make sure Bluetooth is on, or connect with WiFi.</string>
     <string name="connection_timeout_error">Connection timed out. Please try again.</string>
+    <string name="waiting_for_pc_approval">Waiting for approval on the PC…</string>
 
     <!-- Backup screen -->
     <string name="backup_title">File Backup</string>
