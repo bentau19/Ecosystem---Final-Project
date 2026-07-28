@@ -84,6 +84,20 @@ public class SettingsFragment extends Fragment {
 
         // 3. Set initial switch states BEFORE attaching listeners so the first
         //    setChecked() does not trigger a repository write or a PC push.
+
+        // Reconcile the Virtual Drive against the permission it actually needs.
+        // The gate below only runs on a user OFF→ON tap, and the drive is never
+        // off to begin with: it defaults ON for a fresh install, and the PC pushes
+        // its own state. So on the ordinary path the switch is already checked here,
+        // the listener never fires, and nobody is ever asked for All files access —
+        // leaving a drive that mounts and browses but hides almost every file.
+        // Correcting it to OFF is what puts the user in front of the prompt, since
+        // turning it back on is now a real OFF→ON tap.
+        if (settingsViewModel.isVirtualDriveEnabled() && !StoragePermissions.hasAllFilesAccess()) {
+            Log.w(TAG, "Virtual Drive is on without All files access — turning it off");
+            settingsViewModel.setVirtualDriveEnabled(false);
+        }
+
         switchAutoLaunch.setChecked(settingsViewModel.isAutoLaunch());
         switchBackup.setChecked(settingsViewModel.isBackupEnabled());
         switchVirtualDrive.setChecked(settingsViewModel.isVirtualDriveEnabled());
@@ -173,12 +187,12 @@ public class SettingsFragment extends Fragment {
      * Asks for All files access before the Virtual Drive may be enabled.
      *
      * <p>The drive maps the phone's storage to a Windows drive letter through the
-     * raw File API. Without this permission the mount still succeeds and browsing
-     * works — only writes fail, with the PC reporting a permission error for every
-     * copy. Enabling the tool in that state produces a drive that looks healthy and
-     * silently refuses work, so unlike Backup (which degrades gracefully and offers
-     * "Skip") there is no proceed-anyway option here: declining leaves the switch
-     * off.
+     * raw File API, which scoped storage restricts in both directions: writes fail
+     * outright, and directory listings come back filtered down to app-owned files
+     * and granted media. Enabling the tool in that state produces a drive that
+     * mounts, browses, and shows almost nothing, so unlike Backup (which degrades
+     * gracefully and offers "Skip") there is no proceed-anyway option here:
+     * declining leaves the switch off.
      */
     private void promptForAllFilesAccess() {
         new AlertDialog.Builder(requireContext())

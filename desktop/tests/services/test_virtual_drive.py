@@ -470,6 +470,32 @@ def test_list_page_failure_errors_and_is_not_cached() -> None:
     assert svc._connectivity.tau.connect.call_count == 2
 
 
+def test_list_page_forwards_access_denied() -> None:
+    """A denied listing keeps its code so Explorer can explain it.
+
+    The phone answers ``access_denied`` when All files access is missing. Folding
+    that into ``io_error`` (as every other failure is) cost the one detail that
+    tells the user what to do: STATUS_ACCESS_DENIED reads as "you don't have
+    permission", while STATUS_IO_DEVICE_ERROR reads as broken hardware.
+    """
+    denied = _FakeStream(json.dumps({"ok": False, "error": "access_denied"}).encode())
+    svc = _service_with_streams(denied)
+
+    resp, _ = svc._op_list_page({"path": "/D", "after": None, "limit": 10}, b"")
+
+    assert resp == {"ok": False, "error": "access_denied"}
+
+
+def test_list_page_maps_other_failures_to_io_error() -> None:
+    """Transient failures stay retryable rather than becoming a verdict."""
+    failed = _FakeStream(json.dumps({"ok": False, "error": "timeout"}).encode())
+    svc = _service_with_streams(failed)
+
+    resp, _ = svc._op_list_page({"path": "/D", "after": None, "limit": 10}, b"")
+
+    assert resp == {"ok": False, "error": "io_error"}
+
+
 def test_list_page_refetches_after_ttl_expiry() -> None:
     """An expired listing is refetched rather than served stale."""
     svc = _service_with_streams(

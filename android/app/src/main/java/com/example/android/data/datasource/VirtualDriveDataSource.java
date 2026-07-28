@@ -89,7 +89,7 @@ public class VirtualDriveDataSource {
         }
     }
 
-    // ── Write gate ────────────────────────────────────────────────────────────
+    // ── Permission gates ──────────────────────────────────────────────────────
 
     /**
      * Fails fast when shared storage is not writable through the File API.
@@ -98,16 +98,41 @@ public class VirtualDriveDataSource {
      * storage that only works while All files access is granted; without it
      * MediaProvider's FUSE daemon rejects the underlying {@code open(O_CREAT)}
      * with {@code EPERM}, whose message ("Operation not permitted") means nothing
-     * to Windows and surfaces in Explorer as a generic I/O device error. Reads
-     * and directory listings are unaffected, so the drive mounts and browses
-     * normally and only copies fail — checking up front turns that into a
-     * deliberate {@code access_denied} the PC can explain.
+     * to Windows and surfaces in Explorer as a generic I/O device error. Checking
+     * up front turns that into a deliberate {@code access_denied} the PC can
+     * explain.
      */
     private void requireWritable(String virtualPath) throws VDriveException {
         if (!StoragePermissions.hasAllFilesAccess()) {
             Log.w(TAG, "write refused (no All files access): " + virtualPath);
             throw new VDriveException("access_denied",
                     "All files access not granted — cannot write " + virtualPath);
+        }
+    }
+
+    /**
+     * Fails fast when shared storage is not readable through the File API.
+     *
+     * <p>Scoped storage does not only block writes. MediaProvider's FUSE daemon
+     * also filters what {@code listFiles()} returns down to what this app is
+     * entitled to see — its own files, plus media covered by the granted
+     * {@code READ_MEDIA_*} permissions. Subdirectories still come back, so
+     * without All files access the drive browses convincingly while hiding every
+     * document, archive and third-party file on the phone, and reports that
+     * filtered view as an ordinary successful listing. There is no error anywhere
+     * for the PC to show, which is exactly what makes it look like the drive
+     * "sees no files". Refusing outright turns a silently wrong picture of the
+     * user's storage into an {@code access_denied} Explorer explains.
+     *
+     * <p>Deliberately not applied to {@link #stat}: the drive has to keep
+     * mounting so opening it yields that explanation, rather than a mount failure
+     * the exe-watchdog would restart in a loop.
+     */
+    private void requireReadable(String virtualPath) throws VDriveException {
+        if (!StoragePermissions.hasAllFilesAccess()) {
+            Log.w(TAG, "read refused (no All files access): " + virtualPath);
+            throw new VDriveException("access_denied",
+                    "All files access not granted — cannot read " + virtualPath);
         }
     }
 
@@ -128,6 +153,8 @@ public class VirtualDriveDataSource {
 
     /** Lists direct children of virtualPath. Serves from cache when warm. */
     public List<VDriveEntry> listDir(String virtualPath) throws IOException {
+        requireReadable(virtualPath);
+
         // restricted subtrees block without returning data — short-circuit entirely
         if (isRestrictedDir(virtualPath) || isRestrictedDescendant(virtualPath)) {
             return new ArrayList<>();
@@ -196,6 +223,8 @@ public class VirtualDriveDataSource {
     public VDrivePageResult listDirPage(String virtualPath,
                                         @Nullable String afterName,
                                         int limit) throws IOException {
+        requireReadable(virtualPath);
+
         if (isRestrictedDir(virtualPath) || isRestrictedDescendant(virtualPath)) {
             return new VDrivePageResult(new ArrayList<>(), false, null);
         }
@@ -270,6 +299,7 @@ public class VirtualDriveDataSource {
     /** Opens an InputStream for bytes [offset, offset+length) of virtualPath. */
     public InputStream openReadRange(String virtualPath, long offset, int length)
             throws IOException {
+        requireReadable(virtualPath);
         if (isRestrictedDescendant(virtualPath)) {
             throw new java.io.FileNotFoundException("Restricted path: " + virtualPath);
         }
@@ -294,6 +324,7 @@ public class VirtualDriveDataSource {
      */
     public VDriveReadRange openReadRangeChecked(String virtualPath, long offset, int length)
             throws IOException {
+        requireReadable(virtualPath);
         if (isRestrictedDescendant(virtualPath)) {
             throw new java.io.FileNotFoundException("Restricted path: " + virtualPath);
         }

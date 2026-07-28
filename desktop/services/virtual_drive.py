@@ -476,7 +476,16 @@ class VirtualDriveService(LifecycleFlag, QObject):
         # virtual-drive operation failed: the C++ side maps most error strings to
         # a generic STATUS_IO_DEVICE_ERROR, so Explorer only ever shows
         # 0x8007045D no matter what actually went wrong.
-        logger.warning(
+        #
+        # A stat that simply finds nothing is the one exception. Explorer probes
+        # every directory it opens for desktop.ini, folder.jpg and autorun.inf, and
+        # Android answers a missing path with a bare {"ok": false} carrying no error
+        # field — the "unknown" below. At WARNING those absences run to hundreds of
+        # lines per browse and bury the failures that matter, so they go to DEBUG;
+        # a stat that fails for any other reason still warns.
+        quiet = req.get("op") == "stat" and reason in ("unknown", "not_found")
+        logger.log(
+            logging.DEBUG if quiet else logging.WARNING,
             "vdrive op %r failed on %s: %s",
             req.get("op", "?"), self._req_target(req), reason,
             exc_info=exc_info,
@@ -529,32 +538,35 @@ class VirtualDriveService(LifecycleFlag, QObject):
 
         listing = self._listings.get(path, now)
         if listing is None:
-            listing = self._fetch_listing_full(path)
+            listing, error = self._fetch_listing_full(path)
             if listing is None:
-                # Never cache a failure, and never report it as an empty folder:
-                # the C++ side maps this to a retryable I/O error so Explorer
-                # retries instead of showing the directory as empty.
-                return {"ok": False, "error": "io_error"}, b''
+                # Never cache a failure, and never report it as an empty folder —
+                # an empty listing is indistinguishable from a directory the phone
+                # refused to show.
+                return {"ok": False, "error": error}, b''
             self._listings.put(path, listing.entries, listing.dir_mtime_ms, now)
 
         return self._page_entries(
             listing.entries, req.get("after"), int(req.get("limit", 200))), b''
 
-    def _fetch_listing_full(self, path: str) -> CachedListing | None:
+    def _fetch_listing_full(self, path: str) -> tuple[CachedListing | None, str]:
         # Fetch the full directory listing from Android in one round-trip.
-        # Returns None when the fetch failed — distinct from an empty directory,
-        # which is a legitimate (and cacheable) empty entry list.
+        # Returns (None, error_code) when the fetch failed — distinct from an empty
+        # directory, which is a legitimate (and cacheable) empty entry list.
         resp = self._json_exchange(
             VirtualDriveChannels.VIRTUAL_DRIVE_LIST_FULL.value,
             {"path": path},
             self._LIST_FULL_TIMEOUT_S,
         )
         if not resp.get("ok"):
-            logger.warning(
-                "vdrive list_full failed: path=%s: %s",
-                path, resp.get("error", "unknown"),
-            )
-            return None
+            error = str(resp.get("error", "unknown"))
+            logger.warning("vdrive list_full failed: path=%s: %s", path, error)
+            # access_denied is forwarded verbatim: the phone is telling us All
+            # files access is missing, which no amount of retrying fixes, and
+            # STATUS_ACCESS_DENIED is what makes Explorer say so instead of
+            # reporting a device fault. Everything else stays a retryable I/O
+            # error so a transient blip is not presented as a permanent verdict.
+            return None, error if error == "access_denied" else "io_error"
         # Android lists via File.listFiles(), which is unordered; the page cursor
         # binary-searches on name, so sorting here is what makes paging correct.
         entries = resp.get("entries", [])
@@ -563,7 +575,7 @@ class VirtualDriveService(LifecycleFlag, QObject):
             entries=entries,
             dir_mtime_ms=int(resp.get("dir_mtime_ms", 0)),
             fetched_at=time.monotonic(),
-        )
+        ), ""
 
     @staticmethod
     def _page_entries(entries: list[dict], after: str | None, limit: int) -> dict:

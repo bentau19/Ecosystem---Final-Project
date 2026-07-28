@@ -30,9 +30,12 @@ import androidx.fragment.app.Fragment;
  * <ul>
  *   <li><b>Backup</b> — optional. Without it the scan still runs, just without private app media
  *       directories.</li>
- *   <li><b>Virtual Drive</b> — required for writes. The data source uses the raw {@code java.io.File}
- *       API, so under scoped storage every create/write/delete outside app-owned directories fails
- *       with {@code EPERM} ("Operation not permitted") until this is granted.</li>
+ *   <li><b>Virtual Drive</b> — required, for reads as much as writes. The data source uses the raw
+ *       {@code java.io.File} API, so under scoped storage every create/write/delete outside
+ *       app-owned directories fails with {@code EPERM} ("Operation not permitted"), and
+ *       {@code listFiles()} silently returns only app-owned files plus media covered by the
+ *       granted {@code READ_MEDIA_*} permissions — a drive that browses but shows almost
+ *       nothing. Both paths refuse up front until this is granted.</li>
  * </ul>
  */
 public final class StoragePermissions {

@@ -5,6 +5,7 @@ import android.util.Log;
 import com.example.android.enums.SettingsChannels;
 import com.example.android.network.transport.TransportManager;
 import com.example.android.repositories.SettingsRepository;
+import com.example.android.utils.StoragePermissions;
 
 import org.json.JSONObject;
 
@@ -72,6 +73,20 @@ public class SettingsChannelHandler implements ChannelHandler {
             // — forward-compatible with a PC that doesn't yet send all four fields.
             boolean vd = payload.optBoolean("virtualDrive",
                     settingsRepository.isVirtualDriveEnabled());
+
+            // The PC's toggle cannot grant a permission that only a system settings
+            // screen can. Accepting it anyway is how the drive ends up mounted with
+            // no All files access: it browses, but scoped storage filters the
+            // listings down to app-owned files and granted media, and every write
+            // is refused — a drive that looks healthy and shows almost nothing.
+            // Refuse here so the phone's switch reads OFF, which is the control that
+            // actually asks for the permission (SettingsFragment.promptForAllFilesAccess).
+            if (vd && !StoragePermissions.hasAllFilesAccess()) {
+                Log.w(TAG, "PC enabled Virtual Drive but All files access is not granted "
+                        + "— keeping it off; grant it from the app's Settings screen");
+                vd = false;
+            }
+
             boolean cb = payload.optBoolean("clipboard",
                     settingsRepository.isClipboardEnabled());
             boolean wc = payload.optBoolean("webcam",
