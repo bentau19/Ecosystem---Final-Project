@@ -220,6 +220,28 @@ public final class TauSyncStream implements Closeable {
         return bytes.length;
     }
 
+    /**
+     * Writes raw bytes over Wi-Fi in hybrid mode, whatever their size.
+     *
+     * <p>{@link #write(byte[])} routes by size, which forces latency-sensitive senders into a
+     * choice they should not have to make: a live stream whose payloads fall below the threshold
+     * either lands on Bluetooth (slow, and each switch costs a barrier round-trip) or has to be
+     * padded up to the threshold before sending — which means holding finished data back until
+     * more arrives. This says "use the fast link" directly, so each payload can go the moment it
+     * is ready.
+     *
+     * @param data bytes to send
+     * @return number of bytes written
+     * @throws IOException on I/O error
+     */
+    public int writeOverWifi(byte[] data) throws IOException {
+        checkOpen();
+        if (data == null) throw new IllegalArgumentException("data must not be null");
+        if (data.length == 0) return 0;
+        sendData(data, 0, data.length, true);
+        return data.length;
+    }
+
     // ── File transfer helpers ─────────────────────────────────────────
 
     /**

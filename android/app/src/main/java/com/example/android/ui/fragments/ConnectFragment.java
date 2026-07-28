@@ -159,14 +159,14 @@ public class ConnectFragment extends Fragment {
         }
     }
 
-    /** Reuse a remembered PC if any, otherwise scan for one. Called once permissions are granted. */
+    /**
+     * Scans for a PC. Called once permissions are granted, and always scans even when a PC is
+     * remembered: reconnecting to that one is what the saved-device card is for, so this button
+     * stays the way to reach a different PC. (It used to redial the saved PC instead, which left a
+     * user whose saved PC no longer works with no route back to discovery.)
+     */
     private void proceedWithBluetoothConnect() {
-        String saved = viewModel.getSavedAddress();
-        if (saved != null) {
-            startHybridConnection(saved);
-        } else {
-            viewModel.startDiscovery();
-        }
+        viewModel.startDiscovery();
     }
 
     /**
@@ -309,6 +309,11 @@ public class ConnectFragment extends Fragment {
         }
     }
 
+    /**
+     * Shows the remembered PC (if any) alongside the scan button. The scan button stays visible
+     * either way: hiding it behind a saved device meant a PC that could no longer be reached could
+     * only be escaped by clearing app data.
+     */
     private void refreshSavedDeviceCard() {
         boolean hasSaved = viewModel.getSavedAddress() != null;
         if (hasSaved && tvSavedDeviceName != null) {
@@ -316,7 +321,7 @@ public class ConnectFragment extends Fragment {
             tvSavedDeviceName.setText(name != null ? name : "My PC");
         }
         setVisible(savedDeviceCard, hasSaved);
-        setVisible(btnConnectBluetooth, !hasSaved);
+        setVisible(btnConnectBluetooth, true);
     }
 
     /** Spinner + status label visible; connect buttons and idle hint hidden. */
@@ -409,6 +414,11 @@ public class ConnectFragment extends Fragment {
         super.onResume();
         refreshData();
         refreshSavedDeviceCard();
+        // An attempt already in flight owns the screen — returning here (from a permission dialog,
+        // or from anywhere the user left the app) must never start a second one. Without this the
+        // resume restarts discovery and the PC is asked to approve two separate connections, of
+        // which answering one says nothing about the other.
+        if (isConnectionInFlight()) return;
         // After a manual disconnect the user chose to leave — skip auto-connect this one time.
         if (viewModel.consumeJustDisconnected()) return;
         if (viewModel.consumeJustDisconnectedByPc()) return;
@@ -423,6 +433,22 @@ public class ConnectFragment extends Fragment {
                 }
             }
         }
+    }
+
+    /**
+     * True while a connection attempt or the discovery that feeds one is already running, so the
+     * auto-connect on resume can tell "nothing is happening, start something" from "an attempt is
+     * already under way, leave it alone".
+     */
+    private boolean isConnectionInFlight() {
+        ConnectionStatus connectionStatus = viewModel.getConnectionStatus().getValue();
+        if (connectionStatus == ConnectionStatus.CONNECTING
+                || connectionStatus == ConnectionStatus.RECONNECTING) {
+            return true;
+        }
+        DiscoveryStatus discoveryStatus = viewModel.getDiscoveryStatus().getValue();
+        return discoveryStatus != null && discoveryStatus != DiscoveryStatus.IDLE
+                && discoveryStatus != DiscoveryStatus.FAILED;
     }
 
     @Override

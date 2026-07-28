@@ -31,6 +31,11 @@ import com.example.android.viewmodel.FileTransferViewModel;
 import com.example.android.viewmodel.MainViewModel;
 import com.example.android.viewmodel.MainViewModelFactory;
 import com.example.android.services.ConnectivityService;
+import com.example.android.utils.StoragePermissions;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * Main Activity serves as the primary host for fragments.
@@ -57,8 +62,9 @@ public class MainActivity extends AppCompatActivity {
         MainViewModelFactory factory = new MainViewModelFactory(this.getApplication());
         viewModel = new ViewModelProvider(this, factory).get(MainViewModel.class);
         fileTransferViewModel = new ViewModelProvider(this).get(FileTransferViewModel.class);
-        // 2. Initialize notification manager
+        // 2. Initialize notification manager and ask for the runtime permissions the app needs.
         appNotificationManager = new AppNotificationManager(this);
+        requestStartupPermissions();
 
         // 3. Observe file transfer state (receive)
         observeFileTransfer();
@@ -119,7 +125,6 @@ public class MainActivity extends AppCompatActivity {
      */
     public void startHybridConnection(String macAddress) {
         viewModel.connectHybrid(macAddress);
-        checkNotificationPermission();
 
         Intent serviceIntent = new Intent(this, ConnectivityService.class);
         serviceIntent.putExtra("TARGET_MAC", macAddress);
@@ -131,16 +136,36 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /** Request code for the combined startup permission request. */
+    private static final int REQ_STARTUP_PERMISSIONS = 101;
+
     /**
-     * Request POST_NOTIFICATIONS permission for Android 13+.
+     * Asks for everything the app needs to do its job: notifications (Android 13+) so transfers and
+     * the connection can report progress, and media read access so a backup can scan the user's
+     * photos and videos.
+     *
+     * <p>Requested together in one call, and at startup rather than mid-task: each system dialog
+     * pauses this Activity, and a permission asked in the middle of connecting used to resume
+     * straight back into a second connection attempt.
+     *
+     * <p>Only what is actually missing is requested, so a returning user sees nothing. Nothing is
+     * blocked on the outcome either — every feature re-checks its own permission when used, and
+     * full-filesystem access for backup is still requested by {@code BackupFragment}, which can
+     * explain why it needs a settings screen rather than a dialog.
      */
-    private void checkNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                    != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this,
-                        new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
-            }
+    private void requestStartupPermissions() {
+        List<String> missing = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.POST_NOTIFICATIONS);
+        }
+        if (!StoragePermissions.areGranted(this)) {
+            missing.addAll(Arrays.asList(StoragePermissions.required()));
+        }
+        if (!missing.isEmpty()) {
+            ActivityCompat.requestPermissions(
+                    this, missing.toArray(new String[0]), REQ_STARTUP_PERMISSIONS);
         }
     }
 

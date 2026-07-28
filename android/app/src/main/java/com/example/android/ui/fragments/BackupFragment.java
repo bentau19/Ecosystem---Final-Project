@@ -30,6 +30,8 @@ import androidx.annotation.Nullable;
 import java.io.File;
 import androidx.appcompat.widget.AppCompatButton;
 import androidx.core.content.ContextCompat;
+
+import com.example.android.utils.StoragePermissions;
 import androidx.documentfile.provider.DocumentFile;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
@@ -531,54 +533,16 @@ public class BackupFragment extends Fragment {
     // ── Permission handling ───────────────────────────────────────────────────
 
     /**
-     * Returns {@code true} if the app holds enough media-read permission to proceed.
-     *
-     * <ul>
-     *   <li>API 34+: full ({@code READ_MEDIA_IMAGES + READ_MEDIA_VIDEO}) OR
-     *       partial ({@code READ_MEDIA_VISUAL_USER_SELECTED}) — either allows the scan.</li>
-     *   <li>API 33: needs {@code READ_MEDIA_IMAGES + READ_MEDIA_VIDEO}.</li>
-     *   <li>API 24–32: needs {@code READ_EXTERNAL_STORAGE}.</li>
-     * </ul>
+     * Returns {@code true} if the app holds enough media-read permission to proceed. The app asks
+     * for these at startup, so normally they are already granted by the time the user gets here;
+     * this still re-checks and re-asks, since the user may have declined then or revoked since.
      */
     private boolean hasMediaPermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // API 34+
-            boolean full =
-                    ContextCompat.checkSelfPermission(requireContext(),
-                            Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
-                    && ContextCompat.checkSelfPermission(requireContext(),
-                            Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED;
-            boolean partial =
-                    ContextCompat.checkSelfPermission(requireContext(),
-                            Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED;
-            return full || partial;
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { // API 33
-            return ContextCompat.checkSelfPermission(requireContext(),
-                    Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
-                    && ContextCompat.checkSelfPermission(requireContext(),
-                    Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED;
-        } else { // API 24–32
-            return ContextCompat.checkSelfPermission(requireContext(),
-                    Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
-        }
+        return StoragePermissions.areGranted(requireContext());
     }
 
     private void requestMediaPermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // API 34+
-            requestPermissions(new String[]{
-                    Manifest.permission.READ_MEDIA_IMAGES,
-                    Manifest.permission.READ_MEDIA_VIDEO,
-                    Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
-            }, REQ_MEDIA_PERMISSIONS);
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { // API 33
-            requestPermissions(new String[]{
-                    Manifest.permission.READ_MEDIA_IMAGES,
-                    Manifest.permission.READ_MEDIA_VIDEO
-            }, REQ_MEDIA_PERMISSIONS);
-        } else { // API 24–32
-            requestPermissions(new String[]{
-                    Manifest.permission.READ_EXTERNAL_STORAGE
-            }, REQ_MEDIA_PERMISSIONS);
-        }
+        requestPermissions(StoragePermissions.required(), REQ_MEDIA_PERMISSIONS);
     }
 
     @Override

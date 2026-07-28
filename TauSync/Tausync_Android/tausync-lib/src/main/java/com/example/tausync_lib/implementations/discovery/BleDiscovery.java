@@ -202,16 +202,21 @@ public class BleDiscovery {
     // ── Bonding ──────────────────────────────────────────────────────────
 
     /**
-     * Bonds the device if needed, then saves its address and reports success. CompanionDeviceManager
-     * is not used; this bonds the Classic device discovered in the beacon. The bond state arrives
-     * asynchronously via a system broadcast, so success/failure is reported from the receiver.
+     * Bonds the device if needed and reports the outcome. CompanionDeviceManager is not used; this
+     * bonds the Classic device discovered in the beacon. The bond state arrives asynchronously via
+     * a system broadcast, so success/failure is reported from the receiver.
+     *
+     * <p>Bonding deliberately does <b>not</b> remember the device. An OS bond only means the two
+     * radios can talk — the PC has not yet accepted the connection, and it may well decline it. A
+     * device remembered here would be redialled on every launch even after being turned away, with
+     * no way back to discovery short of clearing app data. Call
+     * {@link #savePairedAddress(Context, String)} once the session is actually established.
      */
     @SuppressLint("MissingPermission")
     public void bond(Context context, BluetoothDevice device, PairingCallback callback) {
         Context appContext = context.getApplicationContext();
 
         if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
-            savePairedAddress(appContext, device.getAddress());
             callback.onDevicePaired(device);
             return;
         }
@@ -227,7 +232,6 @@ public class BleDiscovery {
                         BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR);
                 if (newState == BluetoothDevice.BOND_BONDED) {
                     appContext.unregisterReceiver(this);
-                    savePairedAddress(appContext, changed.getAddress());
                     callback.onDevicePaired(changed);
                 } else if (newState == BluetoothDevice.BOND_NONE) {
                     // BOND_NONE after a bonding attempt means pairing failed or was rejected.
@@ -251,8 +255,9 @@ public class BleDiscovery {
     // ── SharedPreferences helpers ────────────────────────────────────────
 
     /**
-     * Saves the paired device's Classic Bluetooth MAC address so future launches can skip discovery.
-     * Called automatically by {@link #bond} once the device is bonded.
+     * Saves the paired device's Classic Bluetooth MAC address so future launches can skip
+     * discovery. Call this only once a session with that device has actually been established —
+     * see {@link #bond} for why a completed bond is not enough.
      */
     public static void savePairedAddress(Context context, String address) {
         prefs(context).edit().putString(PREFS_KEY_DEVICE_ADDRESS, address).apply();

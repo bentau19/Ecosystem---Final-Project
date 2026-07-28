@@ -37,6 +37,11 @@ public class MainViewModel extends ViewModel {
     private final MutableLiveData<DiscoveredPc> discoveredPc = new MutableLiveData<>();
     private final MutableLiveData<String> discoveryError = new MutableLiveData<>();
     private volatile String pairedMac;
+    // Guards against starting two scans. Set synchronously, unlike the posted DiscoveryStatus: a
+    // second caller in the same main-thread cycle (the permission-result callback and the resume
+    // that follows it both want to scan) would still read that as IDLE and start a duplicate.
+    private final java.util.concurrent.atomic.AtomicBoolean scanRequested =
+            new java.util.concurrent.atomic.AtomicBoolean();
     private boolean justDisconnected = false;
 //    private android.content.BroadcastReceiver batteryReceiver;
 
@@ -108,27 +113,38 @@ public class MainViewModel extends ViewModel {
     }
 
     /**
-     * Starts scanning for the PC over BLE. On a known device the caller should connect directly
-     * with {@link #getSavedAddress()} instead of scanning.
+     * Starts scanning for the PC over BLE, unless a scan is already running. On a known device the
+     * caller should connect directly with {@link #getSavedAddress()} instead of scanning.
      */
     public void startDiscovery() {
+        if (!scanRequested.compareAndSet(false, true)) {
+            return; // a scan is already under way — never run two at once
+        }
         discoveryStatus.postValue(DiscoveryStatus.SCANNING);
         pairWithPc.discover(new PairWithPcUseCase.DiscoveryListener() {
             @Override
             public void onPcFound(DiscoveredPc pc) {
+                scanRequested.set(false);
                 discoveredPc.postValue(pc);
                 discoveryStatus.postValue(DiscoveryStatus.PC_FOUND);
             }
 
             @Override
             public void onDiscoveryFailed(String reason) {
+                scanRequested.set(false);
                 discoveryError.postValue(reason);
                 discoveryStatus.postValue(DiscoveryStatus.FAILED);
             }
         });
     }
 
-    /** Bonds with the discovered PC after the user accepts the confirm dialog. */
+    /**
+     * Bonds with the discovered PC after the user accepts the confirm dialog. Only the PC's display
+     * name is stored here; its address — the part that makes the app redial this PC on every
+     * launch — is saved by {@code ConnectivityService} once the session is actually established, so
+     * a PC that declines us is never left saved as our device. The name is harmless on its own: the
+     * saved-device card appears only when an address exists, and forgetting clears both.
+     */
     public void confirmPairing(String macAddress) {
         discoveryStatus.postValue(DiscoveryStatus.PAIRING);
         pairWithPc.pair(macAddress, new PairWithPcUseCase.PairingListener() {
@@ -150,6 +166,7 @@ public class MainViewModel extends ViewModel {
 
     /** Cancels an in-progress scan and returns to idle. */
     public void cancelDiscovery() {
+        scanRequested.set(false);
         pairWithPc.stopDiscovery();
         discoveryStatus.postValue(DiscoveryStatus.IDLE);
     }
@@ -171,6 +188,11 @@ public class MainViewModel extends ViewModel {
         RemoteDeviceInfo info =
                 new RemoteDeviceInfo(pcName, null, macAddress, ConnectionType.BLUETOOTH);
         connectToDevice.execute(info);
+        // Mark the attempt as in flight straight away rather than waiting for the service to start
+        // and report it. Anything that re-enters the connect screen in that gap (a system permission
+        // dialog, the user leaving and coming back) would otherwise see an idle state and launch a
+        // second attempt at the same PC.
+        repository.updateConnectionStatus(ConnectionStatus.CONNECTING);
 
         // Hand-off complete: reset the discovery phase so PAIRED is a one-shot. Otherwise the
         // status stays PAIRED and LiveData re-delivers it to a freshly created ConnectFragment

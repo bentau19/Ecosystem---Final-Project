@@ -6,38 +6,41 @@ import com.example.android.enums.WebcamChannels;
 import com.example.android.network.transport.TransportManager;
 import com.example.android.repositories.WebcamRepository;
 
-import java.io.DataOutputStream;
-import java.io.IOException;
-import java.io.PipedInputStream;
-import java.io.PipedOutputStream;
+import java.nio.ByteBuffer;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Streams JPEG frames from Android to the PC over the webcam channel.
- *
- * Phase 1 (PoC): sends a static solid-color frame in a loop instead of live camera.
  *
  * Protocol (Android → PC):
  *   1. Send handshake JSON on WEBCAM_START so the PC opens OBS Virtual Camera.
  *   2. Open WEBCAM_FRAMES and stream frames continuously:
  *      [4-byte big-endian frame size][JPEG bytes]  (repeated until stop())
  *
+ * Latency model:
+ *   Every stage of this path prefers a fresh frame over a complete history — CameraX keeps only
+ *   the latest, the repository queue drops the oldest when full, and each frame is written the
+ *   moment it is pulled. Nothing here waits for a second frame before sending the first: in a live
+ *   stream a buffered frame is simply a late one.
+ *
  * Threading model:
- *   execute() blocks on a background thread (called by ConnectivityService).
- *   A PipedInputStream/PipedOutputStream pair keeps the channel open for the
- *   full session — writing stops when stop() closes the pipe.
+ *   execute() blocks on a background thread (called by ConnectivityService) for the whole
+ *   session, pulling frames until stop() is called.
  */
 public class WebcamStreamUseCase {
 
     private static final String TAG = "WebcamStreamUseCase";
 
+    /** How long a frame pull waits before looping to re-check {@link #stopRequested}. */
     private static final long FRAME_POLL_TIMEOUT_MS = 200;
+
+    /** Big-endian frame length that prefixes every JPEG on the wire. */
+    private static final int FRAME_HEADER_BYTES = 4;
 
     private final TransportManager transport;
     private final WebcamRepository  repository;
 
     private volatile boolean stopRequested = false;
-    private volatile PipedOutputStream pipedOut;
 
     public WebcamStreamUseCase(TransportManager transport, WebcamRepository repository) {
         this.transport  = transport;
@@ -47,9 +50,6 @@ public class WebcamStreamUseCase {
     /** Signal the streaming loop to stop and close the channel. */
     public void stop() {
         stopRequested = true;
-        try {
-            if (pipedOut != null) pipedOut.close();
-        } catch (Exception ignored) {}
     }
 
     /**
@@ -63,45 +63,9 @@ public class WebcamStreamUseCase {
             transport.writeToChannel(WebcamChannels.WEBCAM_START.getValue(), "{\"action\":\"start\"}");
             Log.d(TAG, "Handshake sent on " + WebcamChannels.WEBCAM_START.getValue());
 
-            // 2. Pipe: streaming thread writes frames; streamInputStreamToChannel reads them.
-            PipedInputStream  pipedIn  = new PipedInputStream(131072); // 128 KB — must fit one full JPEG frame
-            pipedOut = new PipedOutputStream(pipedIn);
-            DataOutputStream  dos      = new DataOutputStream(pipedOut);
+            // 2. Frames, until stop() is requested or the channel breaks.
+            transport.streamFramesToChannel(WebcamChannels.WEBCAM_FRAMES.getValue(), this::nextFrame);
 
-            // Producer thread: drains frames from the queue (filled by CameraX ImageAnalysis)
-            // and writes them to the pipe. Polls with a timeout so stopRequested is checked
-            // regularly even when no frames arrive.
-            Thread producer = new Thread(() -> {
-                try {
-                    while (!stopRequested) {
-                        byte[] frame = repository.frameQueue.poll(
-                                FRAME_POLL_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-                        if (frame == null) continue; // timeout — re-check stopRequested
-
-                        try {
-                            dos.writeInt(frame.length);
-                            dos.write(frame);
-                            dos.flush();
-                        } catch (IOException e) {
-                            if (!stopRequested) Log.w(TAG, "Pipe broken — network dropped during stream");
-                            break;
-                        }
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } catch (Exception e) {
-                    if (!stopRequested) Log.e(TAG, "Frame producer error", e);
-                } finally {
-                    try { pipedOut.close(); } catch (Exception ignored) {}
-                }
-            }, "webcam-producer");
-            producer.setDaemon(true);
-            producer.start();
-
-            // Consumer: blocks until the pipe closes (stop() or producer error).
-            transport.streamInputStreamToChannel(WebcamChannels.WEBCAM_FRAMES.getValue(), pipedIn);
-
-            producer.join(2000);
             repository.onStreamStopped();
 
         } catch (Exception e) {
@@ -110,4 +74,30 @@ public class WebcamStreamUseCase {
         }
     }
 
+    /**
+     * Waits for the next camera frame and returns it length-prefixed, ready for the wire, or
+     * {@code null} once streaming has been stopped. Polls with a timeout so a stop is noticed
+     * promptly even while the camera is producing nothing.
+     */
+    private byte[] nextFrame() throws InterruptedException {
+        while (!stopRequested) {
+            byte[] jpeg = repository.frameQueue.poll(FRAME_POLL_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            if (jpeg != null) {
+                return withLengthPrefix(jpeg);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Header and payload are joined into one buffer so a frame reaches the wire as a single write.
+     * Two writes would be two independent routing decisions, which could put a frame's header and
+     * its body on different links.
+     */
+    private static byte[] withLengthPrefix(byte[] jpeg) {
+        return ByteBuffer.allocate(FRAME_HEADER_BYTES + jpeg.length)
+                .putInt(jpeg.length)
+                .put(jpeg)
+                .array();
+    }
 }
