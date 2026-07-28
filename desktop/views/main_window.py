@@ -85,6 +85,10 @@ class MainWindow(QMainWindow):
         self._toast: FileReceivedToast | None = None
         self._clipboard_service = app_state.clipboard_service
 
+        # Open phone-approval dialogs by request id, so one can be closed from outside its own
+        # modal loop when the phone behind it stops waiting.
+        self._approval_dialogs: dict[int, ConnectionApprovalDialog] = {}
+
         # App-exit shutdown state (loading overlay + service-teardown poll).
         self._shutting_down: bool = False
         self._shutdown_overlay: LoadingOverlay | None = None
@@ -143,6 +147,8 @@ class MainWindow(QMainWindow):
         app_state.device_viewmodel.connection_error.connect(self._on_connection_error)
         app_state.connectivity_service.phone_approval_requested.connect(
             self._on_phone_approval_requested)
+        app_state.connectivity_service.phone_approval_cancelled.connect(
+            self._on_phone_approval_cancelled)
         self._clipboard_service.clipboard_text_received.connect(self._on_clipboard_text_received)
         self._webcam_vm.webcam_active_changed.connect(self._on_webcam_active_changed)
         self._webcam_vm.webcam_error_occurred.connect(self._on_webcam_error)
@@ -325,19 +331,34 @@ class MainWindow(QMainWindow):
         else:
             self._backup_vm.cancel_dest_selection()
 
-    @Slot(str)
-    def _on_phone_approval_requested(self, phone_name: str) -> None:
+    @Slot(str, int)
+    def _on_phone_approval_requested(self, phone_name: str, request_id: int) -> None:
         # A new phone is asking to connect over Bluetooth. Show an accept/reject dialog on the
         # UI thread (this slot runs on the main thread via the queued signal) and hand the
         # decision back to the service, which is blocking a TauSync thread until we answer.
+        # The decision carries the request id so an answer that arrives after the phone gave up
+        # cannot be applied to whatever attempt is in flight by then.
         #
         # Restore the window first so the dialog is never shown behind a hidden parent — that
         # would leave the connecting phone stuck until the approval timeout.
         if not self.isVisible():
             self._restore_window()
         dlg = ConnectionApprovalDialog(phone_name, parent=self)
-        accepted = dlg.exec() == QDialog.DialogCode.Accepted
-        app_state.connectivity_service.resolve_phone_approval(accepted)
+        # Held so _on_phone_approval_cancelled can close it if the phone leaves mid-decision.
+        self._approval_dialogs[request_id] = dlg
+        try:
+            accepted = dlg.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self._approval_dialogs.pop(request_id, None)
+        app_state.connectivity_service.resolve_phone_approval(accepted, request_id)
+
+    @Slot(int)
+    def _on_phone_approval_cancelled(self, request_id: int) -> None:
+        # The phone stopped waiting, so its prompt is now meaningless — close it instead of
+        # leaving the operator to answer for a connection that no longer exists.
+        dlg = self._approval_dialogs.pop(request_id, None)
+        if dlg is not None:
+            dlg.reject()
 
     @Slot(int, 'qint64')
     def _on_backup_ready(self, file_count: int, total_bytes: int) -> None:

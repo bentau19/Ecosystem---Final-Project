@@ -49,6 +49,8 @@ import com.example.android.network.handlers.FileDataChannelHandler;
 import com.example.android.network.handlers.FileMetadataChannelHandler;
 import com.example.android.network.handlers.PCNameChannelHandler;
 import com.example.android.network.handlers.DisconnectChannelHandler;
+import com.example.android.network.handlers.SessionHelloChannelHandler;
+import com.example.android.data.datasource.BluetoothDiscoveryDataSource;
 import com.example.android.repositories.ReceiveFileRepository;
 import com.example.android.network.transport.TransportManager;
 import com.example.android.network.transport.TransportStatus;
@@ -75,12 +77,20 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
     private static final String TAG = "TauSyncFlow";
 
+    /** Stand-in PC name held until the real one arrives on the {@code pc_name} channel. */
+    private static final String PLACEHOLDER_PC_NAME = "PC";
+
     // Core infrastructure components
     private TransportManager transportManager;
     private ChannelHandlerRegistry handlerRegistry;
     private SystemDataSource systemDataSource;
     private DeviceRepository deviceRepository;
     private AppNotificationManager notificationManager;
+
+    // Owns the remembered-PC preferences. The PC is written here only once a session is
+    // established, and erased the moment the PC declines us — see rememberConnectedPc /
+    // onConnectionDeclined.
+    private BluetoothDiscoveryDataSource bluetoothDiscoveryDataSource;
 
     // File transfer UseCases — initialized after transportManager is ready
     private RespondToFileTransferUseCase respondToFileTransferUseCase;
@@ -185,6 +195,7 @@ public class ConnectivityService extends Service implements TransportManager.Tra
 
         transportManager = new TauSyncTransportManager(getApplicationContext());
         handlerRegistry = new ChannelHandlerRegistry();
+        bluetoothDiscoveryDataSource = new BluetoothDiscoveryDataSource(getApplicationContext());
 
         // Initialize file transfer UseCases before registering handlers —
         // FileDataChannelHandler takes a direct reference to receiveFileUseCase.
@@ -235,6 +246,13 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         handlerRegistry.registerHandler(
                 SessionChannels.DISCONNECT_FROM_PC.getValue(),
                 new DisconnectChannelHandler(deviceRepository, transportManager, this::cleanup)
+        );
+
+        // SESSION_HELLO is the PC's final connect step: answering it is what makes the session
+        // established on both sides, and only then is this PC worth remembering.
+        handlerRegistry.registerHandler(
+                SessionChannels.SESSION_HELLO.getValue(),
+                new SessionHelloChannelHandler(transportManager, this::rememberConnectedPc)
         );
 
         // FILE_METADATA_PC_TO_ANDROID handles incoming file transfer requests from the PC
@@ -403,11 +421,11 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         RemoteDeviceInfo remoteDevice;
         if (targetMac != null) {
             // Hybrid path — the Wi-Fi IP is discovered over Bluetooth at connect time, so none here.
-            remoteDevice = new RemoteDeviceInfo("PC", null, targetMac, ConnectionType.BLUETOOTH);
+            remoteDevice = new RemoteDeviceInfo(PLACEHOLDER_PC_NAME, null, targetMac, ConnectionType.BLUETOOTH);
             deviceRepository.connectHybrid(remoteDevice.getPcName(), remoteDevice.getMacAddress());
         } else if (targetIp != null) {
             // Wi-Fi path (existing).
-            remoteDevice = new RemoteDeviceInfo("PC", targetIp, ConnectionType.WIFI);
+            remoteDevice = new RemoteDeviceInfo(PLACEHOLDER_PC_NAME, targetIp, ConnectionType.WIFI);
             deviceRepository.connect(remoteDevice.getPcName(), remoteDevice.getPcIp(),
                     remoteDevice.getConnectionType());
         } else {
@@ -669,6 +687,40 @@ public class ConnectivityService extends Service implements TransportManager.Tra
         Log.e(TAG, "Connection error: " + error.getMessage(), error);
         deviceRepository.updateConnectionStatus(ConnectionStatus.FAILED);
         stopSelf();
+    }
+
+    /**
+     * The PC operator turned this phone away. Forget the PC before failing: a remembered PC is
+     * redialled automatically on every launch and hides the discovery flow behind the saved-device
+     * card, so keeping one that has just declined us would leave the user redialling a PC that
+     * refuses them with no way back to the scanner.
+     */
+    @Override
+    public void onConnectionDeclined(Exception error) {
+        Log.w(TAG, "PC declined the connection — forgetting it so the user can pair afresh");
+        bluetoothDiscoveryDataSource.clearSavedAddress();
+        onConnectionError(error);
+    }
+
+    /**
+     * The session is established (the PC's hello was answered), so this PC is now worth
+     * remembering: the next launch reconnects to it without a scan. Deliberately not done at
+     * bonding time — a bond only means the radios can talk, not that the PC let us in.
+     */
+    private void rememberConnectedPc() {
+        RemoteDeviceInfo pc = deviceRepository.getCurrentConnectionState() != null
+                ? deviceRepository.getCurrentConnectionState().getRemotePC()
+                : null;
+        if (pc == null || pc.getMacAddress() == null) {
+            return; // Wi-Fi session, or the state was torn down under us — nothing to remember.
+        }
+        bluetoothDiscoveryDataSource.savePairedAddress(pc.getMacAddress());
+        // The real name arrives moments later on the pc_name channel; until then the state holds
+        // the placeholder, which must not overwrite the name captured during discovery.
+        if (pc.getPcName() != null && !PLACEHOLDER_PC_NAME.equals(pc.getPcName())) {
+            bluetoothDiscoveryDataSource.savePcName(pc.getPcName());
+        }
+        Log.d(TAG, "Remembered PC " + pc.getMacAddress() + " after a confirmed session");
     }
 
     @Override

@@ -351,3 +351,73 @@ def test_disable_while_streaming_stops_it(qtbot: QtBot) -> None:
         qtbot.waitUntil(lambda: len(stopped) > 0, timeout=3000)
 
     assert not svc._running
+
+
+# ---------------------------------------------------------------------------
+# Latency — stale frames are dropped rather than queued
+# ---------------------------------------------------------------------------
+
+
+def _solid_jpeg(color: tuple[int, int, int]) -> bytes:
+    """A full-size solid-colour JPEG, so the decoded frame needs no rescaling."""
+    buf = io.BytesIO()
+    Image.new("RGB", (1280, 720), color=color).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def test_stale_frames_are_dropped_while_rendering(qtbot: QtBot) -> None:
+    """Frames that arrive while one is being rendered must be skipped, not queued.
+
+    Rendering every frame in order lets any shortfall accumulate in the transport's unbounded
+    receive buffer, so the picture drifts further behind real time the longer it runs. Only the
+    newest frame should survive a slow render — here frames 2 and 3 arrive during the first
+    render, and only the last of them may reach the camera.
+    """
+    frames = [_solid_jpeg(c) for c in ((200, 0, 0), (0, 200, 0), (0, 0, 200))]
+
+    reads: list[bytes | None] = []
+    for jpeg in frames:
+        reads.extend([struct.pack(">I", len(jpeg)), jpeg])
+    reads.append(None)  # EOF
+
+    frame_stream = MagicMock()
+    frame_stream.read_exactly.side_effect = reads
+    frames_cm = MagicMock()
+    frames_cm.__enter__.return_value = frame_stream
+    frames_cm.__exit__.return_value = False
+
+    start_cm, _ = _make_stream_cm()
+    tau = _make_tau(start_cm, frames_cm)
+    cam_cm, cam = _make_cam_cm()
+
+    all_frames_read = threading.Event()
+
+    def _blocking_send(_image: object) -> None:
+        # Hold the first render open until every frame has been read, so frames 2 and 3 are
+        # both waiting by the time the loop asks for the next one.
+        all_frames_read.wait(timeout=3)
+
+    cam.send.side_effect = _blocking_send
+
+    def _watch_reads() -> bool:
+        if frame_stream.read_exactly.call_count >= len(reads):
+            all_frames_read.set()
+        return all_frames_read.is_set()
+
+    svc = _make_svc(tau)
+    stopped: list[bool] = []
+    svc.webcam_stopped.connect(lambda: stopped.append(True))
+
+    with patch("services.webcam.pyvirtualcam.Camera", return_value=cam_cm):
+        svc.receive_start()
+        qtbot.waitUntil(_watch_reads, timeout=3000)
+        qtbot.waitUntil(lambda: len(stopped) > 0, timeout=3000)
+
+    # Three frames arrived while the first render was held open, so at least one was superseded
+    # before it could be shown. (How many depends on how far the reader ran ahead — the guarantee
+    # is that frames are dropped, not queued.)
+    assert 0 < cam.send.call_count < len(frames)
+    # And the frame that survived is the newest (blue), not one it overtook (red/green).
+    last_sent = cam.send.call_args_list[-1].args[0]
+    assert int(last_sent[:, :, 2].mean()) > int(last_sent[:, :, 1].mean())
+    assert int(last_sent[:, :, 2].mean()) > int(last_sent[:, :, 0].mean())
