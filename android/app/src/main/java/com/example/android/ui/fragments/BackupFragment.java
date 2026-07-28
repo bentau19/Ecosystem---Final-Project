@@ -13,7 +13,6 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
-import android.provider.Settings;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -43,6 +42,7 @@ import com.example.android.domain.enums.BackupTransferStatus;
 import com.example.android.R;
 import com.example.android.domain.entities.BackupOptions;
 import com.example.android.domain.usecases.ScanBackupFilesUseCase;
+import com.example.android.utils.StoragePermissions;
 import com.example.android.viewmodel.BackupViewModel;
 import com.example.android.viewmodel.BackupViewModelFactory;
 
@@ -319,7 +319,7 @@ public class BackupFragment extends Fragment {
     private void launchFolderPicker() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // ── API 30+: check MANAGE_EXTERNAL_STORAGE ────────────────────────
-            if (Environment.isExternalStorageManager()) {
+            if (StoragePermissions.hasAllFilesAccess()) {
                 openCustomPicker();
             } else {
                 showGrantStorageAccessDialog();
@@ -406,17 +406,7 @@ public class BackupFragment extends Fragment {
      * (rather than starting the scan, which is what {@link #REQ_ALL_FILES_ACCESS} does).
      */
     private void openAllFilesAccessSettingsForPicker() {
-        try {
-            Intent intent = new Intent(
-                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                    Uri.parse("package:" + requireContext().getPackageName()));
-            startActivityForResult(intent, REQ_ALL_FILES_ACCESS_FOR_PICKER);
-        } catch (Exception e) {
-            Log.w(TAG, "Per-app all-files screen unavailable, opening generic screen");
-            startActivityForResult(
-                    new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
-                    REQ_ALL_FILES_ACCESS_FOR_PICKER);
-        }
+        StoragePermissions.openSettings(this, REQ_ALL_FILES_ACCESS_FOR_PICKER);
     }
 
     /**
@@ -459,8 +449,7 @@ public class BackupFragment extends Fragment {
             // The settings screen doesn't return a meaningful resultCode — check the
             // actual permission state instead. Either way, proceed with the scan
             // (Android/data/ walk is only performed when the permission is held).
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-                    && Environment.isExternalStorageManager()) {
+            if (StoragePermissions.hasAllFilesAccess()) {
                 Log.d(TAG, "All Files Access granted — Android/data/ will be included");
             } else {
                 Log.d(TAG, "All Files Access not granted — scan proceeds without Android/data/");
@@ -474,8 +463,7 @@ public class BackupFragment extends Fragment {
             // Returned from settings after the user tapped "Grant Access" in
             // showGrantStorageAccessDialog().  If permission was granted, open the
             // custom picker; otherwise fall back to the SAF picker.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-                    && Environment.isExternalStorageManager()) {
+            if (StoragePermissions.hasAllFilesAccess()) {
                 Log.d(TAG, "All Files Access granted — opening custom folder picker");
                 openCustomPicker();
             } else {
@@ -593,7 +581,7 @@ public class BackupFragment extends Fragment {
             return;
         }
 
-        if (Environment.isExternalStorageManager()) {
+        if (StoragePermissions.hasAllFilesAccess()) {
             // Already granted — scan immediately (includes Android/data/ walk).
             startScan();
             return;
@@ -614,18 +602,7 @@ public class BackupFragment extends Fragment {
 
     /** Opens the system All Files Access settings screen for this app. */
     private void openAllFilesAccessSettings() {
-        try {
-            Intent intent = new Intent(
-                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                    Uri.parse("package:" + requireContext().getPackageName()));
-            startActivityForResult(intent, REQ_ALL_FILES_ACCESS);
-        } catch (Exception e) {
-            // Some OEMs don't expose the per-app screen — fall back to the generic one
-            Log.w(TAG, "Per-app all-files screen unavailable, opening generic screen");
-            startActivityForResult(
-                    new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
-                    REQ_ALL_FILES_ACCESS);
-        }
+        StoragePermissions.openSettings(this, REQ_ALL_FILES_ACCESS);
     }
 
     // ── Scan dispatch ─────────────────────────────────────────────────────────

@@ -7,6 +7,10 @@
     <color name="border_color">#E2E8F0</color>
 
     <color name="accent_cyan">#0EA5E9</color>
+    <!-- Dialog button text. accent_cyan reaches only ~2.8:1 against the white dialog
+         surface — under the 4.5:1 AA floor — so buttons take a deeper shade of the
+         same blue rather than a new hue. -->
+    <color name="dialog_button_blue">#0369A1</color>
     <color name="accent_purple">#7B61FF</color>
     <color name="accent_pink">#FF5C87</color>
     <color name="status_green">#16A34A</color>

@@ -47,11 +47,21 @@ class WriteSession:
     Attributes:
         stream: The open TauSync stream chunks are written into; closing it
             signals Android to rename the temp file to its final path.
+        lock: Serialises appends to :attr:`stream`. WinFsp dispatches Write
+            callbacks on several threads at once, and the stream is a single
+            append-only pipe, so two concurrent chunks would interleave.
+        next_offset: File offset the next chunk must start at. Android writes
+            the temp file through a sequential ``FileOutputStream`` and cannot
+            seek, so a chunk arriving out of order would land at the wrong place
+            with no error — tracking the expected offset turns that into a
+            refusal instead of a corrupt file.
         started_at: ``time.monotonic()`` when the session opened, consulted by
             the age reaper.
     """
 
     stream: Any
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    next_offset: int = 0
     started_at: float = 0.0
 
 

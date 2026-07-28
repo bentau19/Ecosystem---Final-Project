@@ -10,6 +10,8 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
@@ -21,6 +23,7 @@ import androidx.lifecycle.ViewModelProvider;
 import com.example.android.R;
 import com.example.android.domain.entities.ReceiveFileRequest;
 import com.example.android.domain.enums.ConnectionStatus;
+import com.example.android.repositories.SettingsRepository;
 import com.example.android.services.AppNotificationManager;
 import com.example.android.ui.fragments.ActionsFragment;
 import com.example.android.ui.fragments.BackupFragment;
@@ -30,6 +33,8 @@ import com.example.android.ui.fragments.ConnectFragment;
 import com.example.android.viewmodel.FileTransferViewModel;
 import com.example.android.viewmodel.MainViewModel;
 import com.example.android.viewmodel.MainViewModelFactory;
+import com.example.android.viewmodel.SettingsViewModel;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.example.android.services.ConnectivityService;
 import com.example.android.utils.StoragePermissions;
 
@@ -163,9 +168,89 @@ public class MainActivity extends AppCompatActivity {
         if (!StoragePermissions.areGranted(this)) {
             missing.addAll(Arrays.asList(StoragePermissions.required()));
         }
-        if (!missing.isEmpty()) {
+        if (missing.isEmpty()) {
+            maybeRequestAllFilesAccess();
+        } else {
             ActivityCompat.requestPermissions(
                     this, missing.toArray(new String[0]), REQ_STARTUP_PERMISSIONS);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_STARTUP_PERMISSIONS) {
+            // Chained rather than asked alongside the batch above: this one leaves the
+            // app for a settings screen, and stacking that on top of the still-open
+            // system dialogs would bury them.
+            maybeRequestAllFilesAccess();
+        }
+    }
+
+    /** Request code for the system All-files-access screen opened from the startup prompt. */
+    private static final int REQ_STARTUP_ALL_FILES_ACCESS = 102;
+
+    /**
+     * Asks for All files access at startup, when the Virtual Drive is on without it.
+     *
+     * <p>{@code MANAGE_EXTERNAL_STORAGE} has no runtime dialog — it is granted only on a
+     * system settings screen — so it cannot ride along with the batch request above and
+     * has to be explained first. The Virtual Drive needs it in both directions: without
+     * it scoped storage refuses every write and filters directory listings down to
+     * app-owned files and granted media, so the drive mounts and browses while showing
+     * almost nothing.
+     *
+     * <p>Conditioned on the tool being enabled, which is what keeps this from nagging:
+     * declining turns the Virtual Drive off, so the next launch is silent until the user
+     * turns it back on from Settings. A user who never wanted the drive is never asked
+     * twice, and one who does is asked before the empty drive can confuse them.
+     */
+    private void maybeRequestAllFilesAccess() {
+        if (StoragePermissions.hasAllFilesAccess()) return;
+
+        SettingsRepository settings = SettingsRepository.getInstance(this);
+        if (!settings.isVirtualDriveEnabled()) return;
+
+        // MaterialAlertDialogBuilder, not the AppCompat/framework builders: only it picks
+        // up materialAlertDialogTheme, and only that overlay restyles the buttons. The
+        // plain builders tint button text with colorPrimary, which this app sets to
+        // background_main (#F1F5F9) — near-white text on the white dialog surface.
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.vdrive_storage_permission_title)
+                .setMessage(R.string.vdrive_storage_permission_message)
+                .setPositiveButton(R.string.vdrive_storage_permission_grant, (d, w) ->
+                        StoragePermissions.openSettings(this, REQ_STARTUP_ALL_FILES_ACCESS))
+                .setNegativeButton(R.string.vdrive_storage_permission_decline, (d, w) ->
+                        disableVirtualDrive())
+                .setOnCancelListener(d -> disableVirtualDrive())
+                .show();
+    }
+
+    /**
+     * Turns the Virtual Drive off and tells the PC, so its toggle stops advertising a
+     * drive that cannot show anything. The push is a no-op when the Service is not
+     * running — at startup it usually is not, and the state is sent on the next connect.
+     */
+    private void disableVirtualDrive() {
+        Log.d(TAG, "All files access declined — turning the Virtual Drive off");
+        SettingsRepository.getInstance(this).setVirtualDriveEnabled(false);
+        Intent intent = new Intent(this, ConnectivityService.class);
+        intent.setAction(SettingsViewModel.ACTION_PUSH_SETTINGS);
+        startService(intent);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        // super first: hosted Fragments (Backup, Settings) route their own results through here.
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_STARTUP_ALL_FILES_ACCESS) return;
+
+        // The settings screen returns no meaningful resultCode — read the actual state.
+        if (StoragePermissions.hasAllFilesAccess()) {
+            Log.d(TAG, "All files access granted — Virtual Drive stays on");
+        } else {
+            disableVirtualDrive();
         }
     }
 

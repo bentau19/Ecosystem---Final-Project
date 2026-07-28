@@ -17,6 +17,12 @@ def configure_logging() -> None:
     * A :class:`~logging.StreamHandler` writing ``INFO``+ to the console so
       developers get concise output without every debug trace.
 
+    The root logger is set to ``INFO``. The root level filters records *before*
+    any handler sees them, so the file handler's ``DEBUG`` level is unreachable
+    while the root stays at ``INFO`` — ``DEBUG`` traces (e.g. the virtual drive's
+    per-op ``req:``/``resp:`` lines) are dropped. Lower the root level here when
+    those traces are needed for diagnosing a failure.
+
     Idempotent — if the root logger already has handlers attached (e.g. the
     function is called twice during testing) the second call is a no-op.
     """

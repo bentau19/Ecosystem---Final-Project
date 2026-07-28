@@ -14,6 +14,7 @@ typedef NTSTATUS* PNTSTATUS;
 
 #include <winfsp/winfsp.h>
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <future>
@@ -41,22 +42,18 @@ struct FileNode {
 
     // ── Directory listing (directories only) ──────────────────────────────
     //
-    // Strategy: fetch entries lazily in pages of LIST_PAGE_SIZE via the
-    // "list_page" op.  The first page is fetched on the first ReadDirectory
-    // call (Marker == null); subsequent pages are fetched on demand as the
-    // buffered entries are consumed.  All Marker-continuation calls on this
-    // handle are served from the in-memory buffer with zero pipe overhead
-    // until the buffer is drained and another page is needed.
+    // WinFsp's own directory buffer. ReadDirectory fills it once per open
+    // handle — pulling every "list_page" page in a single call — and WinFsp then
+    // serves all Marker-continuation calls out of it with zero pipe traffic.
     //
-    // ListCursor tracks pagination state for one open directory handle.
-    struct ListCursor {
-        std::vector<nlohmann::json> buffer;    // fetched but not yet given to WinFsp
-        size_t      bufIdx     = 0;            // next unconsumed index in buffer
-        bool        hasMore    = true;         // false once Android says last page
-        std::string nextAfter;                 // cursor: last name of previous page
-        bool        initialized = false;       // true after the first page fetch
-    };
-    std::unique_ptr<ListCursor> listCursor;    // null for files
+    // This replaces a hand-rolled page cursor that got the Marker protocol
+    // wrong in two ways (it resumed one entry PAST the marker, and it never
+    // reset when WinFsp restarted a scan with a null Marker), silently
+    // truncating any directory larger than one WinFsp buffer (~450 entries).
+    // WinFsp owns the sort, the marker binary search, the fill lock and the
+    // end-of-directory marker, so none of that has to be re-derived here.
+    // Freed in Close; refilled when Acquire is passed Reset = (Marker == null).
+    PVOID dirBuffer = nullptr;
 
     // ── Sequential read-ahead cache (files only) ───────────────────────────
     // When a Read is issued we fetch a larger prefetch window from Android and
@@ -202,6 +199,23 @@ private:
     static constexpr int   RECONNECT_ATTEMPTS    = 5;
     static constexpr DWORD RECONNECT_BACKOFF_MS  = 200;
 
+    // ── Persistent read-session policy ────────────────────────────────────────
+    // A session keeps one TauSync channel (and one open file on the phone) alive
+    // across many reads, so a sustained copy pays the channel handshake once
+    // instead of once per window. It is not free: each live session pins one of
+    // Android's 12 peer-request handler threads for its whole lifetime (its
+    // serve loop blocks until read_close), and when that pool saturates new
+    // dispatches are REJECTED and deferred — so metadata ops stall and the drive
+    // feels frozen. Cap sessions well below the pool so stat/list/write always
+    // have threads; a handle denied a session just falls back to one-shot
+    // fetches, which are slower but block nobody.
+    static constexpr int      MAX_READ_SESSIONS = 6;
+    // Promote a handle to a session only once it has read ~768 KB contiguously
+    // (rampStep 2 ⇒ the 3rd sequential window). Lower would open sessions for
+    // thumbnailers and hover previews that read a file once and never return.
+    static constexpr uint32_t SESSION_RAMP_MIN  = 2;
+    std::atomic<int>          _readSessionCount{0};
+
     // Thread-safe single round-trip to the Python server. Checks out an idle
     // pooled connection, sends the request, reads the response, returns the
     // connection. Blocks only if every connection is busy. On a pipe timeout the
@@ -233,6 +247,20 @@ private:
     // True if path has a streaming-media extension (video). Such files get a
     // larger read window and prefetch-ahead.
     static bool IsStreamingPath(const std::string& path);
+
+    // Ensure node->readSession names a live persistent read channel, opening one
+    // if needed. Returns true if the handle has a session on return.
+    //
+    // MUST be called with `lk` (node->readMtx) held; releases and re-acquires it
+    // around the pipe round-trip, so callers must re-check any state they cached
+    // across the call. Returns false — harmlessly, the caller then does a
+    // one-shot fetch — when MAX_READ_SESSIONS are already live or the open
+    // fails. Never throws.
+    bool EnsureReadSession(FileNode* node, std::unique_lock<std::mutex>& lk);
+
+    // Close node's persistent read session (if any) and free its slot. Safe to
+    // call with no session open. MUST be called with `lk` held.
+    void DropReadSession(FileNode* node, std::unique_lock<std::mutex>& lk);
 
     // Helper: populate a FSP_FSCTL_FILE_INFO from a FileNode.
     static void FillFileInfo(const FileNode& node, FSP_FSCTL_FILE_INFO* fi);
@@ -324,6 +352,16 @@ private:
         FSP_FILE_SYSTEM* fs,
         PVOID FileContext,
         FSP_FSCTL_FILE_INFO* FileInfo);
+
+    // WinFsp calls this INSTEAD of ReadDirectory when a query names a single
+    // file (FindFirstFile("E:\dir\one.txt")), which requires
+    // PassQueryDirectoryFileName — already set in Mount. Without it such a query
+    // enumerates the whole directory; with it, one cached stat answers it.
+    static NTSTATUS GetDirInfoByName(
+        FSP_FILE_SYSTEM* fs,
+        PVOID FileContext,
+        PWSTR FileName,
+        FSP_FSCTL_DIR_INFO* DirInfo);
 
     // ── Update ────────────────────────────────────────────────────────────────
 

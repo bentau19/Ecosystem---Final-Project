@@ -30,7 +30,8 @@
     </style>
 
     <style name="SyncDose.MaterialAlertDialog.Button" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
-        <item name="android:textColor">@color/accent_cyan</item>
+        <item name="android:textColor">@color/dialog_button_blue</item>
+        <item name="android:textStyle">bold</item>
     </style>
 
     <!-- Fully transparent activity — used by ShareReceiverActivity so no UI flashes on screen -->

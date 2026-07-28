@@ -1,10 +1,13 @@
 package com.example.android.domain.usecases;
 
+import android.system.ErrnoException;
+import android.system.OsConstants;
 import android.util.Log;
 
 import com.example.android.domain.entities.VDriveEntry;
 import com.example.android.domain.entities.VDrivePageResult;
 import com.example.android.domain.entities.VDriveReadRange;
+import com.example.android.domain.exceptions.VDriveException;
 import com.example.android.network.transport.TransportManager;
 import com.example.android.repositories.VirtualDriveRepository;
 
@@ -189,17 +192,15 @@ public class VirtualDriveUseCase {
                 VDriveReadRange range =
                         repository.openReadRangeChecked(path, offset, length);
                 return TransportManager.ReadResult.ok(range.available, range.stream);
-            } catch (SecurityException e) {
-                Log.w(TAG, "handleRead: access denied for " + path, e);
-                return TransportManager.ReadResult.error("access_denied");
             } catch (FileNotFoundException e) {
                 // distinguish statable-but-unreadable (Android/data) from truly missing
                 String code = repository.exists(path) ? "access_denied" : "not_found";
                 Log.w(TAG, "handleRead: open failed (" + code + ") for " + path, e);
                 return TransportManager.ReadResult.error(code);
-            } catch (IOException e) {
-                Log.w(TAG, "handleRead: io error for " + path, e);
-                return TransportManager.ReadResult.error("io_error");
+            } catch (SecurityException | IOException e) {
+                String code = toErrorCode(e);
+                Log.w(TAG, "handleRead: " + code + " for " + path, e);
+                return TransportManager.ReadResult.error(code);
             }
         });
     }
@@ -263,7 +264,10 @@ public class VirtualDriveUseCase {
     // ── list_full ─────────────────────────────────────────────────────────────
 
     // PC sends {"path"}; responds with {"ok","dir_mtime_ms","entries"} — full dir in one shot
-    // Desktop caches the listing keyed by dir_mtime_ms and serves list_page requests locally
+    // Desktop caches the listing under a short TTL and serves every list_page request of one
+    // enumeration locally, so a folder costs one round-trip instead of one per page.
+    // dir_mtime_ms is reported for diagnostics; the desktop does not revalidate against it
+    // (it arrives with the listing, and a dir's mtime is unchanged by an in-place child write).
     public void handleListFull(String channel) throws Exception {
         transportManager.serveJsonExchange(
                 channel,
@@ -308,10 +312,61 @@ public class VirtualDriveUseCase {
         try {
             return new JSONObject()
                     .put("ok", false)
-                    .put("error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
+                    .put("error", toErrorCode(e))
+                    .put("detail", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
                     .toString();
         } catch (Exception ignored) {
-            return "{\"ok\":false}";
+            return "{\"ok\":false,\"error\":\"io_error\"}";
         }
+    }
+
+    /**
+     * Reduces an exception to one of the stable codes the desktop understands.
+     *
+     * <p>{@code VirtualDrive::ErrorToStatus} on the Windows side matches on a
+     * fixed vocabulary to pick an NTSTATUS; anything outside it collapses to
+     * {@code STATUS_IO_DEVICE_ERROR}, which Explorer reports as a device fault no
+     * matter what actually went wrong. Raw {@code e.getMessage()} text — for
+     * instance the kernel's "Operation not permitted" — always fell into that
+     * bucket, so a missing permission looked identical to failing hardware. The
+     * original message still travels in the response's {@code detail} field.
+     */
+    static String toErrorCode(Exception e) {
+        if (e instanceof VDriveException) {
+            return ((VDriveException) e).getCode();
+        }
+        if (e instanceof SecurityException) {
+            return "access_denied";
+        }
+        if (e instanceof FileNotFoundException) {
+            return "not_found";
+        }
+        if (e instanceof ErrnoException) {
+            return errnoToCode(((ErrnoException) e).errno);
+        }
+
+        // Some File-API failures surface the errno only as strerror text.
+        String message = e.getMessage();
+        if (message != null) {
+            if (message.contains("Operation not permitted")
+                    || message.contains("Permission denied")
+                    || message.contains("EPERM")
+                    || message.contains("EACCES")) {
+                return "access_denied";
+            }
+            if (message.contains("No such file or directory")) {
+                return "not_found";
+            }
+        }
+        return "io_error";
+    }
+
+    private static String errnoToCode(int errno) {
+        if (errno == OsConstants.EPERM || errno == OsConstants.EACCES) return "access_denied";
+        if (errno == OsConstants.ENOENT)                               return "not_found";
+        if (errno == OsConstants.ENOTDIR)                              return "not_dir";
+        if (errno == OsConstants.EEXIST)                               return "exists";
+        if (errno == OsConstants.ENOTEMPTY)                            return "not_empty";
+        return "io_error";
     }
 }

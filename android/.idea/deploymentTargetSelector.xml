@@ -13,11 +13,15 @@
         </DropdownSelection>
         <DialogSelection />
       </SelectionState>
-      <SelectionState runConfigName="BenMainTest">
+      <SelectionState runConfigName="TestTauSyncActivity">
         <option name="selectionMode" value="DROPDOWN" />
-      </SelectionState>
-      <SelectionState runConfigName="main_run">
-        <option name="selectionMode" value="DROPDOWN" />
+        <DropdownSelection timestamp="2026-06-07T09:47:12.418909400Z">
+          <Target type="DEFAULT_BOOT">
+            <handle>
+              <DeviceId pluginId="PhysicalDevice" identifier="serial=RZCX71AW8MF" />
+            </handle>
+          </Target>
+        </DropdownSelection>
         <DialogSelection />
       </SelectionState>
     </selectionStates>

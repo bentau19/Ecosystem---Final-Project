@@ -6,6 +6,8 @@
     <color name="border_color">#1E3A4A</color>
 
     <color name="accent_cyan">#38BDF8</color>
+    <!-- On the dark dialog surface the bright accent already clears AA, so it stands. -->
+    <color name="dialog_button_blue">#38BDF8</color>
     <color name="accent_purple">#7B61FF</color>
     <color name="accent_pink">#FF5C87</color>
     <color name="status_green">#00E676</color>

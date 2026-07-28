@@ -28,6 +28,12 @@
     <!-- Shown in the folder card subtitle once the user has picked a folder -->
     <string name="backup_folder_selected_prefix">📁 </string>
 
+    <!-- Virtual Drive: All-files-access gate shown when the tool is switched on -->
+    <string name="vdrive_storage_permission_title">Allow access to your files?</string>
+    <string name="vdrive_storage_permission_message">Virtual Drive shows your phone\'s storage as a drive on your PC. Android requires \"All files access\" before your PC can see and change the files here.\n\nWithout it the drive still opens, but Android hides your documents and downloads from it and every copy from the PC fails.</string>
+    <string name="vdrive_storage_permission_grant">Grant access</string>
+    <string name="vdrive_storage_permission_decline">Not now</string>
+
     <!-- Backup transfer progress notification -->
     <string name="backup_notif_progress_title">Backup in progress</string>
     <string name="backup_notif_complete_title">Backup completed</string>

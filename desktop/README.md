@@ -937,8 +937,7 @@ second simultaneous `connect()` on the same word.
 
 | Op | TauSync channel | Notes |
 |---|---|---|
-| `list` | `VirtualDriveChannels.VIRTUAL_DRIVE_LIST` | JSON request/response — directory listing |
-| `list_page` | `VirtualDriveChannels.VIRTUAL_DRIVE_LIST_FULL` | Paginated listing (cursor-based) |
+| `list_page` | `VirtualDriveChannels.VIRTUAL_DRIVE_LIST_FULL` | Paginated listing (cursor-based). Android answers with the *whole* directory, which `ListingCache` holds under a short TTL — so one enumeration costs one round-trip, not one per page. Mutating ops evict the affected directories. |
 | `stat` | `VirtualDriveChannels.VIRTUAL_DRIVE_STAT` | File/directory metadata |
 | `volume` | *(local)* | Answered from cached `DeviceEntity.storage_*` — no TauSync round-trip |
 | `read` | `VirtualDriveChannels.VIRTUAL_DRIVE_READ` | Write JSON header, read file bytes back |
