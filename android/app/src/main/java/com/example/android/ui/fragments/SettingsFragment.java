@@ -1,6 +1,5 @@
 package com.example.android.ui.fragments;
 
-import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
@@ -18,6 +17,7 @@ import androidx.lifecycle.ViewModelProvider;
 import com.example.android.R;
 import com.example.android.utils.StoragePermissions;
 import com.example.android.viewmodel.SettingsViewModel;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 /**
  * Settings screen — four toggles (Auto-launch, Virtual Drive, Clipboard Sync, Camera Mirror).
@@ -195,12 +195,17 @@ public class SettingsFragment extends Fragment {
      * declining leaves the switch off.
      */
     private void promptForAllFilesAccess() {
-        new AlertDialog.Builder(requireContext())
+        // MaterialAlertDialogBuilder, not the framework builder: only it picks up
+        // materialAlertDialogTheme, and only that overlay restyles the buttons. The
+        // framework builder tints button text with colorPrimary, which this app sets to
+        // background_main (#F1F5F9) — near-white text on the white dialog surface.
+        new MaterialAlertDialogBuilder(requireContext())
                 .setTitle(R.string.vdrive_storage_permission_title)
                 .setMessage(R.string.vdrive_storage_permission_message)
                 .setPositiveButton(R.string.vdrive_storage_permission_grant,
                         (d, w) -> StoragePermissions.openSettings(this, REQ_ALL_FILES_ACCESS))
-                .setNegativeButton(android.R.string.cancel, (d, w) -> revertVirtualDriveSwitch())
+                .setNegativeButton(R.string.vdrive_storage_permission_decline,
+                        (d, w) -> revertVirtualDriveSwitch())
                 .setOnCancelListener(d -> revertVirtualDriveSwitch())
                 .show();
     }

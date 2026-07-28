@@ -34,6 +34,7 @@ import com.example.android.viewmodel.FileTransferViewModel;
 import com.example.android.viewmodel.MainViewModel;
 import com.example.android.viewmodel.MainViewModelFactory;
 import com.example.android.viewmodel.SettingsViewModel;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.example.android.services.ConnectivityService;
 import com.example.android.utils.StoragePermissions;
 
@@ -211,7 +212,11 @@ public class MainActivity extends AppCompatActivity {
         SettingsRepository settings = SettingsRepository.getInstance(this);
         if (!settings.isVirtualDriveEnabled()) return;
 
-        new AlertDialog.Builder(this)
+        // MaterialAlertDialogBuilder, not the AppCompat/framework builders: only it picks
+        // up materialAlertDialogTheme, and only that overlay restyles the buttons. The
+        // plain builders tint button text with colorPrimary, which this app sets to
+        // background_main (#F1F5F9) — near-white text on the white dialog surface.
+        new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.vdrive_storage_permission_title)
                 .setMessage(R.string.vdrive_storage_permission_message)
                 .setPositiveButton(R.string.vdrive_storage_permission_grant, (d, w) ->
