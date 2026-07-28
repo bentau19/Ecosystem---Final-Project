@@ -17,13 +17,11 @@ def configure_logging() -> None:
     * A :class:`~logging.StreamHandler` writing ``INFO``+ to the console so
       developers get concise output without every debug trace.
 
-    The root logger is set to ``DEBUG`` so the per-handler levels above are what
-    actually decide what is written. It must not be raised to ``INFO``: the root
-    level filters records *before* any handler sees them, so an ``INFO`` root
-    silently discards every ``DEBUG`` record and the file handler's ``DEBUG``
-    level becomes unreachable — which is exactly how the virtual drive's per-op
-    ``req:``/``resp:`` traces went missing when a failure needed diagnosing.
-    Set ``SYNCDOSE_LOG_LEVEL=INFO`` to opt back into a quiet log.
+    The root logger is set to ``INFO``. The root level filters records *before*
+    any handler sees them, so the file handler's ``DEBUG`` level is unreachable
+    while the root stays at ``INFO`` — ``DEBUG`` traces (e.g. the virtual drive's
+    per-op ``req:``/``resp:`` lines) are dropped. Lower the root level here when
+    those traces are needed for diagnosing a failure.
 
     Idempotent — if the root logger already has handlers attached (e.g. the
     function is called twice during testing) the second call is a no-op.
@@ -32,12 +30,7 @@ def configure_logging() -> None:
     if root.handlers:
         return
 
-<<<<<<< HEAD
-    level_name = os.environ.get("SYNCDOSE_LOG_LEVEL", "DEBUG").upper()
-    root.setLevel(getattr(logging, level_name, logging.DEBUG))
-=======
     root.setLevel(logging.INFO)
->>>>>>> main
 
     fmt = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",

@@ -105,15 +105,12 @@ public class TauSyncTransportManager implements TransportManager {
     private int currentRetryAttempt = 0;
     private long nextRetryDelayMs = INITIAL_RETRY_DELAY_MS;
 
-<<<<<<< HEAD
-=======
     // True while recovering an unexpectedly lost session. Unlike a user-initiated connect (which
     // gives up after MAX_RETRY_ATTEMPTS), recovery retries indefinitely with capped back-off —
     // the session should re-converge with zero taps whenever the PC comes back. Cleared on
     // success, on explicit disconnect/shutdown, and when the PC explicitly declines.
     private volatile boolean persistentReconnect = false;
 
->>>>>>> main
     // Connection-health watchdog. The PC only sends DISCONNECT_FROM_PC on a *clean* exit; a
     // crash / network drop just closes the socket. The poll loop checks tauSync.isConnected()
     // (which reflects the real socket and stays false while the transport transparently
@@ -379,34 +376,6 @@ public class TauSyncTransportManager implements TransportManager {
         }
 
         connectionLostSince[0] = 0L; // fresh health window for this session
-<<<<<<< HEAD
-        pollingExecutor.scheduleWithFixedDelay(() -> {
-            // tauSync may be null during the reconnect window (handlePollingFailure
-            // has already cleared it before attemptConnection creates the new instance).
-            if (isShuttingDown.get() || status != TransportStatus.CONNECTED || tauSync == null) {
-                return;
-            }
-
-            // Connection-health watchdog. getPeerWaitingWords() is a discovery snapshot that does
-            // NOT throw on a dropped socket, so it can't detect a vanished PC by itself; isConnected()
-            // can. evaluateHealth() applies the grace window so a transient blip (transport
-            // reconnects) is tolerated and only a sustained loss is surfaced as a disconnect.
-            switch (evaluateHealth(connectionLostSince, tauSync.isConnected(),
-                    System.currentTimeMillis(), CONNECTION_LOST_GRACE_MS)) {
-                case LOST:
-                    handleConnectionLost();
-                    return;
-                case WITHIN_GRACE:
-                    return;          // down but still inside the grace window — wait it out
-                case HEALTHY:
-                default:
-                    break;           // fall through to the normal peer-request dispatch
-            }
-
-            try {
-                List<String> waitingChannels = tauSync.getPeerWaitingWords();
-                if (!waitingChannels.isEmpty() && listener != null) {
-=======
         lastPeerRequestMs = System.currentTimeMillis(); // start fast — a request often follows connect
         int generation = pollGeneration.incrementAndGet();
         schedulePollTick(generation, POLLING_INTERVAL_MS);
@@ -462,7 +431,6 @@ public class TauSyncTransportManager implements TransportManager {
             if (!waitingChannels.isEmpty()) {
                 lastPeerRequestMs = System.currentTimeMillis();
                 if (listener != null) {
->>>>>>> main
                     mainHandler.post(() -> listener.onPeerRequestsAvailable(waitingChannels));
                 }
             }
@@ -539,57 +507,6 @@ public class TauSyncTransportManager implements TransportManager {
             pollingExecutor.shutdownNow();
         }
         attemptConnection();
-    }
-
-    /** Outcome of a single connection-health evaluation in the poll loop. */
-    enum Health { HEALTHY, WITHIN_GRACE, LOST }
-
-    /**
-     * Pure decision for the poll-loop health watchdog (static + package-private so it is unit
-     * testable without constructing the manager).
-     *
-     * <p>Reads/updates {@code lostSince[0]} (0 = healthy, else epoch-ms of the first down tick)
-     * and classifies the link:
-     * <ul>
-     *   <li>{@code isConnected} → {@link Health#HEALTHY}; the down-marker is cleared.</li>
-     *   <li>first down tick → records {@code nowMs} and returns {@link Health#WITHIN_GRACE}.</li>
-     *   <li>still down but {@code < graceMs} elapsed → {@link Health#WITHIN_GRACE}.</li>
-     *   <li>down for {@code >= graceMs} → {@link Health#LOST}.</li>
-     * </ul>
-     * Called only on the single polling-executor thread, so the marker needs no locking.
-     * (A real {@code System.currentTimeMillis()} is never 0, so the 0-sentinel never collides.)
-     */
-    static Health evaluateHealth(long[] lostSince, boolean isConnected, long nowMs, long graceMs) {
-        if (isConnected) {
-            lostSince[0] = 0L;
-            return Health.HEALTHY;
-        }
-        if (lostSince[0] == 0L) {
-            lostSince[0] = nowMs;
-            return Health.WITHIN_GRACE;
-        }
-        return (nowMs - lostSince[0] >= graceMs) ? Health.LOST : Health.WITHIN_GRACE;
-    }
-
-    /**
-     * Surfaces a true (unclean) connection loss exactly once.
-     *
-     * <p>Flips the status to {@link TransportStatus#DISCONNECTING} so the next 20 ms tick
-     * early-returns (no second fire), then hands off on the main thread to the listener, which
-     * runs the same {@code cleanup()} the clean {@code DISCONNECT_FROM_PC} path uses. We do NOT
-     * call {@link #stopPolling()} here — that blocks on {@code awaitTermination} and self-deadlocks
-     * when invoked from inside a polling task; {@code cleanup() → shutdown() → disconnect()} stops
-     * the poller from the main thread instead.
-     */
-    private void handleConnectionLost() {
-        if (isShuttingDown.get() || status != TransportStatus.CONNECTED) {
-            return;
-        }
-        Log.w(TAG, "Connection lost (down >= grace window) — surfacing disconnect");
-        updateStatus(TransportStatus.DISCONNECTING);
-        if (listener != null) {
-            mainHandler.post(listener::onConnectionLost);
-        }
     }
 
     /**

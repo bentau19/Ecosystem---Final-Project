@@ -338,9 +338,6 @@ class ConnectivityService(LifecycleFlag, QObject):
                 # can't hot-spin the listener or flood the log; a single phone that reconnects
                 # cleanly resets the counter immediately.
                 if not self.connected:
-<<<<<<< HEAD
-                    logger.warning("_listen: [bluetooth] returned with no live peer — resetting")
-=======
                     consecutive_phantoms += 1
                     backoff = min(2 ** (consecutive_phantoms - 1), self._MAX_PHANTOM_BACKOFF_S)
                     if consecutive_phantoms == 1:
@@ -352,29 +349,18 @@ class ConnectivityService(LifecycleFlag, QObject):
                             "_listen: [bluetooth] phantom connect #%d — backing off %ds",
                             consecutive_phantoms, backoff,
                         )
->>>>>>> main
                     self._reset_transport()
                     self._interruptible_sleep(backoff)
                     continue
-<<<<<<< HEAD
-                logger.info("_listen: device connected")
-                self.device_connected.emit()
-            except TimeoutError:
-=======
                 consecutive_phantoms = 0
                 logger.info("_listen: device connected")
                 self.device_connected.emit()
             except TimeoutError:
                 consecutive_phantoms = 0
->>>>>>> main
                 logger.debug("_listen: [bluetooth] timed out — retrying")
                 # Defense-in-depth: fully tear the transport down before the next attempt so a
                 # still-advertising Bluetooth RFCOMM listener can never accumulate across retries.
                 self._reset_transport()
-<<<<<<< HEAD
-                time.sleep(1)
-=======
->>>>>>> main
             except Exception as exc:
                 # A deliberate stop() aborts the blocking listen() via
                 # tau.disconnect() — that is normal teardown, not an error.
@@ -398,11 +384,6 @@ class ConnectivityService(LifecycleFlag, QObject):
     #: reconnect now reaches a freshly-reset, re-advertising PC (BT drop = clean reset, no silent
     #: resume), so it still connects on the next attempt.
     _APPROVAL_TIMEOUT_S = 55.0
-
-    #: Bounded phone-notify timeout on app shutdown. The phone polls every 20 ms and the
-    #: DISCONNECT_FROM_PC handshake normally completes <1 s, so 3 s is ample while staying
-    #: well under the ~8.1 s hard-exit watchdog in views/main_window.py.
-    _SHUTDOWN_NOTIFY_TIMEOUT_S: int = 3
 
     #: Bounded phone-notify timeout on app shutdown. The phone polls every 20 ms and the
     #: DISCONNECT_FROM_PC handshake normally completes <1 s, so 3 s is ample while staying
