@@ -112,22 +112,6 @@ class AppState:
             settings_service=self.settings_service,
         )
 
-        # ToolViewModel is the tools coordinator: it owns the enable/disable side
-        # effects for the four feature tools (Clipboard/Webcam/Backup set_enabled
-        # and the VirtualDrive lifecycle) plus the bidirectional tool-state sync
-        # with the phone.  Constructed after the services + device_viewmodel it
-        # depends on.
-        self.tool_viewmodel: Final[ToolViewModel] = ToolViewModel(
-            tool_service=self.tool_service,
-            clipboard_service=self.clipboard_service,
-            webcam_service=self.webcam_service,
-            backup_service=self.backup_service,
-            virtual_drive_service=self.virtual_drive_service,
-            connectivity_service=self.connectivity_service,
-            device_viewmodel=self.device_viewmodel,
-            settings_service=self.settings_service,
-        )
-
         self.webcam_viewmodel: Final[WebcamViewModel] = WebcamViewModel(
             webcam_service=self.webcam_service,
         )
