@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import random
 import threading
+import time
 from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torchvision
 import torchvision.models as models
 from PIL import Image
 from torch.nn.functional import softmax
@@ -20,9 +23,16 @@ from image_classification_dataset import ImageClassificationDataset
 # from classification_types directly to avoid pulling in torch at import time.
 from classification_types import ClassificationResult, ClassificationVerdict
 
+logger = logging.getLogger(__name__)
+
 # Module-level device selection so every model instance and tensor in this
 # file shares one target device; printed once at import time for diagnostics.
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+logger.debug(
+    "image_classifer imported: torch=%s torchvision=%s device=%s cuda_available=%s",
+    torch.__version__, torchvision.__version__, DEVICE, torch.cuda.is_available(),
+)
 
 # ── Model singleton ───────────────────────────────────────────────────────────
 # The ImageClassifier (MobileNetV3-Large backbone + custom head) is expensive
@@ -52,13 +62,22 @@ class ImageClassifier(nn.Module):
 
     Args:
         num_classes: Number of output classes (default: 2 — safe / unsafe).
+        pretrained: Whether to fetch torchvision's ImageNet weights for the
+            backbone. Only :func:`main` (training) needs this. It defaults to
+            ``False`` because inference always overwrites every backbone
+            parameter via ``load_state_dict`` moments later — and because
+            fetching them is a ~22 MB download from download.pytorch.org into
+            ``~/.cache/torch/hub/checkpoints/``. That cache lives in the user
+            profile, so it is never carried by the PyInstaller bundle: leaving
+            this on made a frozen install depend on network access on any
+            machine that had not already trained the model.
     """
 
-    def __init__(self, num_classes: int = 2) -> None:
+    def __init__(self, num_classes: int = 2, pretrained: bool = False) -> None:
         super().__init__()
 
-        # ── Frozen pretrained backbone ────────────────────────────────────
-        weights = models.MobileNet_V3_Large_Weights.DEFAULT
+        # ── Frozen backbone (weights loaded from model.pth for inference) ──
+        weights = models.MobileNet_V3_Large_Weights.DEFAULT if pretrained else None
         backbone = models.mobilenet_v3_large(weights=weights)
 
         # Keep only the convolutional feature layers; discard the original
@@ -248,12 +267,27 @@ def _get_model(model_path: Path) -> ImageClassifier:
     if _cached_model is None:
         with _model_lock:
             if _cached_model is None:
+                # Logged before the load so a hard failure (missing file, torch
+                # DLL fault) still leaves the resolved path in the log — that is
+                # the first thing worth knowing when screening silently no-ops
+                # on one machine but not another.
+                logger.debug(
+                    "loading classifier weights: path=%s exists=%s size=%s device=%s",
+                    model_path, model_path.exists(),
+                    model_path.stat().st_size if model_path.exists() else "n/a",
+                    DEVICE,
+                )
+                started = time.perf_counter()
                 m = ImageClassifier()
                 m.load_state_dict(
                     torch.load(str(model_path), map_location=DEVICE, weights_only=True)
                 )
                 m.eval()
                 _cached_model = m
+                logger.info(
+                    "image classifier ready in %.2fs (device=%s, weights=%s)",
+                    time.perf_counter() - started, DEVICE, model_path,
+                )
     return _cached_model
 
 
@@ -310,7 +344,9 @@ def main() -> None:
     augmentation transforms, evaluates it via :func:`test`, and saves the
     resulting weights to ``model.pth``.
     """
-    image_model = ImageClassifier()
+    # Training is the one path that genuinely needs the ImageNet weights — it
+    # starts from them. Inference loads model.pth over the top instead.
+    image_model = ImageClassifier(pretrained=True)
 
     transform = transforms.Compose([
         transforms.Resize((224, 224)),

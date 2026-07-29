@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from pathlib import Path
@@ -10,6 +11,9 @@ from classification_types import ClassificationResult, ClassificationVerdict
 # (pulled in by image_classifer) loads only when ML screening actually runs,
 # not at import time. Keeping torch out of this import path is what keeps the
 # desktop app's startup fast.
+
+
+logger = logging.getLogger(__name__)
 
 
 class Classifier:
@@ -119,14 +123,22 @@ class Classifier:
         # This allows the app to function without PyTorch installed if ML filtering
         # is not used. Non-image files and unreadable files are caught by the except
         # and treated as accepted (let the file through; it wasn't screened).
+        # Both fallbacks below accept the file, so a failure here is invisible in
+        # the app's behaviour — it just looks like screening is switched off.
+        # Always log, or the next environment-specific breakage (missing weights,
+        # absent torch DLLs, unreadable model.pth) costs another debugging session.
         try:
             from image_classifer import classify_image
             result = classify_image(file)
         except ImportError:
-            # torch not installed — log and skip ML filtering
+            logger.warning(
+                "ML screening skipped for %s: torch/torchvision unavailable.", file,
+                exc_info=True,
+            )
             return ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)
         except Exception:
             # Image decode errors, model load errors, etc. — accept the file
+            logger.exception("ML screening failed for %s; accepting unscreened.", file)
             return ClassificationResult(ClassificationVerdict.ACCEPTED, 0.0)
         if result.verdict is ClassificationVerdict.REJECTED:
             return ClassificationResult(ClassificationVerdict.REJECTED, result.confidence)
