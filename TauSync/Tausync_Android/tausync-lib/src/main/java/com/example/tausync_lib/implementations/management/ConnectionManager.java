@@ -264,6 +264,15 @@ public class ConnectionManager implements IConnectionManager {
         return sendWordRequestAsync(wordTrimmed, attempt.localId)
                 .thenCompose(ignored -> resolveConnectRaceAsync(ctx, wordChannel, attempt, timeoutSec, wordTrimmed))
                 .whenComplete((stream, ex) -> {
+                    // Retire the losing race path FIRST. The peer path polls the word channel on a
+                    // HANDSHAKE_POOL thread until its own deadline; nothing else ever completes that
+                    // queue, so without this flag a connect that resolved via the own path (always
+                    // the case for the Android client role) pins one pool thread for the caller's
+                    // full connect budget. Backup result channels use a ~330 s budget, so a few
+                    // hundred files pile up a few hundred live threads and the process dies with
+                    // "OutOfMemoryError: pthread_create failed". Mirrors the C# side's
+                    // channel.Writer.TryComplete(), which terminates its losing reader the same way.
+                    attempt.raceResolved.set(true);
                     // Unregister the service listener after the connection resolves (success or failure).
                     //
                     // Without this cleanup, the callback registered by registerWordListener stays in
@@ -360,6 +369,14 @@ public class ConnectionManager implements IConnectionManager {
             try {
                 long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSec);
                 while (!disposed) {
+                    // The race is over (the own path won, or the whole connect failed) — stop
+                    // polling now instead of holding this pool thread until the deadline. The
+                    // word channel is never completed by anyone, so this flag is the only way
+                    // out short of the full (up to several-minute) connect budget.
+                    if (attempt.raceResolved.get()) {
+                        throw new RuntimeException(
+                                new TimeoutException("Peer path abandoned — race already resolved"));
+                    }
                     long remainingNanos = deadlineNanos - System.nanoTime();
                     if (remainingNanos <= 0) {
                         throw new RuntimeException(new TimeoutException("Peer path timed out"));
@@ -367,7 +384,20 @@ public class ConnectionManager implements IConnectionManager {
                     long pollMs = Math.min(500, TimeUnit.NANOSECONDS.toMillis(remainingNanos));
                     if (pollMs <= 0) pollMs = 1;
                     TauSyncStream stream = channel.poll(pollMs, TimeUnit.MILLISECONDS);
-                    if (stream != null) return stream;
+                    if (stream != null) {
+                        if (attempt.raceResolved.get()) {
+                            // Lost the race between the poll returning and the flag being set:
+                            // nobody will ever receive this stream, so close it (sends FIN and
+                            // releases its channel id) rather than leaking it.
+                            try {
+                                stream.close();
+                            } catch (Exception ignored) {
+                            }
+                            throw new RuntimeException(
+                                    new TimeoutException("Peer path abandoned — race already resolved"));
+                        }
+                        return stream;
+                    }
                 }
                 throw new RuntimeException(
                         new IllegalStateException("ConnectionManager disposed during handshake"));
@@ -768,6 +798,14 @@ public class ConnectionManager implements IConnectionManager {
          * exactly once, even when cleanup runs from more than one race/cleanup path.
          */
         final AtomicBoolean cancelSent = new AtomicBoolean(false);
+
+        /**
+         * Set once this attempt's connect race has resolved (either path won, or both failed).
+         * The peer path's polling loop checks it every tick and bails out, so the losing path
+         * never outlives the connect that spawned it — see
+         * {@link ConnectionManager#resolveConnectRaceAsync}.
+         */
+        final AtomicBoolean raceResolved = new AtomicBoolean(false);
 
         ConnectAttempt(int localId, BackBufferedInputStream backStream,
                        CompletableFuture<byte[]> responseFuture) {
